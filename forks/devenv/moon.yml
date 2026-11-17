@@ -1,7 +1,7 @@
 # yaml-language-server: $schema=https://moonrepo.dev/schemas/project.json
 #
 # Tasks run from this project's directory, which is the fork tree root.
-# The nebula devshell has no Rust toolchain, so CI skips these tasks until one is added.
+# The nebula devshell has no Rust toolchain, so CI skips these tasks until one is added. See RIG-10145.
 layer: 'application'
 language: 'rust'
 tasks:
@@ -9,10 +9,12 @@ tasks:
     command: cargo
     args: ['build']
     options:
+      # No Rust toolchain in the nebula devshell; see RIG-10145.
       runInCI: false
   test:
     command: cargo
     args: ['test']
     options:
       cache: false
+      # No Rust toolchain in the nebula devshell; see RIG-10145.
       runInCI: false

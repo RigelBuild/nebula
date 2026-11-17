@@ -1,0 +1,216 @@
+name: CI
+
+on:
+  pull_request:
+  pull_request_target:
+  push:
+    branches: [main]
+
+permissions: {}
+
+jobs:
+  ci:
+    name: CI (${{ matrix.system }})
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    environment: ci
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - system: x86_64-linux
+            runner: ubuntu-latest
+          - system: aarch64-linux
+            runner: ubuntu-24.04-arm
+          - system: aarch64-darwin
+            runner: macos-latest
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      # Repository variables. An unset variable leaves its setting empty.
+      NIX_CACHE_SUBSTITUTER: ${{ vars.NIX_CACHE_SUBSTITUTER }}
+      NIX_CACHE_PUBLIC_KEY: ${{ vars.NIX_CACHE_PUBLIC_KEY }}
+      MOON_REMOTE_HOST: ${{ vars.MOON_REMOTE_CACHE_HOST }}
+      MOON_REMOTE_CACHE_INSTANCE_NAME: ${{ vars.MOON_REMOTE_CACHE_INSTANCE_NAME }}
+    steps:
+      - name: Check out approved source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - name: Install Nix
+        uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086
+        with:
+          extra_nix_config: |
+            extra-substituters = ${{ env.NIX_CACHE_SUBSTITUTER }}
+            extra-trusted-public-keys = cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY= ${{ env.NIX_CACHE_PUBLIC_KEY }}
+            connect-timeout = 5
+            fallback = true
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version: '1.27.4'
+          cache: true
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version: '1.4.4'
+      - name: Cache Rust builds
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
+        with:
+          shared-key: ${{ matrix.system }}
+      - name: Cache Bun downloads
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: ~/.cache/bun
+          key: bun-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/bun.lock') }}-${{ github.event.pull_request.head.ref || github.ref_name }}
+          restore-keys: |
+            bun-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/bun.lock') }}-
+            bun-${{ runner.os }}-${{ runner.arch }}-
+      - name: Connect to shared tailnet caches
+        uses: tailscale/github-action@064b10558093f38325e838ddea35486bdc6b1d5c
+        with:
+          oauth-client-id: ${{ vars.TS_OIDC_CLIENT_ID }}
+          audience: api.tailscale.com/${{ vars.TS_OIDC_CLIENT_ID }}
+          tags: tag:gha-nebula
+      - name: Set up Moon
+        run: nix develop --command moon --version
+      - name: Run affected projects
+        run: |
+          mkdir -p ~/.moon
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git" || true
+          git fetch origin main
+          nix develop --command moon ci --base origin/main
+  external:
+    name: CI (${{ matrix.system }})
+    if: >-
+      github.event_name == 'pull_request_target' &&
+      github.event.pull_request.head.repo.full_name != github.repository
+    environment: external
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - system: x86_64-linux
+            runner: ubuntu-latest
+          - system: aarch64-linux
+            runner: ubuntu-24.04-arm
+          - system: aarch64-darwin
+            runner: macos-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check out approved source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          allow-unsafe-pr-checkout: true
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Install Nix
+        uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086
+        with:
+          extra_nix_config: |
+            connect-timeout = 5
+            fallback = true
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version: '1.27.4'
+          cache: false
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version: '1.4.4'
+          no-cache: true
+      - name: Set up Moon
+        run: nix develop --command moon --version
+      - name: Run affected projects
+        env:
+          # Fork code never reaches the shared Moon remote cache.
+          MOON_REMOTE_HOST: ''
+        run: |
+          mkdir -p ~/.moon
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git" || true
+          git fetch origin main
+          nix develop --command moon ci --base origin/main
+  main:
+    name: CI (${{ matrix.system }})
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    environment: main
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - system: x86_64-linux
+            runner: ubuntu-latest
+          - system: aarch64-linux
+            runner: ubuntu-24.04-arm
+          - system: aarch64-darwin
+            runner: macos-latest
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      # Repository variables. An unset variable leaves its setting empty.
+      NIX_CACHE_SUBSTITUTER: ${{ vars.NIX_CACHE_SUBSTITUTER }}
+      NIX_CACHE_PUBLIC_KEY: ${{ vars.NIX_CACHE_PUBLIC_KEY }}
+      MOON_REMOTE_HOST: ${{ vars.MOON_REMOTE_CACHE_HOST }}
+      MOON_REMOTE_CACHE_INSTANCE_NAME: ${{ vars.MOON_REMOTE_CACHE_INSTANCE_NAME }}
+    steps:
+      - name: Check out approved source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - name: Install Nix
+        uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086
+        with:
+          extra_nix_config: |
+            extra-substituters = ${{ env.NIX_CACHE_SUBSTITUTER }}
+            extra-trusted-public-keys = cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY= ${{ env.NIX_CACHE_PUBLIC_KEY }}
+            connect-timeout = 5
+            fallback = true
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version: '1.27.4'
+          cache: true
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version: '1.4.4'
+      - name: Cache Rust builds
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
+        with:
+          shared-key: ${{ matrix.system }}
+      - name: Cache Bun downloads
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: ~/.cache/bun
+          key: bun-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/bun.lock') }}-${{ github.event.pull_request.head.ref || github.ref_name }}
+          restore-keys: |
+            bun-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/bun.lock') }}-
+            bun-${{ runner.os }}-${{ runner.arch }}-
+      - name: Connect to shared tailnet caches
+        uses: tailscale/github-action@064b10558093f38325e838ddea35486bdc6b1d5c
+        with:
+          oauth-client-id: ${{ vars.TS_OIDC_CLIENT_ID }}
+          audience: api.tailscale.com/${{ vars.TS_OIDC_CLIENT_ID }}
+          tags: tag:gha-nebula
+      - name: Set up Moon
+        run: nix develop --command moon --version
+      - name: Run affected projects
+        env:
+          MOON_CACHE_BASIC: ${{ secrets.MOON_CACHE_BASIC }}
+        run: |
+          mkdir -p ~/.moon
+          test -n "$MOON_CACHE_BASIC" || { echo '::error::missing secret'; exit 1; }
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git" || true
+          git fetch origin main
+          nix develop --command moon ci --base origin/main

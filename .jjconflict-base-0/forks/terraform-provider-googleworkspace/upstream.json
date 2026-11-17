@@ -1,0 +1,5 @@
+{
+  "repo": "https://github.com/hashicorp/terraform-provider-googleworkspace.git",
+  "branch": "main",
+  "commit": "dae45930d91d535bd92374666f2766509d973c01"
+}

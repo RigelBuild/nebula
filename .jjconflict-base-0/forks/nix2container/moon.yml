@@ -1,0 +1,22 @@
+# yaml-language-server: $schema=https://moonrepo.dev/schemas/project.json
+#
+# Tasks run from this project's directory, which is the fork tree root.
+layer: 'application'
+language: 'nix'
+tasks:
+  build:
+    command: nix
+    args: ['build']
+  test:
+    command: go
+    args: ['test', './...']
+    options:
+      cache: false
+  lint:
+    command: nix
+    args: ['flake', 'check']
+    options:
+      cache: false
+  package:
+    command: nix
+    args: ['build']

@@ -1,0 +1,107 @@
+name: PR
+
+on:
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  NX_CLOUD_ACCESS_TOKEN: ${{ secrets.NX_CLOUD_ACCESS_TOKEN }}
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Setup Tools
+        uses: tanstack/config/.github/setup@e4b48f16568324f76f467aa4c2aac2f05db632c3 # main
+      - name: Get base and head commits for `nx affected`
+        uses: nrwl/nx-set-shas@3e9ad7370203c1e93d109be57f3b72eb0eb511b1 # v4.4.0
+        with:
+          main-branch-name: rigel-release
+      - name: Install Playwright browsers
+        run: pnpm exec playwright install chromium
+      - name: Test fork release workflows
+        run: node .github/scripts/workflow-contract.test.mjs && node .github/scripts/release-tag.test.mjs
+      - name: Run Checks
+        run: pnpm run test:pr
+  preview:
+    name: Preview
+    # RigelBuild fork: the pkg.pr.new preview publish needs an
+    # NX_CLOUD_ACCESS_TOKEN / registry creds we don't hold and produces no
+    # artifact the monorepo consumes (we pull @tanstack/virtual-core from
+    # npm). Scope it to the upstream owner, mirroring release.yml's own
+    # `if: github.repository_owner == 'TanStack'` guard, so it skips cleanly
+    # on the fork instead of reddening every PR. (RIG-2213)
+    if: github.repository_owner == 'TanStack'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Setup Tools
+        uses: tanstack/config/.github/setup@e4b48f16568324f76f467aa4c2aac2f05db632c3 # main
+      - name: Build Packages
+        run: pnpm run build:all
+      - name: Publish Previews
+        run: pnpx pkg-pr-new publish --pnpm --compact './packages/*' --template './examples/*/*'
+  provenance:
+    name: Provenance
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Check Provenance
+        uses: danielroe/provenance-action@41bcc969e579d9e29af08ba44fcbfdf95cee6e6c # v0.1.1
+        with:
+          fail-on-downgrade: true
+  version-preview:
+    name: Version Preview
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Setup Tools
+        uses: TanStack/config/.github/setup@e4b48f16568324f76f467aa4c2aac2f05db632c3 # main
+      - name: Changeset Preview
+        uses: TanStack/config/.github/changeset-preview@e4b48f16568324f76f467aa4c2aac2f05db632c3 # main
+
+  # RigelBuild: aggregator producing a check-run literally named `CI` for
+  # main branch-protection to pin (RIG-2213). Green iff the real `test` gate
+  # passes; deliberately does not depend on the publish jobs (preview,
+  # provenance, version-preview) which can fail for reasons unrelated to code.
+  CI:
+    name: CI
+    # Run even when `test` fails/skips so this required check reports an
+    # explicit `failure` rather than `skipped`. Branch protection treats a
+    # skipped required check as passing, so a bare `needs: [test]` (default
+    # `if: success()`) would let a red `test` merge — the gate must fail
+    # closed on the exact failure it exists to catch.
+    if: ${{ always() }}
+    needs: [test]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Gate on test result
+        run: |
+          if [ "${{ needs.test.result }}" != "success" ]; then
+            echo "test job result: ${{ needs.test.result }}" >&2
+            exit 1
+          fi

@@ -1,0 +1,18 @@
+# yaml-language-server: $schema=https://moonrepo.dev/schemas/workspace.json
+remote:
+  api: 'grpc'
+  # Host and instance name come from the MOON_REMOTE_* environment, set from CI repository variables.
+  auth:
+    headers:
+      Authorization: 'Basic ${MOON_CACHE_BASIC}'
+  cache:
+    compression: 'zstd'
+    verifyIntegrity: true
+    localReadOnly: true
+projects:
+  globs:
+    # Fork project files live beside their imported source: forks/<name>/moon.yml.
+    # BEGIN fork-import lane entries
+    - 'forks/*/moon.yml'
+    # END fork-import lane entries
+    - 'tools/*/moon.yml'

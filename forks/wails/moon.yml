@@ -1,0 +1,13 @@
+# yaml-language-server: $schema=https://moonrepo.dev/schemas/project.json
+#
+# Tasks run from this project's directory, which is the fork tree root.
+# The v3 module is the one this fork ships; go -C selects it without options.cwd.
+layer: 'application'
+language: 'go'
+
+tasks:
+  test:
+    command: 'go'
+    args: ['-C', 'v3', 'test', './...']
+    options:
+      cache: false

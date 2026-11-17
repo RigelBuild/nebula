@@ -19,8 +19,6 @@ type environment func(string) string
 
 type commandConfig struct {
 	root       string
-	token      string
-	apiURL     string
 	repository string
 	gitHub     *github.Client
 }
@@ -80,7 +78,7 @@ func newRootCommand(_ context.Context, getenv environment, stdout io.Writer) *co
 			}
 		}
 		for _, name := range names {
-			if err := syncFork(command.Context(), forkConfig{Name: name, Root: config.root, GitHubToken: config.token, Repository: config.repository, Client: config.gitHub, Output: command.OutOrStdout()}, dryRun); err != nil {
+			if err := syncFork(command.Context(), forkConfig{Name: name, Root: config.root, Repository: config.repository, Client: config.gitHub, Output: command.OutOrStdout()}, dryRun); err != nil {
 				return fmt.Errorf("sync %s: %w", name, err)
 			}
 		}
@@ -101,7 +99,7 @@ func newRootCommand(_ context.Context, getenv environment, stdout io.Writer) *co
 		if err != nil {
 			return err
 		}
-		return exportFork(command.Context(), config.root, exportOptions{Name: exportName, Range: exportRange, Topic: exportTopic, Outbox: outbox})
+		return exportFork(command.Context(), config.root, exportOptions{Name: exportName, Range: exportRange, Topic: exportTopic, Outbox: outbox}, command.OutOrStdout())
 	}
 	root.AddCommand(importCommand, syncCommand, exportCommand)
 	root.SetOut(stdout)
@@ -122,9 +120,8 @@ func configForCommand(ctx context.Context, rootPath string, getenv environment) 
 	if apiURL == "" {
 		apiURL = "https://api.github.com"
 	}
-
-	token := getenv("GITHUB_TOKEN")
 	baseURL := apiURL + "/"
+	token := getenv("GITHUB_TOKEN")
 	options := []github.ClientOptionsFunc{github.WithHTTPClient(&http.Client{}), github.WithURLs(&baseURL, nil)}
 	if token != "" {
 		options = append(options, github.WithAuthToken(token))
@@ -133,7 +130,7 @@ func configForCommand(ctx context.Context, rootPath string, getenv environment) 
 	if err != nil {
 		return commandConfig{}, fmt.Errorf("configure GitHub client: %w", err)
 	}
-	return commandConfig{root: root, token: token, apiURL: apiURL, repository: repository, gitHub: client}, nil
+	return commandConfig{root: root, repository: repository, gitHub: client}, nil
 }
 
 func resolveRoot(ctx context.Context, configured string) (string, error) {

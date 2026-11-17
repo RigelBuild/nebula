@@ -2,9 +2,9 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -21,7 +21,7 @@ type exportOptions struct {
 
 var topicName = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._/-]*$`)
 
-func exportFork(ctx context.Context, root string, options exportOptions) (resultErr error) {
+func exportFork(ctx context.Context, root string, options exportOptions, out io.Writer) (resultErr error) {
 	if err := validateName(options.Name); err != nil {
 		return err
 	}
@@ -39,16 +39,9 @@ func exportFork(ctx context.Context, root string, options exportOptions) (result
 		return fmt.Errorf("export requires a clean worktree: %w", err)
 	}
 	recordPath := filepath.Join(root, "forks", options.Name, "upstream.json")
-	data, err := os.ReadFile(recordPath)
+	record, err := readUpstreamRecord(recordPath)
 	if err != nil {
-		return fmt.Errorf("read upstream record: %w", err)
-	}
-	var record upstreamRecord
-	if err := json.Unmarshal(data, &record); err != nil {
-		return fmt.Errorf("decode upstream record: %w", err)
-	}
-	if record.Repo == "" || record.Branch == "" || record.Commit == "" {
-		return errors.New("upstream record must contain repo, branch and commit")
+		return err
 	}
 	temporary, err := os.MkdirTemp("", "nebula-fork-export-")
 	if err != nil {
@@ -58,7 +51,7 @@ func exportFork(ctx context.Context, root string, options exportOptions) (result
 	if _, err := git(ctx, temporary, nil, "init", "--bare", "-q"); err != nil {
 		return fmt.Errorf("initialize temporary export repository: %w", err)
 	}
-	if _, err := git(ctx, temporary, nil, "fetch", "--quiet", record.Repo, "refs/heads/"+record.Branch); err != nil {
+	if _, err := git(ctx, temporary, nil, "fetch", "--quiet", "--", record.Repo, "refs/heads/"+record.Branch); err != nil {
 		return fmt.Errorf("fetch recorded upstream branch: %w", err)
 	}
 	if _, err := git(ctx, temporary, nil, "cat-file", "-e", record.Commit+"^{commit}"); err != nil {
@@ -77,7 +70,7 @@ func exportFork(ctx context.Context, root string, options exportOptions) (result
 	if _, err := git(ctx, root, nil, "rev-parse", "--verify", right+"^{commit}"); err != nil {
 		return fmt.Errorf("resolve range end: %w", err)
 	}
-	patch, err := git(ctx, root, nil, "diff", "--binary", "--find-renames", "--full-index", left, right, "--", "forks/"+options.Name)
+	patch, err := git(ctx, root, nil, "diff", "--binary", "--find-renames", "--full-index", left, right, "--", "forks/"+options.Name, ":(exclude)forks/"+options.Name+"/moon.yml", ":(exclude)forks/"+options.Name+"/upstream.json")
 	if err != nil {
 		return fmt.Errorf("create nebula export diff: %w", err)
 	}
@@ -123,7 +116,7 @@ func exportFork(ctx context.Context, root string, options exportOptions) (result
 	if err != nil {
 		return err
 	}
-	_, err = fmt.Fprintf(os.Stdout, "pushed %s to %s\ncompare: %s\n", short(sha), ref, compare)
+	_, err = fmt.Fprintf(out, "pushed %s to %s\ncompare: %s\n", short(sha), ref, compare)
 	return err
 }
 

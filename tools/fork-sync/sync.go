@@ -18,8 +18,6 @@ type forkConfig struct {
 	Name        string
 	Root        string
 	BaseBranch  string
-	GitHubToken string
-	GitHubAPI   string
 	Repository  string
 	Outbox      string
 	UpstreamTip string
@@ -38,16 +36,9 @@ func syncFork(ctx context.Context, config forkConfig, dryRun bool) error {
 		return err
 	}
 	recordPath := filepath.Join(config.Root, "forks", config.Name, "upstream.json")
-	data, err := os.ReadFile(recordPath)
+	record, err := readUpstreamRecord(recordPath)
 	if err != nil {
-		return fmt.Errorf("read upstream record: %w", err)
-	}
-	var record upstreamRecord
-	if err := json.Unmarshal(data, &record); err != nil {
-		return fmt.Errorf("decode upstream record: %w", err)
-	}
-	if record.Repo == "" || record.Branch == "" || record.Commit == "" {
-		return errors.New("upstream record must contain repo, branch and commit")
+		return err
 	}
 	if err := ensureClean(ctx, config.Root); err != nil {
 		return fmt.Errorf("sync requires a clean worktree: %w", err)
@@ -63,7 +54,7 @@ func syncFork(ctx context.Context, config forkConfig, dryRun bool) error {
 	if _, err := git(ctx, temporary, nil, "init", "--bare", "-q"); err != nil {
 		return fmt.Errorf("initialize upstream repository: %w", err)
 	}
-	if _, err := git(ctx, temporary, nil, "fetch", "--quiet", "--depth=1", record.Repo, "refs/heads/"+record.Branch); err != nil {
+	if _, err := git(ctx, temporary, nil, "fetch", "--quiet", "--depth=1", "--", record.Repo, "refs/heads/"+record.Branch); err != nil {
 		return fmt.Errorf("fetch upstream branch %s: %w", record.Branch, err)
 	}
 	tipBytes, err := git(ctx, temporary, nil, "rev-parse", "FETCH_HEAD^{commit}")
@@ -80,7 +71,7 @@ func syncFork(ctx context.Context, config forkConfig, dryRun bool) error {
 	}
 	depth := 32
 	for {
-		if _, err := git(ctx, temporary, nil, "fetch", "--quiet", "--deepen", fmt.Sprint(depth), record.Repo, "refs/heads/"+record.Branch); err != nil {
+		if _, err := git(ctx, temporary, nil, "fetch", "--quiet", "--deepen", fmt.Sprint(depth), "--", record.Repo, "refs/heads/"+record.Branch); err != nil {
 			return fmt.Errorf("deepen upstream history: %w", err)
 		}
 		if _, err := git(ctx, temporary, nil, "cat-file", "-e", record.Commit+"^{commit}"); err == nil {
@@ -132,7 +123,13 @@ func syncFork(ctx context.Context, config forkConfig, dryRun bool) error {
 			return fmt.Errorf("fetch main branch: %w", err)
 		}
 	}
+	leaseSHA := ""
 	if _, err := git(ctx, config.Root, nil, "fetch", "--quiet", remote, "refs/heads/"+branch+":refs/remotes/fork-sync/"+branch); err == nil {
+		fetched, revErr := git(ctx, config.Root, nil, "rev-parse", "refs/remotes/fork-sync/"+branch)
+		if revErr != nil {
+			return fmt.Errorf("resolve existing sync branch: %w", revErr)
+		}
+		leaseSHA = strings.TrimSpace(string(fetched))
 		if _, err := git(ctx, config.Root, nil, "switch", "-C", branch, "refs/remotes/fork-sync/"+branch); err != nil {
 			return fmt.Errorf("checkout existing sync branch: %w", err)
 		}
@@ -181,7 +178,8 @@ func syncFork(ctx context.Context, config forkConfig, dryRun bool) error {
 		return fmt.Errorf("resolve sync commit: %w", err)
 	}
 	result := syncResult{Old: old, New: tip, Commit: strings.TrimSpace(string(headBytes)), Conflict: conflict}
-	if _, err := git(ctx, config.Root, nil, "push", "--force-with-lease", remote, "HEAD:refs/heads/"+branch); err != nil {
+	lease := "--force-with-lease=refs/heads/" + branch + ":" + leaseSHA
+	if _, err := git(ctx, config.Root, nil, "push", lease, remote, "HEAD:refs/heads/"+branch); err != nil {
 		return fmt.Errorf("push sync branch: %w", err)
 	}
 	if config.Client == nil {

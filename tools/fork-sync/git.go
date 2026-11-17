@@ -39,6 +39,15 @@ func gitExitCode(err error) int {
 	return -1
 }
 
+// validateRepo accepts only the record repo forms git fetches over the network: https://, ssh://, and the
+// scp-style git@host:path. Any other value, such as one starting with "-", would be read by git as an option.
+func validateRepo(repo string) error {
+	if strings.HasPrefix(repo, "https://") || strings.HasPrefix(repo, "ssh://") || strings.HasPrefix(repo, "git@") {
+		return nil
+	}
+	return fmt.Errorf("refused upstream repo %q: want https://, ssh:// or git@host:path", repo)
+}
+
 func ensureClean(ctx context.Context, root string) error {
 	output, err := git(ctx, root, nil, "status", "--porcelain")
 	if err != nil {

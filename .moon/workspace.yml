@@ -11,7 +11,8 @@ remote:
     localReadOnly: true
 projects:
   globs:
-    # Fork project files live outside upstream trees and are registered by path.
+    # Fork project files live beside their imported source: forks/<name>/moon.yml.
     # BEGIN fork-import lane entries
+    - 'forks/*/moon.yml'
     # END fork-import lane entries
     - 'tools/*/moon.yml'

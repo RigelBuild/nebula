@@ -1,0 +1,28 @@
+language: typescript
+tasks:
+  build:
+    command: bun install --frozen-lockfile
+    inputs:
+      - package.json
+      - bun.lock
+  test:
+    command: bun test
+    deps:
+      - build
+    inputs:
+      - src/**/*
+      - test/**/*
+      - bin/**/*
+      - package.json
+      - bun.lock
+      - tsconfig.json
+  lint:
+    command: bun run lint
+    deps:
+      - build
+    inputs:
+      - src/**/*
+      - test/**/*
+      - bin/**/*
+      - biome.json
+      - package.json

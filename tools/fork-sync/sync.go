@@ -92,6 +92,9 @@ func syncFork(ctx context.Context, config forkConfig, dryRun bool) error {
 	}
 	commitCount := ""
 	if dryRun {
+		if err := unshallowUpstream(ctx, temporary, record.Repo, record.Branch); err != nil {
+			return fmt.Errorf("fetch full upstream history: %w", err)
+		}
 		count, err := git(ctx, temporary, nil, "rev-list", "--count", record.Commit+".."+tip)
 		if err != nil {
 			return fmt.Errorf("count upstream commits: %w", err)
@@ -189,6 +192,21 @@ func syncFork(ctx context.Context, config forkConfig, dryRun bool) error {
 		return err
 	}
 	return nil
+}
+
+// unshallowUpstream fetches the rest of the upstream history when the temporary repository is shallow. A shallow
+// fetch can stop before a merge's other parent, so a commit count taken there is wrong. The blob filter keeps the
+// fetch to commits and trees, which is all a count reads.
+func unshallowUpstream(ctx context.Context, repository, upstream, branch string) error {
+	shallow, err := git(ctx, repository, nil, "rev-parse", "--is-shallow-repository")
+	if err != nil {
+		return fmt.Errorf("check shallow history: %w", err)
+	}
+	if strings.TrimSpace(string(shallow)) != "true" {
+		return nil
+	}
+	_, err = git(ctx, repository, nil, "fetch", "--quiet", "--unshallow", "--filter=blob:none", "--", upstream, "refs/heads/"+branch)
+	return err
 }
 
 func syncOutput(config forkConfig) io.Writer {

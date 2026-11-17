@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -104,6 +105,36 @@ func TestSyncDryRunPrintsUpdatePlan(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := "widget: would open sync/widget (1 commits, " + short(fixture.oldCommit) + ".." + short(fixture.newCommit) + ")\n"
+	if got := output.String(); got != want {
+		t.Fatalf("dry-run output = %q, want %q", got, want)
+	}
+}
+
+// TestSyncDryRunCountsFullHistory: the dry-run count must equal git rev-list --count on the full upstream history.
+// The side branch forks before the recorded base and merges after it. A shallow fetch that stops once the base is
+// present keeps only part of the side branch, so a shallow count comes out short.
+func TestSyncDryRunCountsFullHistory(t *testing.T) {
+	fixture := newSyncFixture(t, false)
+	gitTest(t, fixture.upstream, "checkout", "-q", "-b", "side", fixture.oldCommit)
+	for i := range 40 {
+		writeTestFile(t, fixture.upstream, "side.txt", strconv.Itoa(i)+"\n")
+		gitTest(t, fixture.upstream, "add", "side.txt")
+		gitTest(t, fixture.upstream, "commit", "-m", "side "+strconv.Itoa(i))
+	}
+	gitTest(t, fixture.upstream, "checkout", "-q", "main")
+	gitTest(t, fixture.upstream, "merge", "--no-ff", "-m", "merge side", "side")
+	merged := strings.TrimSpace(string(gitOutput(t, fixture.upstream, "rev-parse", "HEAD")))
+	full := strings.TrimSpace(string(gitOutput(t, fixture.upstream, "rev-list", "--count", fixture.oldCommit+".."+merged)))
+	var output strings.Builder
+	if err := syncFork(context.Background(), forkConfig{
+		Name:       "widget",
+		Root:       fixture.root,
+		Repository: "RigelBuild/nebula",
+		Output:     &output,
+	}, true); err != nil {
+		t.Fatal(err)
+	}
+	want := "widget: would open sync/widget (" + full + " commits, " + short(fixture.oldCommit) + ".." + short(merged) + ")\n"
 	if got := output.String(); got != want {
 		t.Fatalf("dry-run output = %q, want %q", got, want)
 	}

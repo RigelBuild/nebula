@@ -117,23 +117,11 @@ jobs:
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
         with:
           go-version: stable
-          cache: true
+          cache: false
       - name: Set up Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
         with:
           bun-version: latest
-      - name: Cache Rust builds
-        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
-        with:
-          shared-key: ${{ matrix.system }}
-      - name: Cache Bun downloads
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
-        with:
-          path: ~/.cache/bun
-          key: bun-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/bun.lock') }}-${{ github.event.pull_request.head.ref || github.ref_name }}
-          restore-keys: |
-            bun-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/bun.lock') }}-
-            bun-${{ runner.os }}-${{ runner.arch }}-
       - name: Set up Moon
         run: nix develop --command moon --version
       - name: Run affected projects

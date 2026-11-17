@@ -13,6 +13,9 @@ tasks:
       - 'pnpm-lock.yaml'
       - 'pnpm-workspace.yaml'
       - '.npmrc'
+    options:
+      # nebula devshell has no pnpm or node (only go, bun, moon, rumdl, biome); CI cannot run pnpm.
+      runInCI: false
   build:
     command: 'pnpm'
     args: ['build']
@@ -30,6 +33,9 @@ tasks:
       - 'pnpm-lock.yaml'
       - 'pnpm-workspace.yaml'
       - 'tsconfig*.json'
+    options:
+      # nebula devshell has no pnpm or node (only go, bun, moon, rumdl, biome); CI cannot run pnpm.
+      runInCI: false
   typecheck:
     command: 'pnpm'
     args: ['-r', 'typecheck']
@@ -46,3 +52,6 @@ tasks:
       - 'package.json'
       - 'pnpm-workspace.yaml'
       - 'tsconfig*.json'
+    options:
+      # nebula devshell has no pnpm or node (only go, bun, moon, rumdl, biome); CI cannot run pnpm.
+      runInCI: false

@@ -170,6 +170,88 @@ func TestImportWritesTreeRecordAndMoonProject(t *testing.T) {
 	}
 }
 
+// TestImportKeepsForkBlobsByteIdentical: the import must copy each fork blob as stored. An archive-based
+// import applies the fork's .gitattributes: eol=crlf rewrites line endings, export-ignore drops a path,
+// and export-subst expands $Format:...$.
+func TestImportKeepsForkBlobsByteIdentical(t *testing.T) {
+	root := t.TempDir()
+	gitTest(t, root, "init", "-b", "main")
+	gitTest(t, root, "config", "user.name", "Test")
+	gitTest(t, root, "config", "user.email", "test@example.com")
+	writeTestFile(t, root, "README.md", "nebula\n")
+	gitTest(t, root, "add", ".")
+	gitTest(t, root, "commit", "-m", "initial")
+	upstream := filepath.Join(t.TempDir(), "upstream")
+	if err := os.MkdirAll(upstream, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gitTest(t, upstream, "init", "-b", "main")
+	gitTest(t, upstream, "config", "user.name", "Test")
+	gitTest(t, upstream, "config", "user.email", "test@example.com")
+	writeTestFile(t, upstream, "README.md", "upstream\n")
+	gitTest(t, upstream, "add", ".")
+	gitTest(t, upstream, "commit", "-m", "upstream base")
+	fork := filepath.Join(t.TempDir(), "fork.git")
+	gitTest(t, t.TempDir(), "init", "--bare", "-b", "main", fork)
+	forkWork := filepath.Join(t.TempDir(), "fork-work")
+	gitTest(t, t.TempDir(), "clone", upstream, forkWork)
+	gitTest(t, forkWork, "config", "user.name", "Test")
+	gitTest(t, forkWork, "config", "user.email", "test@example.com")
+	gitTest(t, forkWork, "remote", "set-url", "origin", fork)
+	gitTest(t, forkWork, "checkout", "-b", "rigel-release")
+	writeTestFile(t, forkWork, ".gitattributes", "*.ps1 text eol=crlf\nignored.txt export-ignore\nsubst.txt export-subst\n")
+	writeTestFile(t, forkWork, "a.ps1", "Write-Output 'a'\n")
+	writeTestFile(t, forkWork, "ignored.txt", "kept\n")
+	writeTestFile(t, forkWork, "subst.txt", "$Format:%H$\n")
+	gitTest(t, forkWork, "add", ".")
+	gitTest(t, forkWork, "commit", "-m", "fork release")
+	gitTest(t, forkWork, "push", "origin", "rigel-release")
+	forkCommit := strings.TrimSpace(string(gitOutput(t, forkWork, "rev-parse", "HEAD")))
+	mapRemotes(t, map[string]string{"fork": fork, "upstream": upstream})
+	if err := importFork(context.Background(), root, importOptions{Name: "widget", Fork: "https://fixture.invalid/fork", Ref: "rigel-release", Upstream: "https://fixture.invalid/upstream", UpstreamBranch: "main"}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := os.ReadFile(filepath.Join(root, "forks/widget/ignored.txt")); err != nil || string(got) != "kept\n" {
+		t.Errorf("forks/widget/ignored.txt = %q, %v; want %q", got, err, "kept\n")
+	}
+	// git add renormalizes eol, so the index blob hides CRLF. The worktree bytes must match the fork's.
+	if got, err := os.ReadFile(filepath.Join(root, "forks/widget/a.ps1")); err != nil || string(got) != "Write-Output 'a'\n" {
+		t.Errorf("forks/widget/a.ps1 = %q, %v; want the fork's LF bytes", got, err)
+	}
+	forkBlobs := blobsByPath(t, fork, forkCommit, "")
+	importBlobs := blobsByPath(t, root, "HEAD", "forks/widget")
+	for path, want := range forkBlobs {
+		if got := importBlobs[path]; got != want {
+			t.Errorf("forks/widget/%s blob = %q, want fork blob %s", path, got, want)
+		}
+	}
+}
+
+// blobsByPath maps each blob under prefix in rev to its object ID. Keys are relative to prefix; an empty prefix means the whole tree.
+func blobsByPath(t *testing.T, dir, rev, prefix string) map[string]string {
+	t.Helper()
+	args := []string{"ls-tree", "-r", rev}
+	if prefix != "" {
+		args = append(args, "--", prefix)
+	}
+	blobs := make(map[string]string)
+	for line := range strings.SplitSeq(string(gitOutput(t, dir, args...)), "\n") {
+		if line == "" {
+			continue
+		}
+		meta, path, found := strings.Cut(line, "\t")
+		if !found {
+			t.Fatalf("ls-tree line %q has no path", line)
+		}
+		fields := strings.Fields(meta)
+		if len(fields) != 3 || fields[1] != "blob" {
+			continue
+		}
+		blobs[strings.TrimPrefix(path, prefix+"/")] = fields[2]
+	}
+	return blobs
+}
+
 func TestForkRepoURL(t *testing.T) {
 	tests := []struct {
 		name string

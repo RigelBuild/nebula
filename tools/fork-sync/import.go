@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -125,19 +124,12 @@ func importFork(ctx context.Context, root string, options importOptions) (result
 	if err := os.MkdirAll(filepath.Join(root, "forks"), 0o755); err != nil {
 		return fmt.Errorf("create forks directory: %w", err)
 	}
-	tree, err := git(ctx, temporary, nil, "archive", "--format=tar", forkCommit)
-	if err != nil {
-		return fmt.Errorf("archive fork tree: %w", err)
-	}
 	destination := filepath.Join(root, "forks", options.Name)
 	if err := os.Mkdir(destination, 0o755); err != nil {
 		return fmt.Errorf("create fork tree: %w", err)
 	}
-	extract := exec.CommandContext(ctx, "tar", "-xf", "-") //nolint:gosec // Fixed tar arguments; input is created by git archive.
-	extract.Dir = destination
-	extract.Stdin = bytes.NewReader(tree)
-	if output, err := extract.CombinedOutput(); err != nil {
-		return fmt.Errorf("extract fork tree: %w: %s", err, strings.TrimSpace(string(output)))
+	if err := writeForkTree(ctx, temporary, forkCommit, destination); err != nil {
+		return fmt.Errorf("write fork tree: %w", err)
 	}
 	record := upstreamRecord{Repo: options.Upstream, Branch: options.UpstreamBranch, Commit: base}
 	encoded, err := json.MarshalIndent(record, "", "  ")
@@ -160,6 +152,67 @@ func importFork(ctx context.Context, root string, options importOptions) (result
 	commit.Env = commitIdentityEnv()
 	if output, err := commit.CombinedOutput(); err != nil {
 		return fmt.Errorf("commit fork import: %w: %s", err, strings.TrimSpace(string(output)))
+	}
+	return nil
+}
+
+// writeForkTree writes the fork commit's tree into destination with each blob's bytes exactly as stored.
+// Blobs are read with cat-file, not git archive, so .gitattributes filters (eol, export-ignore, export-subst) cannot rewrite or drop files.
+// Writes go through an os.Root, so a symlink written earlier in the walk cannot redirect a later write outside destination.
+func writeForkTree(ctx context.Context, repository, commit, destination string) error {
+	listing, err := git(ctx, repository, nil, "ls-tree", "-r", "-z", commit)
+	if err != nil {
+		return fmt.Errorf("list fork tree: %w", err)
+	}
+	tree, err := os.OpenRoot(destination)
+	if err != nil {
+		return fmt.Errorf("open fork tree: %w", err)
+	}
+	defer tree.Close()
+	for _, record := range strings.Split(string(listing), "\x00") {
+		if record == "" {
+			continue
+		}
+		meta, path, found := strings.Cut(record, "\t")
+		fields := strings.Fields(meta)
+		if !found || len(fields) != 3 {
+			return fmt.Errorf("parse fork tree entry %q", record)
+		}
+		mode, object := fields[0], fields[2]
+		if err := tree.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			return fmt.Errorf("create directory for %s: %w", path, err)
+		}
+		if mode == "160000" {
+			// A submodule has no blob in this object store; create its directory empty, as git checkout does.
+			if err := tree.MkdirAll(path, 0o755); err != nil {
+				return fmt.Errorf("create submodule directory %s: %w", path, err)
+			}
+			continue
+		}
+		content, err := git(ctx, repository, nil, "cat-file", "blob", object)
+		if err != nil {
+			return fmt.Errorf("read blob for %s: %w", path, err)
+		}
+		if mode == "120000" {
+			if err := tree.Symlink(string(content), path); err != nil {
+				return fmt.Errorf("write symlink %s: %w", path, err)
+			}
+			continue
+		}
+		perm := os.FileMode(0o644)
+		if mode == "100755" {
+			perm = 0o755
+		}
+		file, err := tree.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, perm)
+		if err != nil {
+			return fmt.Errorf("create %s: %w", path, err)
+		}
+		if _, err := file.Write(content); err != nil {
+			return errors.Join(fmt.Errorf("write %s: %w", path, err), file.Close())
+		}
+		if err := file.Close(); err != nil {
+			return fmt.Errorf("close %s: %w", path, err)
+		}
 	}
 	return nil
 }

@@ -1,0 +1,16 @@
+# yaml-language-server: $schema=https://moonrepo.dev/schemas/project.json
+#
+# Tasks run from this project's directory, which is the fork tree root.
+layer: 'application'
+language: 'rust'
+tasks:
+  build:
+    command: 'cargo'
+    args: ['build', '--locked']
+    options:
+      cache: false
+  test:
+    command: 'cargo'
+    args: ['test', '--locked', '--features', 'no-e2e-tests']
+    options:
+      cache: false

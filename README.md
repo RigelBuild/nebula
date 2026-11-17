@@ -8,8 +8,8 @@ records under `docs/`.
 
 Enter the Nix development shell with `nix develop`. It provides Go, Bun, Moon,
 rumdl, and Biome. Moon registers each tool project from its own `moon.yml`.
-Fork project manifests live beside, not inside, imported source and are
-registered explicitly in `.moon/workspace.yml`.
+Fork project manifests live inside each fork tree at `forks/<name>/moon.yml`
+and are registered by the `forks/*/moon.yml` glob in `.moon/workspace.yml`.
 
 ## CI
 

@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -104,6 +105,35 @@ func TestSyncDryRunPrintsUpdatePlan(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := "widget: would open sync/widget (1 commits, " + short(fixture.oldCommit) + ".." + short(fixture.newCommit) + ")\n"
+	if got := output.String(); got != want {
+		t.Fatalf("dry-run output = %q, want %q", got, want)
+	}
+}
+
+// TestSyncDryRunCountsFullHistory: the dry-run count must equal git rev-list --count on the full upstream history.
+// The side branch forks at the recorded base and merges after it. A shallow fetch that stops once the base is
+// present keeps only part of the side branch, so a shallow count comes out short.
+func TestSyncDryRunCountsFullHistory(t *testing.T) {
+	fixture := newSyncFixture(t, false)
+	tree := strings.TrimSpace(string(gitOutput(t, fixture.upstream, "rev-parse", fixture.oldCommit+"^{tree}")))
+	side := fixture.oldCommit
+	for i := range 40 {
+		side = strings.TrimSpace(string(gitOutput(t, fixture.upstream, "commit-tree", tree, "-p", side, "-m", "side "+strconv.Itoa(i))))
+	}
+	upstreamTree := strings.TrimSpace(string(gitOutput(t, fixture.upstream, "rev-parse", fixture.newCommit+"^{tree}")))
+	merged := strings.TrimSpace(string(gitOutput(t, fixture.upstream, "commit-tree", upstreamTree, "-p", fixture.newCommit, "-p", side, "-m", "merge side")))
+	gitTest(t, fixture.upstream, "update-ref", "refs/heads/main", merged)
+	full := strings.TrimSpace(string(gitOutput(t, fixture.upstream, "rev-list", "--count", fixture.oldCommit+".."+merged)))
+	var output strings.Builder
+	if err := syncFork(context.Background(), forkConfig{
+		Name:       "widget",
+		Root:       fixture.root,
+		Repository: "RigelBuild/nebula",
+		Output:     &output,
+	}, true); err != nil {
+		t.Fatal(err)
+	}
+	want := "widget: would open sync/widget (" + full + " commits, " + short(fixture.oldCommit) + ".." + short(merged) + ")\n"
 	if got := output.String(); got != want {
 		t.Fatalf("dry-run output = %q, want %q", got, want)
 	}

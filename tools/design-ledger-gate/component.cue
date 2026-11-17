@@ -1,6 +1,6 @@
 id: "design-ledger-gate"
 release: {
-	base: "0.1.0"
+	base: "0.4.0"
 	artifacts: {
 		"design-ledger-gate": {
 			kind:     "binary"

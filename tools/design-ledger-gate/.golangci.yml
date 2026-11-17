@@ -28,7 +28,7 @@ linters:
     - exhaustruct
   settings:
     gomoddirectives:
-      # The command builds against the sibling tools/go-lib module through a local replace (RIG-10147 plan, go-lib layout).
+      # The command builds against the sibling tools/go-lib module through a local replace.
       replace-local: true
   enable:
     - gomodguard_v2

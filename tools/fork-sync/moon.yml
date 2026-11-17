@@ -1,0 +1,20 @@
+# yaml-language-server: $schema=https://moonrepo.dev/schemas/project.json
+#
+# fork-sync: imports, syncs and exports vendored forks, implemented in Go.
+layer: 'tool'
+language: 'go'
+tags: ['go']
+
+tasks:
+  test:
+    command: 'go'
+    args: ['test', './...']
+    inputs: ['*.go', 'go.mod', 'go.sum']
+    options:
+      cache: false
+  vet:
+    command: 'go'
+    args: ['vet', './...']
+    inputs: ['*.go', 'go.mod', 'go.sum']
+    options:
+      cache: false

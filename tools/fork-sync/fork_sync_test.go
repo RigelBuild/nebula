@@ -14,12 +14,16 @@ import (
 // validates a supported URL, and git reads the directory through the rewrite.
 func mapRemotes(t *testing.T, remotes map[string]string) {
 	t.Helper()
-	t.Setenv("GIT_CONFIG_COUNT", strconv.Itoa(len(remotes)))
-	index := 0
+	// Porcelain add and commit start a detached `git maintenance run --auto` that can race object reads. Disable
+	// it for every git child the test starts, including importFork and syncFork.
+	pairs := [][2]string{{"maintenance.auto", "false"}, {"gc.auto", "0"}}
 	for name, dir := range remotes {
-		t.Setenv("GIT_CONFIG_KEY_"+strconv.Itoa(index), "url."+dir+".insteadOf")
-		t.Setenv("GIT_CONFIG_VALUE_"+strconv.Itoa(index), "https://fixture.invalid/"+name)
-		index++
+		pairs = append(pairs, [2]string{"url." + dir + ".insteadOf", "https://fixture.invalid/" + name})
+	}
+	t.Setenv("GIT_CONFIG_COUNT", strconv.Itoa(len(pairs)))
+	for index, pair := range pairs {
+		t.Setenv("GIT_CONFIG_KEY_"+strconv.Itoa(index), pair[0])
+		t.Setenv("GIT_CONFIG_VALUE_"+strconv.Itoa(index), pair[1])
 	}
 }
 

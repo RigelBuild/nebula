@@ -1,0 +1,18 @@
+# yaml-language-server: $schema=https://moonrepo.dev/schemas/project.json
+#
+# Tasks run from this project's directory, which is the fork tree root.
+# The server needs the UI bundle (web/dist), which is not in this tree, so only
+# the CLI and shared packages are built and tested here.
+layer: 'application'
+language: 'go'
+tasks:
+  build:
+    command: go
+    args: ['build', '-o', '/dev/null', './cmd/cli']
+    options:
+      cache: false
+  test:
+    command: go
+    args: ['test', './cli/...', './shared/...']
+    options:
+      cache: false

@@ -1,0 +1,27 @@
+# yaml-language-server: $schema=https://moonrepo.dev/schemas/project.json
+#
+# hermes-agent: Python agent framework, imported from RigelBuild/hermes-agent
+# rigel-release at b1ca5c2d. Tasks run from this project's directory, which is
+# the fork tree root, so there is no options.cwd.
+layer: 'application'
+language: 'python'
+tags: ['python']
+
+tasks:
+  # runInCI: false. The nebula devshell has no Python (go, bun, moon, rumdl,
+  # biome only). RIG-10145 adds the fork toolchain that lets these tasks run.
+  test:
+    command: 'python'
+    args: ['-m', 'pytest', 'tests/agent']
+    inputs: ['**/*.py', 'pyproject.toml', 'uv.lock']
+    options:
+      cache: false
+      runInCI: false
+  # runInCI: false. Same reason as test: no Python in the nebula devshell (RIG-10145).
+  lint:
+    command: 'python'
+    args: ['-m', 'ruff', 'check', '.']
+    inputs: ['**/*.py', 'ruff.toml']
+    options:
+      cache: false
+      runInCI: false

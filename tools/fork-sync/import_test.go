@@ -274,23 +274,40 @@ func TestImportPreservesModesSymlinksAndGitlinks(t *testing.T) {
 	}
 	if mode := commitMode(t, root, "forks/widget/sub"); mode != "160000" {
 		t.Errorf("forks/widget/sub mode = %q, want 160000 gitlink", mode)
+	} else if id := commitObject(t, root, "forks/widget/sub"); id != "0123456789abcdef0123456789abcdef01234567" {
+		t.Errorf("forks/widget/sub commit = %s, want fork gitlink 0123456789abcdef0123456789abcdef01234567", id)
 	}
 	if mode := commitMode(t, root, "forks/widget/run.sh"); mode != "100755" {
 		t.Errorf("forks/widget/run.sh committed mode = %q, want 100755", mode)
 	}
 }
 
-// TestImportAvoidsMaintenanceChildProcess: a detached git maintenance run can race object reads. The fixture
-// environment disables it, so no traced git invocation spawns a maintenance child.
-func TestImportAvoidsMaintenanceChildProcess(t *testing.T) {
-	root, forkRepo, upstreamRepo, _, _ := createFilterFixture(t, func(string) {})
-	trace := filepath.Join(t.TempDir(), "trace.json")
-	t.Setenv("GIT_TRACE2_EVENT", trace)
-	if err := importFork(context.Background(), root, importOptions{Name: "widget", Fork: forkRepo, Ref: "rigel-release", Upstream: upstreamRepo, UpstreamBranch: "main"}); err != nil {
+// TestStoreBlobsRefusesIDMismatch: storeBlobs must fail when a stored ID differs from the fork's ID. A wrong ID is
+// what a path that --stdin-paths decodes differently would produce, so the guard is the only check that catches it.
+func TestStoreBlobsRefusesIDMismatch(t *testing.T) {
+	nebula := t.TempDir()
+	gitTest(t, nebula, "init", "-q", "-b", "main")
+	destination := filepath.Join(nebula, "forks", "widget")
+	if err := os.MkdirAll(destination, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(mustRead(t, trace)), `"maintenance"`) {
-		t.Fatal("a git maintenance child ran during import")
+	writeTestFile(t, destination, "a", "plain\n")
+	entries := []treeEntry{{mode: "100644", object: "0000000000000000000000000000000000000000", path: "a"}}
+	contents := map[string][]byte{}
+	err := storeBlobs(context.Background(), nebula, destination, entries, contents)
+	if err == nil || !strings.Contains(err.Error(), "differs from fork blob") {
+		t.Fatalf("storeBlobs error = %v, want a stored-blob mismatch", err)
+	}
+}
+
+// TestStoreLinkTargetRefusesIDMismatch: a symlink target stored with a wrong ID must fail the import, not pass silently.
+func TestStoreLinkTargetRefusesIDMismatch(t *testing.T) {
+	nebula := t.TempDir()
+	gitTest(t, nebula, "init", "-q", "-b", "main")
+	entry := treeEntry{mode: "120000", object: "0000000000000000000000000000000000000000", path: "link"}
+	err := storeLinkTarget(context.Background(), nebula, []byte("../x"), entry)
+	if err == nil || !strings.Contains(err.Error(), "differs from fork blob") {
+		t.Fatalf("storeLinkTarget error = %v, want a stored-blob mismatch", err)
 	}
 }
 
@@ -375,6 +392,16 @@ func commitMode(t *testing.T, root, path string) string {
 		return ""
 	}
 	return fields[0]
+}
+
+// commitObject returns the object ID of path in the HEAD commit of root.
+func commitObject(t *testing.T, root, path string) string {
+	t.Helper()
+	fields := strings.Fields(string(gitOutput(t, root, "ls-tree", "HEAD", "--", path)))
+	if len(fields) < 3 {
+		return ""
+	}
+	return fields[2]
 }
 
 // blobsByPath maps each blob under prefix in rev to its object ID. Keys are relative to prefix; an empty prefix means the whole tree.

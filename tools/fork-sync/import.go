@@ -202,7 +202,6 @@ func writeForkTree(ctx context.Context, nebula, repository, commit, destination,
 	}
 	defer tree.Close()
 	var index bytes.Buffer
-	var regular []treeEntry
 	for _, entry := range entries {
 		if err := tree.MkdirAll(filepath.Dir(entry.path), 0o755); err != nil {
 			return nil, fmt.Errorf("create directory for %s: %w", entry.path, err)
@@ -221,7 +220,6 @@ func writeForkTree(ctx context.Context, nebula, repository, commit, destination,
 			if err := writeFile(tree, entry.path, entry.mode, contents[entry.object]); err != nil {
 				return nil, err
 			}
-			regular = append(regular, entry)
 		}
 		fmt.Fprintf(&index, "%s %s\t%s%s\x00", entry.mode, entry.object, prefix, entry.path)
 	}
@@ -231,9 +229,8 @@ func writeForkTree(ctx context.Context, nebula, repository, commit, destination,
 	return index.Bytes(), nil
 }
 
-// storeBlobs stores every non-gitlink entry in nebula's object store with --no-filters, and checks each ID against the fork's.
-// Regular files are hashed from the worktree in one --stdin-paths call. A symlink is hashed from its target bytes, since
-// hash-object on its path would follow the link to a file.
+// storeBlobs stores each non-gitlink entry with --no-filters and checks its ID against the fork's.
+// A symlink is hashed from its target bytes, since hash-object on its path would follow the link.
 func storeBlobs(ctx context.Context, nebula, destination string, entries []treeEntry, contents map[string][]byte) error {
 	var files []treeEntry
 	var paths bytes.Buffer

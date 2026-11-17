@@ -11,11 +11,17 @@ tasks:
       - package.json
       - pnpm-lock.yaml
       - pnpm-workspace.yaml
+    options:
+      # nebula devshell has no pnpm or node; see RIG-10145
+      runInCI: false
   build:
     command: pnpm
     args: ['run', 'build:all']
     deps:
       - install
+    options:
+      # nebula devshell has no pnpm or node; see RIG-10145
+      runInCI: false
   test:
     command: pnpm
     args: ['run', 'test:ci']
@@ -23,6 +29,8 @@ tasks:
       - install
     options:
       cache: false
+      # nebula devshell has no pnpm or node; see RIG-10145
+      runInCI: false
   lint:
     command: pnpm
     args: ['run', 'test:eslint']
@@ -30,3 +38,5 @@ tasks:
       - install
     options:
       cache: false
+      # nebula devshell has no pnpm or node; see RIG-10145
+      runInCI: false

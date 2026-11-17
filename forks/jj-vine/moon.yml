@@ -9,8 +9,26 @@ tasks:
     args: ['build', '--locked']
     options:
       cache: false
+      # Nebula devshell has no cargo. The fork's justfile builds on +stable.
+      runInCI: false
   test:
     command: 'cargo'
     args: ['test', '--locked', '--features', 'no-e2e-tests']
     options:
       cache: false
+      # Nebula devshell has no cargo or jj. TestRepo::with_local_remote() runs jj even with no-e2e-tests.
+      runInCI: false
+  fmt:
+    command: 'cargo'
+    args: ['fmt', '--check']
+    options:
+      cache: false
+      # Nebula devshell has no cargo. CI runs fmt on the nightly rustfmt component.
+      runInCI: false
+  clippy:
+    command: 'cargo'
+    args: ['clippy', '--tests']
+    options:
+      cache: false
+      # Nebula devshell has no cargo. CI runs clippy on the nightly clippy component.
+      runInCI: false

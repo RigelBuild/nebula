@@ -111,19 +111,18 @@ func TestSyncDryRunPrintsUpdatePlan(t *testing.T) {
 }
 
 // TestSyncDryRunCountsFullHistory: the dry-run count must equal git rev-list --count on the full upstream history.
-// The side branch forks before the recorded base and merges after it. A shallow fetch that stops once the base is
+// The side branch forks at the recorded base and merges after it. A shallow fetch that stops once the base is
 // present keeps only part of the side branch, so a shallow count comes out short.
 func TestSyncDryRunCountsFullHistory(t *testing.T) {
 	fixture := newSyncFixture(t, false)
-	gitTest(t, fixture.upstream, "checkout", "-q", "-b", "side", fixture.oldCommit)
+	tree := strings.TrimSpace(string(gitOutput(t, fixture.upstream, "rev-parse", fixture.oldCommit+"^{tree}")))
+	side := fixture.oldCommit
 	for i := range 40 {
-		writeTestFile(t, fixture.upstream, "side.txt", strconv.Itoa(i)+"\n")
-		gitTest(t, fixture.upstream, "add", "side.txt")
-		gitTest(t, fixture.upstream, "commit", "-m", "side "+strconv.Itoa(i))
+		side = strings.TrimSpace(string(gitOutput(t, fixture.upstream, "commit-tree", tree, "-p", side, "-m", "side "+strconv.Itoa(i))))
 	}
-	gitTest(t, fixture.upstream, "checkout", "-q", "main")
-	gitTest(t, fixture.upstream, "merge", "--no-ff", "-m", "merge side", "side")
-	merged := strings.TrimSpace(string(gitOutput(t, fixture.upstream, "rev-parse", "HEAD")))
+	upstreamTree := strings.TrimSpace(string(gitOutput(t, fixture.upstream, "rev-parse", fixture.newCommit+"^{tree}")))
+	merged := strings.TrimSpace(string(gitOutput(t, fixture.upstream, "commit-tree", upstreamTree, "-p", fixture.newCommit, "-p", side, "-m", "merge side")))
+	gitTest(t, fixture.upstream, "update-ref", "refs/heads/main", merged)
 	full := strings.TrimSpace(string(gitOutput(t, fixture.upstream, "rev-list", "--count", fixture.oldCommit+".."+merged)))
 	var output strings.Builder
 	if err := syncFork(context.Background(), forkConfig{

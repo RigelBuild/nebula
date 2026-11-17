@@ -1,0 +1,19 @@
+# yaml-language-server: $schema=https://moonrepo.dev/schemas/workspace.json
+remote:
+  api: 'grpc'
+  host: 'grpc://moon-cache.internal.rigel.build:9092'
+  auth:
+    headers:
+      Authorization: 'Basic ${MOON_CACHE_BASIC}'
+  cache:
+    compression: 'zstd'
+    instanceName: 'sealed'
+    verifyIntegrity: true
+    localReadOnly: true
+projects:
+  globs:
+    # Fork project files live outside upstream trees and are registered by path.
+    # BEGIN fork-import lane entries
+    # END fork-import lane entries
+    - 'tools/*/moon.yml'
+    - 'docs/moon.yml'

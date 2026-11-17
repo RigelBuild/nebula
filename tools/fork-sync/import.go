@@ -83,6 +83,9 @@ func importFork(ctx context.Context, root string, options importOptions) (result
 	if strings.HasPrefix(forkURL, "RigelBuild/") {
 		forkURL = "https://github.com/" + strings.TrimPrefix(forkURL, "RigelBuild/") + ".git"
 	}
+	if err := validateRepo(forkURL); err != nil {
+		return fmt.Errorf("--fork: %w", err)
+	}
 	if _, err := git(ctx, temporary, nil, "init", "--bare", "-q"); err != nil {
 		return fmt.Errorf("initialize temporary repository: %w", err)
 	}

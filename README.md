@@ -26,7 +26,8 @@ CI reads four repository variables: `NIX_CACHE_SUBSTITUTER`,
 
 - `.github/workflows/ci.yaml` — advisory affected-project CI.
 - `forks/<name>/` — imported upstream source; style gates exclude this tree.
-- `forks/<name>.moon.yml` — explicitly registered Moon project manifests,
-  outside imported source trees.
+- `forks/<name>/moon.yml` and `forks/<name>/upstream.json` — nebula-owned
+  project manifest and sync record inside each fork tree; `fork-sync export`
+  leaves them out of upstream patches.
 - `tools/<name>/` — first-party public tools, each with its own `moon.yml`.
 - `docs/designs/<project>/` — public design records.

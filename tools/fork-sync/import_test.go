@@ -68,6 +68,20 @@ func TestImportRefusesOptionUpstream(t *testing.T) {
 	requireRefusedRepo(t, err, marker)
 }
 
+// TestImportRefusesOptionFork: a fork that git would read as an option is refused before any fetch.
+func TestImportRefusesOptionFork(t *testing.T) {
+	root, _, upstreamRepo, _ := createUnrelatedImportFixture(t)
+	marker := filepath.Join(t.TempDir(), "marker")
+	err := importFork(context.Background(), root, importOptions{
+		Name:           "widget",
+		Fork:           "--upload-pack=touch " + marker,
+		Ref:            "rigel-release",
+		Upstream:       upstreamRepo,
+		UpstreamBranch: "main",
+	})
+	requireRefusedRepo(t, err, marker)
+}
+
 // createUnrelatedImportFixture returns a nebula root, the fork and upstream as mapped https URLs, and the upstream base.
 func createUnrelatedImportFixture(t *testing.T) (root, forkRepo, upstreamRepo, base string) {
 	t.Helper()

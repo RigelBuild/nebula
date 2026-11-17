@@ -114,7 +114,7 @@ func syncFork(ctx context.Context, config forkConfig, dryRun bool) error {
 	if config.Outbox != "" {
 		remote = config.Outbox
 	}
-	if _, err := git(ctx, config.Root, nil, "fetch", "--quiet", remote, "refs/heads/main:refs/remotes/fork-sync/main"); err != nil {
+	if _, err := git(ctx, config.Root, nil, "fetch", "--quiet", "--", remote, "refs/heads/main:refs/remotes/fork-sync/main"); err != nil {
 		if gitExitCode(err) == 128 {
 			if _, initErr := git(ctx, config.Root, nil, "update-ref", "refs/remotes/fork-sync/main", "HEAD"); initErr != nil {
 				return fmt.Errorf("initialize fork-sync base ref: %w", initErr)
@@ -124,7 +124,7 @@ func syncFork(ctx context.Context, config forkConfig, dryRun bool) error {
 		}
 	}
 	leaseSHA := ""
-	if _, err := git(ctx, config.Root, nil, "fetch", "--quiet", remote, "refs/heads/"+branch+":refs/remotes/fork-sync/"+branch); err == nil {
+	if _, err := git(ctx, config.Root, nil, "fetch", "--quiet", "--", remote, "refs/heads/"+branch+":refs/remotes/fork-sync/"+branch); err == nil {
 		fetched, revErr := git(ctx, config.Root, nil, "rev-parse", "refs/remotes/fork-sync/"+branch)
 		if revErr != nil {
 			return fmt.Errorf("resolve existing sync branch: %w", revErr)
@@ -179,7 +179,7 @@ func syncFork(ctx context.Context, config forkConfig, dryRun bool) error {
 	}
 	result := syncResult{Old: old, New: tip, Commit: strings.TrimSpace(string(headBytes)), Conflict: conflict}
 	lease := "--force-with-lease=refs/heads/" + branch + ":" + leaseSHA
-	if _, err := git(ctx, config.Root, nil, "push", lease, remote, "HEAD:refs/heads/"+branch); err != nil {
+	if _, err := git(ctx, config.Root, nil, "push", lease, "--", remote, "HEAD:refs/heads/"+branch); err != nil {
 		return fmt.Errorf("push sync branch: %w", err)
 	}
 	if config.Client == nil {

@@ -31,6 +31,9 @@ func exportFork(ctx context.Context, root string, options exportOptions, out io.
 	if !topicName.MatchString(options.Topic) || strings.Contains(options.Topic, "..") || strings.Contains(options.Topic, "//") {
 		return fmt.Errorf("invalid topic %q", options.Topic)
 	}
+	if err := validateOutbox(options.Outbox); err != nil {
+		return err
+	}
 	parts := strings.Split(options.Range, "..")
 	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
 		return fmt.Errorf("range must use A..B syntax, got %q", options.Range)
@@ -109,7 +112,7 @@ func exportFork(ctx context.Context, root string, options exportOptions, out io.
 	}
 	sha := strings.TrimSpace(string(commit))
 	ref := "refs/heads/upstream/" + options.Topic
-	if _, err := git(ctx, worktree, nil, "push", options.Outbox, sha+":"+ref); err != nil {
+	if _, err := git(ctx, worktree, nil, "push", "--", options.Outbox, sha+":"+ref); err != nil {
 		return fmt.Errorf("push export branch: %w", err)
 	}
 	compare, err := outboxCompareURL(options.Outbox, options.Topic, record.Commit)

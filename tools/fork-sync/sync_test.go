@@ -166,6 +166,20 @@ func TestSyncRefusesOptionRecordRepo(t *testing.T) {
 	requireRefusedRepo(t, err, marker)
 }
 
+// TestSyncOutboxIsNotReadAsOption: a dash-leading outbox must reach the fetch and push as a repository operand after
+// "--". Without "--", git reads it as an option and fails with "unknown option"; with it, git refuses it as a path.
+func TestSyncOutboxIsNotReadAsOption(t *testing.T) {
+	fixture := newSyncFixture(t, false)
+	fixture.config.Outbox = "--fork-sync-test-option"
+	err := syncFork(context.Background(), fixture.config, false)
+	if err == nil {
+		t.Fatal("sync with a dash-leading outbox succeeded, want git to refuse it")
+	}
+	if strings.Contains(err.Error(), "unknown option") {
+		t.Fatalf("git read the outbox as an option: %v", err)
+	}
+}
+
 // TestSyncAcceptsSupportedRecordRepos: supported schemes pass validation and reach the fetch, which fails
 // because the port is closed. The error must not be a refusal.
 func TestSyncAcceptsSupportedRecordRepos(t *testing.T) {

@@ -23,8 +23,14 @@ func TestExportAppliesToOutbox(t *testing.T) {
 	gitTest(t, fixture.root, "add", ".")
 	gitTest(t, fixture.root, "commit", "-m", "export change")
 	start, end := headRange(t, fixture.root)
-	if err := exportFork(context.Background(), fixture.root, exportOptions{Name: "widget", Range: start + ".." + end, Topic: "test", Outbox: outbox}, io.Discard); err != nil {
+	var output strings.Builder
+	if err := exportFork(context.Background(), fixture.root, exportOptions{Name: "widget", Range: start + ".." + end, Topic: "test", Outbox: outbox}, &output); err != nil {
 		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(output.String()), "\n")
+	sha := strings.TrimSpace(string(gitOutput(t, outbox, "rev-parse", "refs/heads/upstream/test")))
+	if want := []string{"pushed " + short(sha) + " to refs/heads/upstream/test", "compare: outbox " + outbox + " branch upstream/test (base " + short(fixture.oldCommit) + ")"}; !slices.Equal(lines, want) {
+		t.Fatalf("export output = %q, want %q", lines, want)
 	}
 	gitTest(t, worktree, "fetch", "origin", "refs/heads/upstream/test")
 	if got := string(gitOutput(t, worktree, "show", "FETCH_HEAD:value.txt")); got != "exported\n" {
@@ -78,4 +84,13 @@ func TestExportRefusesOptionRecordRepo(t *testing.T) {
 	start, end := headRange(t, fixture.root)
 	err := exportFork(context.Background(), fixture.root, exportOptions{Name: "widget", Range: start + ".." + end, Topic: "test", Outbox: fixture.outbox}, io.Discard)
 	requireRefusedRepo(t, err, marker)
+}
+
+// TestExportRefusesOptionOutbox: an outbox that git would read as an option is refused before any push.
+func TestExportRefusesOptionOutbox(t *testing.T) {
+	fixture := newSyncFixture(t, false)
+	err := exportFork(context.Background(), fixture.root, exportOptions{Name: "widget", Range: "HEAD^..HEAD", Topic: "test", Outbox: "--fork-sync-test-option"}, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "refused outbox") {
+		t.Fatalf("error = %v, want a refused outbox", err)
+	}
 }

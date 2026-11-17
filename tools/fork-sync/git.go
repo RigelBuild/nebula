@@ -48,6 +48,14 @@ func validateRepo(repo string) error {
 	return fmt.Errorf("refused upstream repo %q: want https://, ssh:// or git@host:path", repo)
 }
 
+// validateOutbox refuses an --outbox value that git would read as an option.
+func validateOutbox(remote string) error {
+	if strings.HasPrefix(remote, "-") {
+		return fmt.Errorf("refused outbox %q: must not start with -", remote)
+	}
+	return nil
+}
+
 func ensureClean(ctx context.Context, root string) error {
 	output, err := git(ctx, root, nil, "status", "--porcelain")
 	if err != nil {

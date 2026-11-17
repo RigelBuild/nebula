@@ -1,6 +1,0 @@
-node_modules
-dist
-results/*.json
-!results/SAMPLE.json
-!results/.gitkeep
-results/LATEST.md

@@ -1,1 +1,0 @@
-terraform import googleworkspace_group_settings.sales-settings sales@example.com

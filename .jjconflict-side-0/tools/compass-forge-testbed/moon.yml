@@ -1,7 +1,0 @@
-language: unknown
-tasks:
-  test:
-    command: "true"
-    inputs:
-      - README.md
-      - compass-live/**/*

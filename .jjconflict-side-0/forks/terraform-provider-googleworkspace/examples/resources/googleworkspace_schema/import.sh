@@ -1,1 +1,0 @@
-terraform import googleworkspace_schema.birthday Ab0C_DEFGhIJKLmNopQ1Rs==

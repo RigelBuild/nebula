@@ -169,3 +169,34 @@ func TestImportWritesTreeRecordAndMoonProject(t *testing.T) {
 		t.Fatalf("import commit subject = %q", got)
 	}
 }
+
+func TestForkRepoURL(t *testing.T) {
+	tests := []struct {
+		name string
+		fork string
+		want string
+	}{
+		{
+			name: "RigelBuild shorthand keeps the owner",
+			fork: "RigelBuild/virtual",
+			want: "https://github.com/RigelBuild/virtual.git",
+		},
+		{
+			name: "https URL passes through",
+			fork: "https://github.com/RigelBuild/virtual.git",
+			want: "https://github.com/RigelBuild/virtual.git",
+		},
+		{
+			name: "ssh URL passes through",
+			fork: "ssh://git@github.com/RigelBuild/virtual.git",
+			want: "ssh://git@github.com/RigelBuild/virtual.git",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := forkRepoURL(tt.fork); got != tt.want {
+				t.Fatalf("forkRepoURL(%q) = %q, want %q", tt.fork, got, tt.want)
+			}
+		})
+	}
+}

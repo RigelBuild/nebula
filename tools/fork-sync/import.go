@@ -79,10 +79,7 @@ func importFork(ctx context.Context, root string, options importOptions) (result
 		return fmt.Errorf("create temporary clone: %w", err)
 	}
 	defer func() { resultErr = errors.Join(resultErr, os.RemoveAll(temporary)) }()
-	forkURL := options.Fork
-	if strings.HasPrefix(forkURL, "RigelBuild/") {
-		forkURL = "https://github.com/" + strings.TrimPrefix(forkURL, "RigelBuild/") + ".git"
-	}
+	forkURL := forkRepoURL(options.Fork)
 	if err := validateRepo(forkURL); err != nil {
 		return fmt.Errorf("--fork: %w", err)
 	}
@@ -165,6 +162,14 @@ func importFork(ctx context.Context, root string, options importOptions) (result
 		return fmt.Errorf("commit fork import: %w: %s", err, strings.TrimSpace(string(output)))
 	}
 	return nil
+}
+
+// forkRepoURL maps the RigelBuild/<repo> shorthand to its GitHub https URL. Any other value is returned unchanged for validateRepo to judge.
+func forkRepoURL(fork string) string {
+	if strings.HasPrefix(fork, "RigelBuild/") {
+		return "https://github.com/" + fork + ".git"
+	}
+	return fork
 }
 
 func validateName(name string) error {

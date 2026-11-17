@@ -4,11 +4,9 @@
   nixConfig = {
     extra-substituters = [
       "https://cache.nixos.org"
-      "http://nix-cache.internal.rigel.build/orion"
     ];
     extra-trusted-public-keys = [
       "cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY="
-      "orion:HTpZUUKJEcQXa8D9Gctmlx+rLECrcKU7naBjm8e8MGo="
     ];
     fallback = true;
   };

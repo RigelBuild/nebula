@@ -1,0 +1,26 @@
+# yaml-language-server: $schema=https://moonrepo.dev/schemas/project.json
+layer: 'application'
+language: 'nix'
+tasks:
+  build:
+    command: nix
+    args: ['build']
+    options:
+      cwd: forks/nix2container
+  test:
+    command: go
+    args: ['test', './...']
+    options:
+      cwd: forks/nix2container
+      cache: false
+  lint:
+    command: nix
+    args: ['flake', 'check']
+    options:
+      cwd: forks/nix2container
+      cache: false
+  package:
+    command: nix
+    args: ['build']
+    options:
+      cwd: forks/nix2container

@@ -104,6 +104,7 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           allow-unsafe-pr-checkout: true
+          persist-credentials: false
           fetch-depth: 0
       - name: Install Nix
         uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086
@@ -189,6 +190,7 @@ jobs:
           NIX_CACHE_PUSH_TOKEN: ${{ secrets.NIX_CACHE_PUSH_TOKEN }}
         run: |
           mkdir -p ~/.config/nix ~/.config/attic
+          test -n "$NIX_CACHE_PUSH_TOKEN" || { echo '::error::missing secret'; exit 1; }
           printf 'machine nix-cache.internal.rigel.build\nlogin attic\npassword %s\n' "$NIX_CACHE_PUSH_TOKEN" > ~/.config/nix/netrc
           chmod 600 ~/.config/nix/netrc
           printf 'default-server = "nix-cache"\n\n[servers.nix-cache]\nendpoint = "http://nix-cache.internal.rigel.build/"\ntoken = "%s"\n' "$NIX_CACHE_PUSH_TOKEN" > ~/.config/attic/config.toml
@@ -207,6 +209,7 @@ jobs:
           MOON_CACHE_BASIC: ${{ secrets.MOON_CACHE_BASIC }}
         run: |
           mkdir -p ~/.moon
+          test -n "$MOON_CACHE_BASIC" || { echo '::error::missing secret'; exit 1; }
           git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git" || true
           git fetch origin main
           nix develop --command moon ci --base origin/main

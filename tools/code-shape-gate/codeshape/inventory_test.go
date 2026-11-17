@@ -234,8 +234,8 @@ func TestToolVersionMismatch(t *testing.T) {
 	}
 }
 
-func TestBiomeVersionMatchesRepoSchema(t *testing.T) {
-	data, err := os.ReadFile(filepath.Join("testdata", "biome.json"))
+func TestBiomeFixtureSchemaMatchesBiomeVersion(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("testdata", "biome.fixture.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -248,6 +248,6 @@ func TestBiomeVersionMatchesRepoSchema(t *testing.T) {
 	}
 	want := "https://biomejs.dev/schemas/" + BiomeVersion + "/schema.json"
 	if config.Schema != want {
-		t.Fatalf("BiomeVersion = %s but biome.json $schema = %q", BiomeVersion, config.Schema)
+		t.Fatalf("BiomeVersion = %s but testdata/biome.fixture.json $schema = %q", BiomeVersion, config.Schema)
 	}
 }

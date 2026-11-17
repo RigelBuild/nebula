@@ -8,8 +8,8 @@ records under `docs/`.
 
 Enter the Nix development shell with `nix develop`. It provides Go, Bun, Moon,
 rumdl, and Biome. Moon registers each tool project from its own `moon.yml`.
-Fork project manifests live beside, not inside, imported source and are
-registered explicitly in `.moon/workspace.yml`.
+Fork project manifests live inside each fork tree at `forks/<name>/moon.yml`
+and are registered by the `forks/*/moon.yml` glob in `.moon/workspace.yml`.
 
 ## CI
 
@@ -26,7 +26,8 @@ CI reads four repository variables: `NIX_CACHE_SUBSTITUTER`,
 
 - `.github/workflows/ci.yaml` — advisory affected-project CI.
 - `forks/<name>/` — imported upstream source; style gates exclude this tree.
-- `forks/<name>.moon.yml` — explicitly registered Moon project manifests,
-  outside imported source trees.
+- `forks/<name>/moon.yml` and `forks/<name>/upstream.json` — nebula-owned
+  project manifest and sync record inside each fork tree; `fork-sync export`
+  leaves them out of upstream patches.
 - `tools/<name>/` — first-party public tools, each with its own `moon.yml`.
 - `docs/designs/<project>/` — public design records.

@@ -11,3 +11,5 @@ tasks:
     args: ['-C', 'v3', 'test', './...']
     options:
       cache: false
+      # Skipped in CI: needs cgo, pkg-config and GTK/WebKitGTK dev libs, which the nebula devshell lacks. RIG-10145: https://linear.app/rigelbuild/issue/RIG-10145
+      runInCI: false

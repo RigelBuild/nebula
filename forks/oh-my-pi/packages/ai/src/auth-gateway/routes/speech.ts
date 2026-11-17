@@ -1,0 +1,149 @@
+import { logger } from "@oh-my-pi/pi-utils";
+import { classifyGatewayError } from "../../error/gateway";
+import { ValidationError } from "../../error/validation";
+import * as speechWire from "../../providers/speech-server";
+import { isSpeechApi, synthesizeSpeech } from "../../speech";
+import { deterministicUuid } from "../../utils/deterministic-id";
+import {
+	type AuthGatewayRouteOptions,
+	buildGatewayApiKeyResolver,
+	gatewayAttemptOutcomes,
+	gatewayRequestLogFields,
+	mirrorRequestAbort,
+	recordGatewayUsage,
+	resolveGatewayAccount,
+	resolveGatewayApiKey,
+	resolveGatewayModel,
+} from "../dispatch";
+import { readBoundedRequestBody, RequestBodyTooLargeError } from "../bounded-body";
+import { gatewayResponseHeaders, resolveClientIdentity, codedErrorResponse } from "../http";
+import { gatewayLogContext, logGatewayRequestFailure } from "../logging";
+import type { CallerIdentity } from "../types";
+
+const SPEECH_JSON_MAX_BYTES = 25 * 1024 * 1024;
+
+export async function handleSpeech(
+	bootOpts: AuthGatewayRouteOptions,
+	req: Request,
+	peer: string,
+	caller: CallerIdentity,
+): Promise<Response> {
+	const startedAt = performance.now();
+	const requestId = crypto.randomUUID();
+	const controller = mirrorRequestAbort(req);
+	const aborted = (): Response => codedErrorResponse(499, "request_aborted", "client closed request");
+	if (controller.signal.aborted) return aborted();
+
+	let body: unknown;
+	try {
+		const bytes = await readBoundedRequestBody(req, SPEECH_JSON_MAX_BYTES, controller.signal);
+		body = JSON.parse(new TextDecoder().decode(bytes)) as unknown;
+	} catch (error) {
+		if (controller.signal.aborted) return aborted();
+		if (error instanceof RequestBodyTooLargeError) {
+			return codedErrorResponse(413, "payload_too_large", error.message);
+		}
+		return codedErrorResponse(400, "invalid_request_error", `Invalid JSON body: ${String(error)}`);
+	}
+	if (controller.signal.aborted) return aborted();
+
+	let parsed: speechWire.SpeechParsedRequest;
+	try {
+		parsed = speechWire.parseRequest(body, req.headers);
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		return codedErrorResponse(400, "invalid_request_error", message);
+	}
+
+	const model = await resolveGatewayModel(bootOpts.resolveModel, parsed.modelId, caller);
+	if (controller.signal.aborted) return aborted();
+	if (!model) return codedErrorResponse(404, "invalid_request_error", `Unknown model: ${parsed.modelId}`);
+	if (!isSpeechApi(model.api)) {
+		const route =
+			model.kind === "image"
+				? "/v1/images/generations"
+				: model.kind === "stt"
+					? "/v1/audio/transcriptions"
+					: model.kind === "judge"
+						? "/v1/systemone"
+						: undefined;
+		const message = route
+			? `Model ${parsed.modelId} does not synthesize speech; use POST ${route}`
+			: `Model ${parsed.modelId} does not synthesize speech`;
+		return codedErrorResponse(400, "invalid_request_error", message);
+	}
+
+	const client = resolveClientIdentity(req.headers);
+	const sessionId = deterministicUuid(`speech\u0000${model.provider}/${model.id}`);
+	const apiKey = await resolveGatewayApiKey(
+		bootOpts,
+		model,
+		sessionId,
+		controller.signal,
+		peer,
+		gatewayLogContext(requestId, caller, "speech", model.provider, model.id),
+	);
+	if (controller.signal.aborted) return aborted();
+	if ("status" in apiKey) return codedErrorResponse(apiKey.status, apiKey.type, apiKey.message);
+
+	let account = resolveGatewayAccount(apiKey);
+	let credentialId = apiKey.credentialId;
+	logger.info("auth-gateway request", {
+		requestId,
+		format: "speech",
+		model: model.id,
+		resolvedProvider: model.provider,
+		resolvedModel: model.id,
+		stream: false,
+		peer,
+		...gatewayRequestLogFields(bootOpts, apiKey),
+	});
+
+	const outcomes = gatewayAttemptOutcomes(bootOpts, model, client, requestId);
+	try {
+		const result = await synthesizeSpeech(model, parsed.request, {
+			apiKey: buildGatewayApiKeyResolver(
+				bootOpts,
+				model,
+				sessionId,
+				apiKey,
+				controller.signal,
+				"speech",
+				peer,
+				resolved => {
+					account = resolveGatewayAccount(resolved);
+					credentialId = resolved.credentialId;
+				},
+				bootOpts.onUsageLimit,
+				outcomes.onAttemptFailed,
+				gatewayLogContext(requestId, caller, "speech", model.provider, model.id),
+			),
+			fetch: bootOpts.fetch,
+			signal: controller.signal,
+		});
+		recordGatewayUsage(bootOpts, model, client, result.usage, { requestId, outcome: "ok", account, credentialId });
+		const response = speechWire.encodeResponse(result, parsed.modelId);
+		const responseHeaders = gatewayResponseHeaders(model, {
+			requestId,
+			costUsd: result.usage.cost.total,
+			startedAt,
+		});
+		for (const name in responseHeaders) response.headers.set(name, responseHeaders[name]);
+		return response;
+	} catch (error) {
+		outcomes.recordFinal(credentialId, error, controller.signal.aborted ? "aborted" : "error");
+		if (controller.signal.aborted) return aborted();
+		// Adapter validation is a client error: the wire schema admits values the
+		// adapter cannot serve, and the classifier would bill them as a 502.
+		if (error instanceof ValidationError) {
+			return codedErrorResponse(400, "invalid_request_error", error.message);
+		}
+		const classified = classifyGatewayError(error);
+		logGatewayRequestFailure(
+			gatewayLogContext(requestId, caller, "speech", model.provider, model.id),
+			classified.status,
+			credentialId,
+		);
+		return codedErrorResponse(classified.status, classified.type, classified.message);
+	}
+}

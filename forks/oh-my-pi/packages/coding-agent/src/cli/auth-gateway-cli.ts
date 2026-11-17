@@ -1,0 +1,1359 @@
+/**
+ * `omp auth-gateway` command handlers.
+ *
+ * Boots a forward-proxy server that lets less-trusted clients (the macOS
+ * usage widget, robomp containers, …) make provider API calls without ever
+ * seeing the access token. The gateway is itself a broker client and
+ * resolves credentials through the configured broker (via the same
+ * `OMP_AUTH_BROKER_URL` / `auth.broker.url` precedence used elsewhere).
+ *
+ * Sub-verbs:
+ *   - `serve [--bind=…] [--trust-proxy-headers] [--clients=<file>]` — boots the gateway against the configured broker.
+ *   - `stdio` — serves the same routes as JSON lines on stdin/stdout with this omp's own credentials
+ *     and model roles (`auth-gateway-stdio.ts`).
+ *   - `token` / `token --regenerate` — manages the gateway bearer token file.
+ *   - `status` — prints the locally-stored gateway token and bind hint.
+ */
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
+import {
+	type Api,
+	AuthStorage,
+	type CompletionProbe,
+	type CompletionProbeInput,
+	type CredentialCompletionResult,
+	completeSimple,
+	type Model,
+	type OAuthRequestIdentity,
+	type AuthGatewayRouteOptions,
+	resolveUsedFraction,
+	type UsageReport,
+	type ResetCreditRedeemOutcome,
+} from "@oh-my-pi/pi-ai";
+import {
+	type ClaudeResetAction,
+	planClaudeResetRedemptions,
+	claudeResetStatusesFromReports,
+} from "../session/claude-auto-reset";
+import {
+	AuthBrokerClient,
+	loadAuthBrokerAccountPool,
+	RemoteAuthCredentialStore,
+	type SnapshotResponse,
+} from "@oh-my-pi/pi-ai/auth-broker";
+import {
+	assertApiKeyLimitModelClasses,
+	bearerTokenAuthorizer,
+	type AuthGatewayClient,
+	DEFAULT_AUTH_GATEWAY_BIND,
+	type ModelResolveOptions,
+	parseAuthGatewayClients,
+	startAuthGateway,
+} from "@oh-my-pi/pi-ai/auth-gateway";
+import { authPolicyFor } from "@oh-my-pi/pi-catalog/compat/auth";
+import { buildModelProviderPriorityRank } from "@oh-my-pi/pi-catalog/identity";
+import { type GeneratedProvider, getBundledModels, getEffectiveTokenCost } from "@oh-my-pi/pi-catalog/models";
+import { type ModelKind, modelKind } from "@oh-my-pi/pi-catalog/types";
+import { getConfigRootDir, logger, postmortem, VERSION } from "@oh-my-pi/pi-utils";
+import chalk from "@oh-my-pi/pi-utils/chalk";
+import { ModelRegistry } from "../config/model-registry";
+import { cfgDisabledProviders, cfgModelProviderOrder } from "../config/model-settings";
+import { resolveProviderModelReference } from "../config/model-resolver";
+import type { Settings } from "../config/settings";
+import {
+	overlayLiveResetCredits,
+	planCodexResetRedemptions,
+	REDEEM_RETRY_DEFER_MS,
+	resetPlanSettings,
+} from "../session/codex-auto-reset";
+import { type ClaudeResetBankingSettings, cfgClaudeResets, cfgCodexResets } from "../session/settings";
+import {
+	type AuthBrokerClientConfig,
+	loadEffectiveAuthAccountPolicyConfig,
+	resolveAuthBrokerConfig,
+	resolveEffectiveSettings,
+} from "../session/auth-broker-config";
+import { runAuthGatewayStdio } from "./auth-gateway-stdio";
+import { generateToken, readTokenFile, writeTokenFile } from "./token-file";
+
+export function claudeResetBankingFor(
+	cfg: ClaudeResetBankingSettings,
+): { keepCredits: number; drainFirstOnly?: true } | undefined {
+	if (cfg.autoRedeem === "yes") return { keepCredits: cfg.keepCredits };
+	if (cfg.autoRedeem === "no") return { keepCredits: cfg.keepCredits, drainFirstOnly: true };
+	return undefined;
+}
+
+export type AuthGatewayAction = "serve" | "stdio" | "token" | "status" | "check";
+
+export interface AuthGatewayCommandArgs {
+	action: AuthGatewayAction;
+	flags: {
+		json?: boolean;
+		bind?: string;
+		regenerate?: boolean;
+		trustProxyHeaders?: boolean;
+		/** `serve`: path to JSON mapping exact Anthropic model ids to rate-limit rows. */
+		apiKeyLimitModelClasses?: string;
+		/**
+		 * Disable bearer-token auth on inbound requests. Useful when the gateway
+		 * is bound to loopback (the default `127.0.0.1:4000`) and you don't want
+		 * to wire token-paste plumbing into every local client.
+		 */
+		noAuth?: boolean;
+		/**
+		 * Strict mode for `check` — additionally exercise every credential
+		 * against its provider's chat-completion endpoint. The usage probe (run
+		 * unconditionally) can pass while the chat endpoint still 401s the same
+		 * bearer, so strict mode is the definitive "is this credential
+		 * actually usable" signal. Slower and consumes a tiny amount of quota.
+		 */
+		strict?: boolean;
+		/** Internal serve-only bootstrap overrides; never surfaced as CLI flags. */
+		gatewayToken?: string;
+		drainMs?: number;
+		/**
+		 * `serve`: JSON file of scoped client tokens, each limited to its own
+		 * models and broker OAuth accounts. Re-read while serving.
+		 */
+		clients?: string;
+	};
+}
+
+const ACTIONS: readonly AuthGatewayAction[] = ["serve", "stdio", "token", "status", "check"];
+
+/** Room after the drain for storage close before postmortem forces the exit. */
+const SHUTDOWN_MARGIN_MS = 2_000;
+/** Longest drain whose postmortem deadline still fits a timer. */
+export const MAX_GATEWAY_DRAIN_MS = 2_147_483_647 - SHUTDOWN_MARGIN_MS;
+
+function getTokenFilePath(): string {
+	return path.join(getConfigRootDir(), "auth-gateway.token");
+}
+
+/**
+ * Atomically create the token file, refusing to clobber an existing one.
+ * Returns `true` on success, `false` when the file already existed (so the
+ * caller re-reads it instead of racing another concurrent `ensureToken`).
+ */
+async function createTokenExclusive(token: string): Promise<boolean> {
+	const file = getTokenFilePath();
+	await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
+	try {
+		// `wx` = O_CREAT | O_EXCL — fails with EEXIST if the file is already there.
+		await fs.writeFile(file, token, { flag: "wx", mode: 0o600 });
+	} catch (err) {
+		if ((err as NodeJS.ErrnoException).code === "EEXIST") return false;
+		throw err;
+	}
+	try {
+		await fs.chmod(file, 0o600);
+	} catch {
+		// Best-effort (e.g. Windows).
+	}
+	return true;
+}
+
+async function ensureToken(): Promise<string> {
+	const existing = await readTokenFile(getTokenFilePath());
+	if (existing) return existing;
+	const token = generateToken();
+	if (await createTokenExclusive(token)) return token;
+	// Another concurrent invocation won the create race; read what they wrote.
+	const fromRace = await readTokenFile(getTokenFilePath());
+	if (fromRace) return fromRace;
+	// File existed-then-disappeared between EEXIST and read; last resort, write
+	// our generated token unconditionally so callers don't see an empty string.
+	await writeTokenFile(getTokenFilePath(), token);
+	return token;
+}
+
+function createBrokerClient(brokerConfig: AuthBrokerClientConfig): AuthBrokerClient {
+	return new AuthBrokerClient({ url: brokerConfig.url, token: brokerConfig.token });
+}
+
+async function fetchBrokerSnapshot(client: AuthBrokerClient): Promise<SnapshotResponse> {
+	const result = await client.fetchSnapshot();
+	if (result.status !== 200) throw new Error("Auth broker returned no initial snapshot");
+	return result.snapshot;
+}
+
+/**
+ * How often a long-lived `serve` rebuilds its catalog from the registry so
+ * models discovered after boot become routable without a restart. `refresh()`
+ * reuses the `models.db` cache and only hits the network when a provider's
+ * cached row is stale, so a short interval stays cheap.
+ */
+const CATALOG_REFRESH_INTERVAL_MS = 15 * 60 * 1000;
+
+/**
+ * How often a long-lived `serve` polls the broker-backed store for credential
+ * changes made by another process (a `login`/`logout` on the host). Kept below
+ * {@link RemoteAuthCredentialStore}'s background idle window so the poll's
+ * activity ping keeps the snapshot stream warm and new generations arrive
+ * promptly. When the poll reports a change, the served catalog is rebuilt so a
+ * newly-credentialed provider becomes routable and a removed one stops being
+ * advertised.
+ */
+const CREDENTIAL_SYNC_INTERVAL_MS = 10 * 1000;
+
+/** Proactively check exhausted weekly Claude limits in gateway usage reports. */
+const GATEWAY_CLAUDE_RESET_SWEEP_INTERVAL_MS = 5 * 60 * 1000;
+
+/**
+ * How often `serve --clients` re-reads its clients file. Its own timer rather
+ * than the credential sync's: a slow or failing broker poll must never delay
+ * revoking a client.
+ */
+const CLIENTS_RELOAD_INTERVAL_MS = 10 * 1000;
+
+/**
+ * Re-read a `--clients` file and apply it when its text changed. A file that
+ * cannot be read or parsed, or that the gateway rejects, revokes every client
+ * token until it is fixed: keeping the previous table would keep serving a
+ * client the operator just removed. Polls never overlap, so a slow read cannot
+ * apply an older file over a newer one. `appliedText` is the file text the
+ * gateway started with.
+ */
+export function createAuthGatewayClientsReloader(
+	filePath: string,
+	appliedText: string,
+	setClients: (clients: readonly AuthGatewayClient[]) => void,
+): () => Promise<void> {
+	let applied: string | undefined = appliedText;
+	let inFlight: Promise<void> | undefined;
+	const reload = async (): Promise<void> => {
+		try {
+			const text = await Bun.file(filePath).text();
+			if (text === applied) return;
+			setClients(parseAuthGatewayClients(text));
+			applied = text;
+			logger.info("auth-gateway clients reloaded", { path: filePath });
+		} catch (error) {
+			if (applied === undefined) return;
+			applied = undefined;
+			setClients([]);
+			logger.error("auth-gateway clients file rejected; refusing every client token until it is fixed", {
+				path: filePath,
+				error: error instanceof Error ? error.message : String(error),
+			});
+		}
+	};
+	return () => {
+		inFlight ??= reload().finally(() => {
+			inFlight = undefined;
+		});
+		return inFlight;
+	};
+}
+
+/**
+ * Catalog kinds the gateway has a route for: chat (`/v1/chat/completions`,
+ * `/v1/messages`, `/v1/responses`, `/v1/pi/stream`), judge (`/v1/systemone`),
+ * image (`/v1/images/*`), tts (`/v1/audio/speech`), stt
+ * (`/v1/audio/transcriptions`), embedding (`/v1/embeddings`), rerank
+ * (`/v1/rerank`), video (`/v1/videos/*`). Other kinds (tiny, search) have no
+ * wire and stay off the served catalog so `/v1/models` never advertises them.
+ */
+const GATEWAY_MODEL_KINDS: readonly ModelKind[] = [
+	"chat",
+	"judge",
+	"image",
+	"tts",
+	"stt",
+	"embedding",
+	"rerank",
+	"video",
+];
+
+/** Every registry model of a kind the gateway can route, bundled catalog order within each kind. */
+export function gatewayRoutableModels(registry: ModelRegistry): Model<Api>[] {
+	const models: Model<Api>[] = [];
+	for (const kind of GATEWAY_MODEL_KINDS) models.push(...registry.getAll(kind));
+	return models;
+}
+
+/**
+ * Providers the broker holds a credential for, minus `disabledProviders`. Recomputed on
+ * every rebuild so a later login or logout reaches the served catalog.
+ */
+export function gatewayRoutableProviders(storage: AuthStorage, settings: Settings): Set<string> {
+	const disabled = new Set(cfgDisabledProviders.get(settings));
+	const providers = new Set<string>();
+	for (const entry of storage.credentials.snapshot().credentials) {
+		if (!disabled.has(entry.provider)) providers.add(entry.provider);
+	}
+	return providers;
+}
+
+/**
+ * One catalog rebuild's served models, indexed by the ids clients send. Built by
+ * {@link indexModelsByRequestId}, read by {@link resolveGatewayModel} and `/v1/models`.
+ */
+export interface GatewayModelIndex {
+	/**
+	 * Every served model, catalog order. One array per rebuild:
+	 * `resolveProviderModelReference` caches its lookups on the array identity.
+	 */
+	readonly models: readonly Model<Api>[];
+	/** `provider/id` → model. */
+	readonly qualified: ReadonlyMap<string, Model<Api>>;
+	/**
+	 * Bare `id` → its models grouped into provider-priority tiers, best first.
+	 * A tier holds the providers sharing one rank (every provider the priority
+	 * order leaves unranked shares the last), sorted by provider id.
+	 */
+	readonly bare: ReadonlyMap<string, readonly (readonly Model<Api>[])[]>;
+}
+
+/**
+ * Index the models of credentialed providers by the request ids clients may
+ * send: `provider/id` names one model, a bare `id` every served model of that
+ * id. Bare ids rank by provider priority (`providerOrder`, the
+ * `modelProviderOrder` setting, ahead of the built-in native-before-mirror
+ * order), then provider id — never catalog position, which every discovery
+ * refresh reshuffles.
+ */
+export function indexModelsByRequestId(
+	models: readonly Model<Api>[],
+	providersWithCreds: ReadonlySet<string>,
+	providerOrder?: readonly string[],
+): GatewayModelIndex {
+	const served = models.filter(model => providersWithCreds.has(model.provider));
+	const priority = buildModelProviderPriorityRank(providerOrder);
+	const rankOf = (model: Model<Api>): number => priority.get(model.provider.toLowerCase()) ?? Number.POSITIVE_INFINITY;
+	const qualified = new Map<string, Model<Api>>();
+	const byId = new Map<string, Model<Api>[]>();
+	for (const model of served) {
+		qualified.set(`${model.provider}/${model.id}`, model);
+		const sameId = byId.get(model.id);
+		if (sameId) sameId.push(model);
+		else byId.set(model.id, [model]);
+	}
+	const bare = new Map<string, Model<Api>[][]>();
+	for (const [id, candidates] of byId) {
+		candidates.sort((a, b) => rankOf(a) - rankOf(b) || a.provider.localeCompare(b.provider));
+		const tiers: Model<Api>[][] = [];
+		let tierRank: number | undefined;
+		for (const model of candidates) {
+			const rank = rankOf(model);
+			if (rank === tierRank) tiers[tiers.length - 1].push(model);
+			else tiers.push([model]);
+			tierRank = rank;
+		}
+		bare.set(id, tiers);
+	}
+	return { models: served, qualified, bare };
+}
+
+/**
+ * Resolve a client-requested model id: the exact `provider/id`, else the bare
+ * `id`'s best candidate — the first priority tier `options.accepts` admits any
+ * model from, preferring one on the route's `options.api` within it — else an
+ * OpenRouter routing-variant selector the catalog does not list
+ * (`openrouter/<id>:floor`, `:nitro`, …), cloned from its base model under the
+ * requested id so the suffix reaches OpenRouter — the same selectors `--model`
+ * accepts. A refused `provider/id` resolves to nothing.
+ */
+export function resolveGatewayModel(
+	id: string,
+	index: GatewayModelIndex,
+	options?: ModelResolveOptions,
+): Model<Api> | undefined {
+	const accepts = options?.accepts ?? (() => true);
+	const exact = index.qualified.get(id);
+	if (exact) return accepts(exact) ? exact : undefined;
+	for (const tier of index.bare.get(id) ?? []) {
+		const admitted = tier.filter(accepts);
+		if (admitted.length > 0) return admitted.find(model => model.api === options?.api) ?? admitted[0];
+	}
+	const prefix = "openrouter/";
+	if (!id.startsWith(prefix)) return undefined;
+	const variant = resolveProviderModelReference("openrouter", id.slice(prefix.length), index.models);
+	return variant && accepts(variant) ? variant : undefined;
+}
+
+/**
+ * Serialize catalog rebuilds so `registry.refresh()` passes never overlap,
+ * while guaranteeing a forced rebuild requested mid-flight runs a forced pass
+ * afterward. Without the follow-up pass a credential change arriving during a
+ * weaker cached rebuild would piggyback on it and miss an account-scoped
+ * catalog change. Non-forced requests during an in-flight rebuild simply
+ * coalesce onto it. Returns `rebuild(force?)`; its promise resolves once the
+ * catalog reflects that call's requirement.
+ */
+export function createSerializedRebuilder(run: (force: boolean) => Promise<void>): (force?: boolean) => Promise<void> {
+	let inFlight: Promise<void> | null = null;
+	let forcedQueued = false;
+	const rebuild = (force = false): Promise<void> => {
+		if (inFlight) {
+			if (force) forcedQueued = true;
+			return inFlight;
+		}
+		inFlight = (async () => {
+			try {
+				await run(force);
+				while (forcedQueued) {
+					forcedQueued = false;
+					await run(true);
+				}
+			} finally {
+				inFlight = null;
+				forcedQueued = false;
+			}
+		})();
+		return inFlight;
+	};
+	return rebuild;
+}
+
+export interface GatewayClaudeResetCoordinator {
+	attemptedKeys: Set<string>;
+	deferredUntilByKey: Map<string, number>;
+	lastAttemptAtByAccount: Map<string, number>;
+	inFlightByCredential: Map<number, Promise<boolean>>;
+}
+
+function hasUsableExhaustedClaudeWeeklyReset(report: UsageReport | null | undefined): boolean {
+	const weekly = report?.limits.find(limit => limit.id === "anthropic:7d");
+	const exhausted = weekly?.status === "exhausted" || (weekly ? (resolveUsedFraction(weekly) ?? 0) >= 0.999 : false);
+	const credits = report?.resetCredits;
+	return (
+		exhausted &&
+		credits?.eligible === true &&
+		(credits.redeemableCount ?? credits.availableCount) >= 1 &&
+		credits.credits?.some(credit => credit.usable === true && credit.clears?.includes("anthropic:7d")) === true
+	);
+}
+
+export function createGatewayClaudeResetHook(args: {
+	storage: AuthStorage;
+	settings: Settings;
+	coordinator: GatewayClaudeResetCoordinator;
+}): NonNullable<Parameters<typeof startAuthGateway>[0]["onUsageLimit"]> {
+	return async ({ provider, credentialId, modelId, signal }) => {
+		const cfg = cfgClaudeResets.get(args.settings);
+		if (provider !== "anthropic") return false;
+		const current = args.coordinator.inFlightByCredential.get(credentialId);
+		if (current) return current;
+		const attempt = (async () => {
+			const credential = args.storage.credentials.list(provider).find(row => row.id === credentialId)?.credential;
+			if (credential?.type !== "oauth") return false;
+			const policy = args.storage.oauth.policy(provider, {
+				accountId: credential.accountId,
+				email: credential.email,
+				projectId: credential.projectId,
+				orgId: credential.orgId,
+			});
+			const drainFirstRecovery = cfg.autoRedeem === "no" && policy?.drainFirst === true;
+			if (cfg.autoRedeem !== "yes" && !drainFirstRecovery) return false;
+			let report: UsageReport | null;
+			try {
+				report = await args.storage.usage.report(provider, credential, {
+					timeoutMs: 10_000,
+					signal: AbortSignal.any([signal, AbortSignal.timeout(10_000)]),
+				});
+			} catch (error) {
+				logger.info("auth-gateway Claude usage check failed", { credentialId, error: String(error) });
+				return false;
+			}
+			if (!hasUsableExhaustedClaudeWeeklyReset(report)) return false;
+			let actions: ClaudeResetAction[] = [];
+			try {
+				const statuses = await args.storage.resets.list({
+					provider: "anthropic",
+					signal: AbortSignal.any([signal, AbortSignal.timeout(10_000)]),
+				});
+				const plan = planClaudeResetRedemptions({
+					nowMs: Date.now(),
+					trigger: "blocked",
+					provider,
+					modelId,
+					settings: {
+						...resetPlanSettings(cfg),
+						enabled: cfg.autoRedeem === "yes" || drainFirstRecovery,
+					},
+					reports: statuses.flatMap(status => (status.report ? [status.report] : [])),
+					statuses,
+					permitsCredential: id => id === credentialId,
+					attemptedKeys: args.coordinator.attemptedKeys,
+					deferredUntilByKey: args.coordinator.deferredUntilByKey,
+					lastAttemptAtByAccount: args.coordinator.lastAttemptAtByAccount,
+				});
+				actions = plan.actions.filter(
+					action => action.target.credentialId === credentialId && action.blockedWindows?.includes("anthropic:7d"),
+				);
+			} catch (error) {
+				logger.info("auth-gateway Claude reset planning failed", { credentialId, error: String(error) });
+				return false;
+			}
+			for (const action of actions) {
+				if (args.coordinator.attemptedKeys.has(action.attemptKey)) continue;
+				const previousAttemptAt = args.coordinator.lastAttemptAtByAccount.get(action.accountKey);
+				args.coordinator.attemptedKeys.add(action.attemptKey);
+				args.coordinator.lastAttemptAtByAccount.set(action.accountKey, Date.now());
+				let outcome: ResetCreditRedeemOutcome;
+				try {
+					outcome = await args.storage.resets.redeem({
+						target: action.target,
+						signal: AbortSignal.any([signal, AbortSignal.timeout(15_000)]),
+					});
+				} catch {
+					args.coordinator.attemptedKeys.delete(action.attemptKey);
+					args.coordinator.deferredUntilByKey.set(action.attemptKey, Date.now() + REDEEM_RETRY_DEFER_MS);
+					if (previousAttemptAt === undefined) args.coordinator.lastAttemptAtByAccount.delete(action.accountKey);
+					else args.coordinator.lastAttemptAtByAccount.set(action.accountKey, previousAttemptAt);
+					logger.info("auth-gateway Claude reset redeem failed", {
+						credentialId,
+						creditId: action.target.creditId,
+					});
+					return false;
+				}
+				if (!outcome.ok && outcome.code !== "already_redeemed" && outcome.code !== "no_credit") {
+					args.coordinator.attemptedKeys.delete(action.attemptKey);
+					args.coordinator.deferredUntilByKey.set(action.attemptKey, Date.now() + REDEEM_RETRY_DEFER_MS);
+					if (previousAttemptAt === undefined) args.coordinator.lastAttemptAtByAccount.delete(action.accountKey);
+					else args.coordinator.lastAttemptAtByAccount.set(action.accountKey, previousAttemptAt);
+				}
+				logger.info("auth-gateway Claude reset redeem outcome", {
+					credentialId,
+					creditId: action.target.creditId,
+					code: outcome.code,
+					ok: outcome.ok,
+				});
+				return outcome.ok;
+			}
+			return false;
+		})();
+		args.coordinator.inFlightByCredential.set(credentialId, attempt);
+		try {
+			return await attempt;
+		} finally {
+			if (args.coordinator.inFlightByCredential.get(credentialId) === attempt) {
+				args.coordinator.inFlightByCredential.delete(credentialId);
+			}
+		}
+	};
+}
+
+export async function runGatewayClaudeResetSweep(args: {
+	storage: AuthStorage;
+	hook: NonNullable<AuthGatewayRouteOptions["onUsageLimit"]>;
+	signal: AbortSignal;
+}): Promise<void> {
+	const reports =
+		(await args.storage.usage.reports({ signal: AbortSignal.any([args.signal, AbortSignal.timeout(10_000)]) })) ?? [];
+	const statuses = claudeResetStatusesFromReports(args.storage.oauth.accounts("anthropic"), reports);
+	args.signal.throwIfAborted();
+	for (const status of statuses) {
+		args.signal.throwIfAborted();
+		if (!hasUsableExhaustedClaudeWeeklyReset(status.report)) continue;
+		await args.hook({
+			provider: "anthropic",
+			credentialId: status.credentialId,
+			modelId: "",
+			signal: AbortSignal.any([args.signal, AbortSignal.timeout(30_000)]),
+		});
+	}
+}
+
+export interface GatewayCodexResetCoordinator extends GatewayClaudeResetCoordinator {
+	exhaustedSinceByCredential: Map<number, number>;
+}
+
+function hasExhaustedCodexWeekly(report: UsageReport | null): boolean {
+	const weekly = report?.limits.find(limit => limit.id === "openai-codex:secondary");
+	return weekly?.status === "exhausted" || (weekly !== undefined && (resolveUsedFraction(weekly) ?? 0) >= 0.999);
+}
+
+/** The exhaustion clock is sample-based: usage-limit hooks and the five-minute sweep provide samples. */
+export function createGatewayCodexResetHook(args: {
+	storage: AuthStorage;
+	settings: Settings;
+	coordinator: GatewayCodexResetCoordinator;
+	now?: () => number;
+}): NonNullable<AuthGatewayRouteOptions["onUsageLimit"]> {
+	const now = args.now ?? Date.now;
+	return async ({ provider, credentialId, modelId, signal }) => {
+		const cfg = cfgCodexResets.get(args.settings);
+		if (provider !== "openai-codex" || cfg.autoRedeem !== "yes") return false;
+		const current = args.coordinator.inFlightByCredential.get(credentialId);
+		if (current) return current;
+		const attempt = (async () => {
+			const credential = args.storage.credentials.list(provider).find(row => row.id === credentialId)?.credential;
+			if (credential?.type !== "oauth") {
+				args.coordinator.exhaustedSinceByCredential.delete(credentialId);
+				return false;
+			}
+			const read = async (): Promise<UsageReport | null> => {
+				try {
+					return await args.storage.usage.report(provider, credential, {
+						fresh: true,
+						timeoutMs: 10_000,
+						signal: AbortSignal.any([signal, AbortSignal.timeout(10_000)]),
+					});
+				} catch (error) {
+					logger.info("auth-gateway Codex usage check failed", { credentialId, error: String(error) });
+					return null;
+				}
+			};
+			const report = await read();
+			if (!hasExhaustedCodexWeekly(report)) {
+				args.coordinator.exhaustedSinceByCredential.delete(credentialId);
+				return false;
+			}
+			const since = args.coordinator.exhaustedSinceByCredential.get(credentialId);
+			if (since === undefined) {
+				args.coordinator.exhaustedSinceByCredential.set(credentialId, now());
+				return false;
+			}
+			if (now() - since < 5 * 60_000) return false;
+			try {
+				const statuses = await args.storage.resets.list({
+					provider,
+					signal: AbortSignal.any([signal, AbortSignal.timeout(10_000)]),
+				});
+				const finalReport = await read();
+				if (!finalReport || !hasExhaustedCodexWeekly(finalReport)) {
+					args.coordinator.exhaustedSinceByCredential.delete(credentialId);
+					return false;
+				}
+				const plan = planCodexResetRedemptions({
+					nowMs: now(),
+					trigger: "blocked",
+					provider,
+					modelId,
+					settings: resetPlanSettings(cfg),
+					identity: undefined,
+					reports: overlayLiveResetCredits(
+						[finalReport],
+						statuses.filter(status => status.credentialId === credentialId),
+					),
+					permitsCredential: id => id === credentialId,
+					attemptedKeys: args.coordinator.attemptedKeys,
+					deferredUntilByKey: args.coordinator.deferredUntilByKey,
+					lastAttemptAtByAccount: args.coordinator.lastAttemptAtByAccount,
+				});
+				for (const action of plan.actions) {
+					if (
+						action.reason !== "blocked-account" ||
+						action.target.credentialId !== credentialId ||
+						!action.blockedWindows?.includes("weekly")
+					)
+						continue;
+					if (args.coordinator.attemptedKeys.has(action.attemptKey)) continue;
+					const previous = args.coordinator.lastAttemptAtByAccount.get(action.accountKey);
+					args.coordinator.attemptedKeys.add(action.attemptKey);
+					args.coordinator.lastAttemptAtByAccount.set(action.accountKey, now());
+					let outcome: ResetCreditRedeemOutcome;
+					try {
+						outcome = await args.storage.resets.redeem({
+							target: action.target,
+							signal: AbortSignal.any([signal, AbortSignal.timeout(15_000)]),
+						});
+					} catch (error) {
+						logger.info("auth-gateway Codex reset redeem failed", { credentialId, error: String(error) });
+						outcome = { ok: false, code: "error", provider: "openai-codex" };
+					}
+					if (!outcome.ok && outcome.code !== "already_redeemed" && outcome.code !== "no_credit") {
+						args.coordinator.attemptedKeys.delete(action.attemptKey);
+						args.coordinator.deferredUntilByKey.set(action.attemptKey, now() + REDEEM_RETRY_DEFER_MS);
+						if (previous === undefined) args.coordinator.lastAttemptAtByAccount.delete(action.accountKey);
+						else args.coordinator.lastAttemptAtByAccount.set(action.accountKey, previous);
+					}
+					if (outcome.ok) args.coordinator.exhaustedSinceByCredential.delete(credentialId);
+					return outcome.ok;
+				}
+			} catch (error) {
+				logger.info("auth-gateway Codex reset planning failed", { credentialId, error: String(error) });
+			}
+			return false;
+		})();
+		args.coordinator.inFlightByCredential.set(credentialId, attempt);
+		try {
+			return await attempt;
+		} finally {
+			if (args.coordinator.inFlightByCredential.get(credentialId) === attempt)
+				args.coordinator.inFlightByCredential.delete(credentialId);
+		}
+	};
+}
+
+export async function runGatewayCodexResetSweep(args: {
+	storage: AuthStorage;
+	hook: NonNullable<AuthGatewayRouteOptions["onUsageLimit"]>;
+	signal: AbortSignal;
+}): Promise<void> {
+	for (const row of args.storage.credentials.list("openai-codex")) {
+		args.signal.throwIfAborted();
+		if (row.credential.type !== "oauth") continue;
+		await args.hook({
+			provider: "openai-codex",
+			credentialId: row.id,
+			modelId: "",
+			signal: AbortSignal.any([args.signal, AbortSignal.timeout(45_000)]),
+		});
+	}
+}
+
+/** Env var honored by `serve` when `--api-key-limit-model-classes` is not passed (flag wins). */
+const API_KEY_LIMIT_MODEL_CLASSES_ENV = "OMP_AUTH_GATEWAY_API_KEY_LIMIT_MODEL_CLASSES";
+
+/** Read the model-id → rate-limit-row map; a bad file throws so serve never boots half-configured. */
+export async function loadApiKeyLimitModelClasses(
+	pathArg: string | undefined,
+): Promise<Record<string, string> | undefined> {
+	const file = pathArg ?? process.env[API_KEY_LIMIT_MODEL_CLASSES_ENV];
+	if (!file) return undefined;
+	const raw = await Bun.file(file).text();
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(raw);
+	} catch (error) {
+		throw new Error(
+			`API-key limit model classes ${file} is not valid JSON: ${error instanceof Error ? error.message : String(error)}`,
+		);
+	}
+	if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+		throw new Error(`API-key limit model classes ${file} must be a JSON object of model id → row`);
+	}
+	const classes: Record<string, string> = {};
+	for (const [modelId, row] of Object.entries(parsed)) {
+		if (typeof row !== "string")
+			throw new Error(`API-key limit model classes ${file}: ${modelId} must map to a string`);
+		classes[modelId] = row;
+	}
+	assertApiKeyLimitModelClasses(classes);
+	return classes;
+}
+async function runServe(flags: AuthGatewayCommandArgs["flags"]): Promise<void> {
+	const brokerConfig = await resolveAuthBrokerConfig();
+	if (!brokerConfig) {
+		throw new Error(
+			"`omp auth-gateway serve` requires OMP_AUTH_BROKER_URL (or `auth.broker.url`/`auth.broker.token` in config.yml). The gateway is itself a broker client.",
+		);
+	}
+	if (flags.clients !== undefined && flags.noAuth) {
+		throw new Error("`--clients` needs bearer auth; drop `--no-auth`.");
+	}
+	const bind = flags.bind ?? DEFAULT_AUTH_GATEWAY_BIND;
+	const gatewayToken = flags.noAuth ? null : (flags.gatewayToken ?? (await ensureToken()));
+	if (!flags.noAuth && !gatewayToken) throw new Error("auth-gateway bearer token must not be empty");
+	const apiKeyLimitModelClasses = await loadApiKeyLimitModelClasses(flags.apiKeyLimitModelClasses);
+	// Read before touching the broker, so a bad file fails the command at once.
+	const clientsPath = flags.clients === undefined ? undefined : path.resolve(flags.clients);
+	let clientsText: string | undefined;
+	let clients: AuthGatewayClient[] | undefined;
+	if (clientsPath !== undefined) {
+		try {
+			clientsText = await Bun.file(clientsPath).text();
+			clients = parseAuthGatewayClients(clientsText);
+		} catch (error) {
+			throw new Error(
+				`Cannot load --clients ${clientsPath}: ${error instanceof Error ? error.message : String(error)}`,
+			);
+		}
+	}
+
+	// Build a broker-backed AuthStorage — same pattern as discoverAuthStorage()
+	// in sdk.ts. The gateway never touches local SQLite.
+	const accountPool = await loadAuthBrokerAccountPool();
+	const settings = await resolveEffectiveSettings();
+	const { accountPolicies, defaultReservePct } = await loadEffectiveAuthAccountPolicyConfig({ settings });
+	const claudeResetConfig = cfgClaudeResets.get(settings);
+	const resetCoordinator: GatewayClaudeResetCoordinator = {
+		attemptedKeys: new Set(),
+		deferredUntilByKey: new Map(),
+		lastAttemptAtByAccount: new Map(),
+		inFlightByCredential: new Map(),
+	};
+	const codexResetCoordinator: GatewayCodexResetCoordinator = {
+		attemptedKeys: new Set(),
+		deferredUntilByKey: new Map(),
+		lastAttemptAtByAccount: new Map(),
+		inFlightByCredential: new Map(),
+		exhaustedSinceByCredential: new Map(),
+	};
+	const client = createBrokerClient(brokerConfig);
+	const initialSnapshot = await fetchBrokerSnapshot(client);
+	const store = new RemoteAuthCredentialStore({
+		client,
+		initialSnapshot,
+		accountPool,
+	});
+	// Refresh + usage both flow through the store's broker hooks automatically —
+	// `RemoteAuthCredentialStore.refreshOAuthCredential` and `.fetchUsageReports`.
+	// AuthStorage discovers them when no explicit option overrides them, so the
+	// gateway only needs to construct the store and pass it in.
+	const claudeResetBanking = claudeResetBankingFor(claudeResetConfig);
+	const storage = new AuthStorage(store, {
+		sourceLabel: `broker ${brokerConfig.url}`,
+		accountPolicies,
+		defaultReservePct,
+		...(claudeResetBanking ? { claudeResetBanking } : {}),
+	});
+	await storage.credentials.reload();
+
+	// Build the model resolver + catalog from the ModelRegistry — the same
+	// component the TUI/CLI use — scoped to providers we hold credentials for.
+	// `getAll()` is a superset of the bundled catalog (bundled first, then
+	// cached + broker-discovered), so the discovery-only models omp itself
+	// reaches become routable through the gateway instead of freezing on the
+	// compiled snapshot. `ignoreLocalModelConfig` keeps the host's `models.yml`
+	// out of the picture: client-side provider overrides (baseUrl/apiKey/headers/
+	// transport) and custom models must never route a broker-backed gateway or
+	// shadow broker credentials. Format handlers ask `resolveModel` to translate
+	// a client-requested `model` field into a pi-ai `Model<Api>` before dispatch;
+	// `listModels` powers `/v1/models`. `settings` carries `disabledProviders`, so
+	// discovery skips disabled providers too.
+	const registry = new ModelRegistry(storage, undefined, { ignoreLocalModelConfig: true, settings });
+	let index = indexModelsByRequestId([], new Set());
+	// Rebuild the served catalog (a `registry.refresh()` pass, then re-index
+	// against the current credential set). Credential-triggered rebuilds force
+	// `online` discovery: an account added to or removed from an
+	// already-authenticated provider (e.g. Codex, whose discovery unions
+	// per-account catalogs) leaves that provider's model cache fresh, so the
+	// default `online-if-uncached` pass would skip the fetch and miss the change
+	// for up to a cache TTL. Periodic rebuilds stay cached.
+	const rebuildCatalog = createSerializedRebuilder(async force => {
+		await registry.refresh(force ? "online" : "online-if-uncached");
+		index = indexModelsByRequestId(
+			gatewayRoutableModels(registry),
+			gatewayRoutableProviders(storage, settings),
+			cfgModelProviderOrder.get(settings),
+		);
+	});
+	await rebuildCatalog();
+
+	const claudeResetHook = createGatewayClaudeResetHook({ storage, settings, coordinator: resetCoordinator });
+	const codexResetHook = createGatewayCodexResetHook({ storage, settings, coordinator: codexResetCoordinator });
+	const handle = startAuthGateway({
+		storage,
+		bind,
+		authorize: bearerTokenAuthorizer(gatewayToken ? [gatewayToken] : []),
+		trustProxyHeaders: flags.trustProxyHeaders,
+		version: VERSION,
+		resolveModel: (id, options) => resolveGatewayModel(id, index, options),
+		listModels: () => index.qualified.values(),
+		excludeProviders: new Set(cfgDisabledProviders.get(settings)),
+		onUsageLimit: context =>
+			context.provider === "openai-codex" ? codexResetHook(context) : claudeResetHook(context),
+		...(apiKeyLimitModelClasses ? { apiKeyLimitModelClasses } : {}),
+		clients,
+	});
+	process.stdout.write(`auth-gateway listening on ${handle.url}\n`);
+	if (gatewayToken) {
+		process.stdout.write(`bearer auth: enabled\n`);
+	} else {
+		process.stdout.write(`auth: disabled (--no-auth) — any client can call this gateway\n`);
+	}
+	if (clientsPath !== undefined && clients !== undefined) {
+		process.stdout.write(
+			`client tokens: ${clients.length} from ${clientsPath} (re-read every ${CLIENTS_RELOAD_INTERVAL_MS / 1000}s)\n`,
+		);
+	}
+	process.stdout.write(`upstream broker: ${brokerConfig.url}\n`);
+
+	// `serve` is long-lived: rebuild the catalog periodically so models
+	// discovered after boot (for providers we already hold credentials for)
+	// become routable without a restart. A failed rebuild keeps serving the
+	// previous catalog. `unref()` so the timer never keeps the process alive on
+	// its own.
+	const catalogRefresh = setInterval(() => {
+		void rebuildCatalog().catch(error => {
+			logger.warn("auth-gateway catalog refresh failed", {
+				error: error instanceof Error ? error.message : String(error),
+			});
+		});
+	}, CATALOG_REFRESH_INTERVAL_MS);
+	catalogRefresh.unref();
+
+	// Poll the broker-backed store for credential changes made by another
+	// process (host `login`/`logout`). `pollExternalChanges()` reloads the
+	// storage's credential view so selection stops 401ing (or stops using a
+	// removed credential); the forced rebuild then refetches account-scoped
+	// catalogs and updates `/v1/models` and `resolveModel`. `unref()` for the
+	// same reason as above.
+	const credentialSync = setInterval(() => {
+		void (async () => {
+			try {
+				if (await storage.credentials.poll()) await rebuildCatalog(true);
+			} catch (error) {
+				logger.warn("auth-gateway credential sync failed", {
+					error: error instanceof Error ? error.message : String(error),
+				});
+			}
+		})();
+	}, CREDENTIAL_SYNC_INTERVAL_MS);
+	credentialSync.unref();
+	const resetSweepAbort = new AbortController();
+	let resetSweepInFlight = false;
+	const resetSweep = setInterval(() => {
+		if (resetSweepInFlight) return;
+		resetSweepInFlight = true;
+		void Promise.allSettled([
+			runGatewayClaudeResetSweep({ storage, hook: claudeResetHook, signal: resetSweepAbort.signal }).catch(error => {
+				logger.warn("auth-gateway Claude reset sweep failed", {
+					error: error instanceof Error ? error.message : String(error),
+				});
+			}),
+			runGatewayCodexResetSweep({ storage, hook: codexResetHook, signal: resetSweepAbort.signal }).catch(error => {
+				logger.warn("auth-gateway Codex reset sweep failed", {
+					error: error instanceof Error ? error.message : String(error),
+				});
+			}),
+		]).finally(() => {
+			resetSweepInFlight = false;
+		});
+	}, GATEWAY_CLAUDE_RESET_SWEEP_INTERVAL_MS);
+	resetSweep.unref();
+
+	// Re-read the clients file so adding, changing or revoking a client needs
+	// no restart. `unref()` for the same reason as above.
+	let clientsReload: NodeJS.Timeout | undefined;
+	if (clientsPath !== undefined && clientsText !== undefined) {
+		const reloadClients = createAuthGatewayClientsReloader(clientsPath, clientsText, handle.setClients);
+		clientsReload = setInterval(() => void reloadClients(), CLIENTS_RELOAD_INTERVAL_MS);
+		clientsReload.unref();
+	}
+
+	registerGatewayShutdown(handle, flags.drainMs, () => {
+		clearInterval(catalogRefresh);
+		clearInterval(resetSweep);
+		clearInterval(credentialSync);
+		clearInterval(clientsReload);
+		resetSweepAbort.abort();
+		storage.close();
+	});
+	// postmortem exits the process once the shutdown cleanup finishes.
+	await new Promise<never>(() => {});
+}
+
+/**
+ * Makes postmortem the only SIGTERM/SIGINT owner for a serving gateway: SIGTERM
+ * drains in-flight responses for `drainMs`, other exits stop at once, and
+ * postmortem then exits with its signal code (143 for SIGTERM). A drain raises the
+ * postmortem deadline to cover it plus {@link SHUTDOWN_MARGIN_MS} for `release`.
+ */
+export function registerGatewayShutdown(
+	handle: { close(drainMs?: number): Promise<void> },
+	drainMs: number | undefined,
+	release: () => void,
+): () => void {
+	if (drainMs !== undefined) postmortem.setCleanupDeadline(drainMs + SHUTDOWN_MARGIN_MS);
+	return postmortem.register(
+		"auth-gateway",
+		async reason => {
+			process.stdout.write(`\nReceived ${reason.toUpperCase()}, shutting down...\n`);
+			try {
+				await handle.close(reason === postmortem.Reason.SIGTERM ? drainMs : undefined);
+			} finally {
+				release();
+			}
+		},
+		{ exitOnly: true },
+	);
+}
+
+async function runToken(flags: AuthGatewayCommandArgs["flags"]): Promise<void> {
+	if (flags.regenerate) {
+		const next = generateToken();
+		await writeTokenFile(getTokenFilePath(), next);
+		if (flags.json) {
+			process.stdout.write(`${JSON.stringify({ token: next, path: getTokenFilePath() })}\n`);
+		} else {
+			process.stdout.write(`${next}\n`);
+		}
+		return;
+	}
+	const token = await ensureToken();
+	if (flags.json) {
+		process.stdout.write(`${JSON.stringify({ token, path: getTokenFilePath() })}\n`);
+	} else {
+		process.stdout.write(`${token}\n`);
+	}
+}
+
+async function runStatus(flags: AuthGatewayCommandArgs["flags"]): Promise<void> {
+	const token = await readTokenFile(getTokenFilePath());
+	const brokerConfig = await resolveAuthBrokerConfig();
+	const tokenFile = getTokenFilePath();
+	if (!brokerConfig) {
+		const status = {
+			ready: false,
+			reason: "not_configured",
+			tokenFile,
+			tokenPresent: token !== null,
+			broker: null,
+			brokerConfigured: false,
+			brokerAuthenticated: false,
+		};
+		if (flags.json) {
+			process.stdout.write(`${JSON.stringify(status)}\n`);
+		} else {
+			process.stdout.write(`${chalk.yellow("No broker configured.")} Set OMP_AUTH_BROKER_URL.\n`);
+			process.stdout.write(
+				`token: ${status.tokenPresent ? chalk.green("present") : chalk.red("missing")} at ${status.tokenFile}\n`,
+			);
+		}
+		process.exitCode = 1;
+		return;
+	}
+
+	try {
+		const snapshot = await fetchBrokerSnapshot(createBrokerClient(brokerConfig));
+		const tokenPresent = token !== null;
+		const status = {
+			ready: tokenPresent,
+			reason: tokenPresent ? null : "token_missing",
+			tokenFile,
+			tokenPresent,
+			broker: brokerConfig.url,
+			brokerConfigured: true,
+			brokerAuthenticated: true,
+			credentialCount: snapshot.credentials.length,
+		};
+		if (flags.json) {
+			process.stdout.write(`${JSON.stringify(status)}\n`);
+		} else {
+			const brokerLine = `upstream broker: ${brokerConfig.url} (${snapshot.credentials.length} credential${
+				snapshot.credentials.length === 1 ? "" : "s"
+			})`;
+			process.stdout.write(`${tokenPresent ? chalk.green("ready") : chalk.yellow("not ready")} ${brokerLine}\n`);
+			process.stdout.write(
+				`token: ${tokenPresent ? chalk.green("present") : chalk.red("missing")} at ${status.tokenFile}\n`,
+			);
+			if (!tokenPresent) {
+				process.stdout.write(
+					"Run `omp auth-gateway token` or `omp auth-gateway serve` to create a bearer token.\n",
+				);
+			}
+		}
+		if (!tokenPresent) process.exitCode = 1;
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		const status = {
+			ready: false,
+			reason: "broker_unavailable",
+			tokenFile,
+			tokenPresent: token !== null,
+			broker: brokerConfig.url,
+			brokerConfigured: true,
+			brokerAuthenticated: false,
+			error: message,
+		};
+		if (flags.json) {
+			process.stdout.write(`${JSON.stringify(status)}\n`);
+		} else {
+			process.stdout.write(`${chalk.red("FAILED")} upstream broker: ${brokerConfig.url}: ${message}\n`);
+			process.stdout.write(
+				`token: ${status.tokenPresent ? chalk.green("present") : chalk.red("missing")} at ${status.tokenFile}\n`,
+			);
+		}
+		process.exitCode = 1;
+	}
+}
+
+export async function runAuthGatewayCommand(cmd: AuthGatewayCommandArgs): Promise<void> {
+	switch (cmd.action) {
+		case "serve":
+			await runServe(cmd.flags);
+			return;
+		case "stdio":
+			await runAuthGatewayStdio();
+			return;
+		case "token":
+			await runToken(cmd.flags);
+			return;
+		case "status":
+			await runStatus(cmd.flags);
+			return;
+		case "check":
+			await runCheck(cmd.flags);
+			return;
+		default: {
+			const _exhaustive: never = cmd.action;
+			throw new Error(`Unknown auth-gateway action: ${String(_exhaustive)}`);
+		}
+	}
+}
+
+/**
+ * Provider API types that strict-mode chat probes intentionally skip:
+ * - `bedrock-converse-stream` resolves credentials from the AWS env/profile, not the broker bearer.
+ * - `google-vertex` uses Application Default Credentials; the broker bearer is not the right key.
+ * - `cursor-agent` and `pi-native` (gateway forwarding) have transport quirks
+ *   that make a bearer-only "ping" a poor signal.
+ */
+const STRICT_PROBE_SKIPPED_APIS: ReadonlySet<Api> = new Set<Api>([
+	"bedrock-converse-stream",
+	"google-vertex",
+	"cursor-agent",
+]);
+
+/** Max chat models to try per credential before reporting failure. */
+const STRICT_PROBE_MAX_CANDIDATES = 4;
+
+/** Per-attempt deadline. Each candidate gets its own slice instead of sharing one budget. */
+const STRICT_PROBE_PER_ATTEMPT_TIMEOUT_MS = 15_000;
+
+/**
+ * Overall per-credential budget passed to {@link AuthStorage.health.check}.
+ * Big enough to walk every candidate at the per-attempt cap with a small
+ * margin for refresh/network overhead.
+ */
+const STRICT_PROBE_OVERALL_TIMEOUT_MS = STRICT_PROBE_PER_ATTEMPT_TIMEOUT_MS * (STRICT_PROBE_MAX_CANDIDATES + 1);
+
+/** Match upstream errors that mean "this model is gone, try a different one" so we walk the catalog instead of declaring the credential bad. */
+const RETRYABLE_MODEL_ERROR_RE =
+	/not[_ -]found|invalid[_ -]model|model[_ -]is[_ -]not[_ -]valid|no longer supported|deprecated|404|decommissioned/i;
+
+/**
+ * Rank bundled chat models for a provider in probe order: cheapest first, then
+ * by id for determinism. Filters out non-bearer-auth APIs (Vertex/Bedrock),
+ * pi-native transport (would loop through the gateway), and placeholder /
+ * router entries with negative/missing cost.
+ */
+function pickProbeCandidates(provider: string): Model<Api>[] {
+	const bundled = getBundledModels(provider as GeneratedProvider);
+	if (bundled.length === 0) return [];
+	const candidates = bundled.filter(model => {
+		// Only chat models answer a chat-completion ping; judge/image/tts/stt
+		// rows would fail the probe regardless of credential health.
+		if (modelKind(model) !== "chat") return false;
+		if (model.transport === "pi-native") return false;
+		if (STRICT_PROBE_SKIPPED_APIS.has(model.api)) return false;
+		if (!model.input.includes("text")) return false;
+		const totalCost = (model.cost?.input ?? 0) + (model.cost?.output ?? 0);
+		if (!Number.isFinite(totalCost) || totalCost < 0) return false;
+		if (model.maxTokens !== null && model.maxTokens <= 0) return false;
+		return true;
+	});
+	const price = (model: Model<Api>): number => {
+		const { input, output } = getEffectiveTokenCost(model.cost);
+		return input + output;
+	};
+	candidates.sort((a, b) => price(a) - price(b) || a.id.localeCompare(b.id));
+	return candidates;
+}
+
+/**
+ * Compose the apiKey bytes a provider's chat endpoint expects, given a
+ * post-refresh probe credential. Mirrors `getOAuthApiKey` for the providers
+ * that require a structured blob; otherwise returns the raw access token /
+ * API key.
+ */
+function composeProbeApiKey(provider: string, credential: CompletionProbeInput["credential"]): string {
+	if (credential.type === "api_key") return credential.apiKey;
+	// Structured providers expect a JSON credential blob (`{ token, projectId, … }`) rather than the raw token.
+	if (authPolicyFor(provider)?.apiKeyFormat !== "structured") return credential.accessToken;
+	return JSON.stringify({
+		token: credential.accessToken,
+		enterpriseUrl: credential.enterpriseUrl,
+		projectId: credential.projectId,
+		refreshToken: credential.refreshToken,
+		expiresAt: credential.expiresAt,
+		email: credential.email,
+		accountId: credential.accountId,
+	});
+}
+
+async function probeOneModel(
+	model: Model<Api>,
+	apiKey: string,
+	outerSignal: AbortSignal,
+	oauthIdentity?: OAuthRequestIdentity,
+): Promise<CredentialCompletionResult> {
+	const start = Date.now();
+	const attemptTimeoutSignal = AbortSignal.timeout(STRICT_PROBE_PER_ATTEMPT_TIMEOUT_MS);
+	const attemptSignal = AbortSignal.any([outerSignal, attemptTimeoutSignal]);
+	// `systemPrompt` is mandatory for some providers (Codex 400s "Instructions
+	// are required" without it). `disableReasoning` is intentionally NOT set:
+	// providers like Fireworks reject the "none" effort it maps to, and we'd
+	// rather burn 16 reasoning tokens than misdiagnose a healthy credential.
+	const response = await completeSimple(
+		model,
+		{
+			systemPrompt: ["Connectivity check. Reply with the single word 'pong'."],
+			messages: [{ role: "user", content: "ping", timestamp: start }],
+		},
+		{
+			apiKey,
+			oauthIdentity,
+			maxTokens: 32,
+			signal: attemptSignal,
+		},
+	);
+	const latencyMs = Date.now() - start;
+	if (response.stopReason === "error" || response.stopReason === "aborted") {
+		return {
+			ok: false,
+			reason: response.errorMessage ?? `chat probe ended with stopReason=${response.stopReason}`,
+			modelId: model.id,
+			latencyMs,
+		};
+	}
+	return { ok: true, modelId: model.id, latencyMs };
+}
+
+/**
+ * Build the {@link CompletionProbe} consumed by
+ * {@link AuthStorage.health.check} in `--strict` mode. Walks the cheapest
+ * candidates per provider, retrying on "model not found / invalid model"
+ * errors so a stale catalog entry doesn't masquerade as a bad credential.
+ * Stops as soon as one model returns a successful response (the credential
+ * authenticated against at least one model in the catalog).
+ */
+export function createStrictCompletionProbe(): CompletionProbe {
+	return async (input: CompletionProbeInput): Promise<CredentialCompletionResult> => {
+		const candidates = pickProbeCandidates(input.provider).slice(0, STRICT_PROBE_MAX_CANDIDATES);
+		if (candidates.length === 0) {
+			return { ok: null, reason: `no bearer-compatible probe model bundled for provider ${input.provider}` };
+		}
+		const apiKey = composeProbeApiKey(input.provider, input.credential);
+		const oauthIdentity =
+			input.credential.type === "oauth"
+				? {
+						orgId: input.credential.orgId,
+						region: input.credential.region,
+						inferenceRegion: input.credential.inferenceRegion,
+					}
+				: undefined;
+		let lastFailure: CredentialCompletionResult | undefined;
+		for (const model of candidates) {
+			if (input.signal.aborted) {
+				return {
+					ok: false,
+					reason: "aborted",
+					modelId: model.id,
+				};
+			}
+			const result = await probeOneModel(model, apiKey, input.signal, oauthIdentity);
+			if (result.ok === true) return result;
+			lastFailure = result;
+			if (!RETRYABLE_MODEL_ERROR_RE.test(result.reason ?? "")) {
+				// Non-model error (401, 403, 5xx, network) — the credential is the
+				// issue, not the catalog. Stop walking.
+				return result;
+			}
+		}
+		return (
+			lastFailure ?? {
+				ok: false,
+				reason: `all ${candidates.length} probe models failed for provider ${input.provider}`,
+			}
+		);
+	};
+}
+
+function formatCompletionStatus(completion: CredentialCompletionResult | undefined): string {
+	if (!completion) return "";
+	if (completion.ok === true) return chalk.green(" [chat: ok]");
+	if (completion.ok === false) return chalk.red(" [chat: FAIL]");
+	return chalk.yellow(" [chat: skip]");
+}
+
+/**
+ * `omp auth-gateway check` — probe each broker-supplied credential and print
+ * per-credential auth health. Use this when the gateway is returning 401s and
+ * you need to find which row in a multi-account pool is the bad one. The
+ * aggregate `/v1/usage` endpoint silently drops failed credentials, so a
+ * dedicated diagnostic is the only way to see which credentials failed.
+ *
+ * Strict mode (`--strict`) additionally exercises each credential against a
+ * cheap chat model from its provider's bundled catalog. This catches the case
+ * where the usage endpoint reports 200 but the chat endpoint 401s the same
+ * bearer (revoked OAuth scope, mislabeled provider row, etc).
+ */
+async function runCheck(flags: AuthGatewayCommandArgs["flags"]): Promise<void> {
+	const brokerConfig = await resolveAuthBrokerConfig();
+	if (!brokerConfig) {
+		throw new Error(
+			"`omp auth-gateway check` requires OMP_AUTH_BROKER_URL (or `auth.broker.url`/`auth.broker.token` in config.yml). It probes the same credentials the gateway would serve.",
+		);
+	}
+
+	const accountPool = await loadAuthBrokerAccountPool();
+	const settings = await resolveEffectiveSettings();
+	const { accountPolicies, defaultReservePct } = await loadEffectiveAuthAccountPolicyConfig({ settings });
+	const client = createBrokerClient(brokerConfig);
+	const initialSnapshot = await fetchBrokerSnapshot(client);
+	const store = new RemoteAuthCredentialStore({
+		client,
+		initialSnapshot,
+		accountPool,
+	});
+	const storage = new AuthStorage(store, {
+		sourceLabel: `broker ${brokerConfig.url}`,
+		accountPolicies,
+		defaultReservePct,
+	});
+	try {
+		await storage.credentials.reload();
+		const results = await storage.health.check({
+			excludeProviders: new Set(cfgDisabledProviders.get(settings)),
+			...(flags.strict
+				? { completionProbe: createStrictCompletionProbe(), completionTimeoutMs: STRICT_PROBE_OVERALL_TIMEOUT_MS }
+				: {}),
+		});
+
+		if (flags.json) {
+			process.stdout.write(
+				`${JSON.stringify({ broker: brokerConfig.url, strict: flags.strict === true, credentials: results }, null, 2)}\n`,
+			);
+		} else {
+			const grouped = new Map<string, typeof results>();
+			for (const row of results) {
+				const list = grouped.get(row.provider) ?? [];
+				list.push(row);
+				grouped.set(row.provider, list);
+			}
+			const providers = [...grouped.keys()].sort();
+			process.stdout.write(`broker: ${brokerConfig.url}${flags.strict ? chalk.dim(" [strict]") : ""}\n`);
+			for (const provider of providers) {
+				const rows = grouped.get(provider) ?? [];
+				process.stdout.write(`\n${chalk.bold(provider)} (${rows.length})\n`);
+				for (const row of rows) {
+					const status =
+						row.ok === true
+							? chalk.green("ok      ")
+							: row.ok === false
+								? chalk.red("FAIL    ")
+								: chalk.yellow("unknown ");
+					const base =
+						row.email ?? row.accountId ?? (row.type === "api_key" ? "(api key)" : "(no identity on credential)");
+					// Two subscriptions (orgs) can share one email — without the org a
+					// failed row can't say which subscription needs re-login.
+					const org = row.orgName ?? row.orgId;
+					const identity = org && org !== base ? `${base} (${org})` : base;
+					const remote = row.remoteRefresh ? chalk.dim(" [remote-refresh]") : "";
+					const reasonParts: string[] = [];
+					if (row.reason) reasonParts.push(row.reason);
+					if (row.completion?.reason) reasonParts.push(`chat: ${row.completion.reason}`);
+					const reason = reasonParts.length > 0 ? chalk.dim(` — ${reasonParts.join("; ")}`) : "";
+					const chat = formatCompletionStatus(row.completion);
+					process.stdout.write(
+						`  ${status}${chat} id=${row.id.toString().padStart(3)} ${row.type.padEnd(7)} ${identity}${remote}${reason}\n`,
+					);
+				}
+			}
+			const failed = results.filter(row => row.ok === false).length;
+			const unverifiable = results.filter(row => row.ok === null).length;
+			const passing = results.filter(row => row.ok === true).length;
+			const chatFailed = flags.strict ? results.filter(row => row.completion?.ok === false).length : 0;
+			const summaryParts = [
+				chalk.green(`${passing} ok`),
+				chalk.red(`${failed} failed`),
+				chalk.yellow(`${unverifiable} unverifiable`),
+			];
+			if (flags.strict) summaryParts.push(chalk.red(`${chatFailed} chat-failed`));
+			summaryParts.push(`${results.length} total`);
+			process.stdout.write(`\n${summaryParts.join(", ")}\n`);
+			if (failed > 0 || chatFailed > 0) process.exitCode = 1;
+		}
+	} finally {
+		storage.close();
+	}
+}
+
+export { ACTIONS as AUTH_GATEWAY_ACTIONS };

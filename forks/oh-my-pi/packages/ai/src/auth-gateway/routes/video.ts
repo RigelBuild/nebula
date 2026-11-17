@@ -1,0 +1,376 @@
+import type { Api, Model } from "@oh-my-pi/pi-catalog/types";
+import { logger } from "@oh-my-pi/pi-utils";
+import type { ResolvedApiKey } from "../../auth-retry";
+import { classifyGatewayError } from "../../error/gateway";
+import * as videoServer from "../../providers/video-server";
+import { downloadVideo, pollVideo, submitVideo } from "../../video";
+import type { VideoJob } from "../../video/types";
+import { deterministicUuid } from "../../utils/deterministic-id";
+import {
+	type AuthGatewayRouteOptions,
+	buildGatewayApiKeyResolver,
+	emitGatewayUsage,
+	hasGatewayUsage,
+	gatewayRequestLogFields,
+	mirrorRequestAbort,
+	resolveGatewayApiKey,
+	resolveGatewayModel,
+} from "../dispatch";
+import { readBoundedRequestBody, RequestBodyTooLargeError } from "../bounded-body";
+import { gatewayResponseHeaders, json, resolveClientIdentity, codedErrorResponse } from "../http";
+import { gatewayLogContext, logGatewayRequestFailure, type GatewayLogContext } from "../logging";
+import type { CallerIdentity } from "../types";
+
+const VIDEO_JSON_MAX_BYTES = 25 * 1024 * 1024;
+
+interface ResolvedVideoRequest {
+	model: Model<Api>;
+	upstreamId: string;
+	sessionId: string;
+	apiKey: ResolvedApiKey;
+	credentialId?: number;
+	controller: AbortController;
+}
+
+function aborted(): Response {
+	return codedErrorResponse(499, "request_aborted", "client closed request");
+}
+
+async function resolveVideoJob(
+	bootOpts: AuthGatewayRouteOptions,
+	req: Request,
+	peer: string,
+	gatewayId: string,
+	caller: CallerIdentity,
+	requestId: string,
+	format: "video-poll" | "video-content",
+): Promise<ResolvedVideoRequest | Response> {
+	const controller = mirrorRequestAbort(req);
+	if (controller.signal.aborted) return aborted();
+	let identity: videoServer.GatewayJobIdentity;
+	try {
+		identity = videoServer.decodeGatewayJobId(gatewayId);
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		return codedErrorResponse(400, "invalid_request_error", message);
+	}
+	const model = await resolveGatewayModel(bootOpts.resolveModel, `${identity.provider}/${identity.modelId}`, caller);
+	if (controller.signal.aborted) return aborted();
+	if (!model) {
+		return codedErrorResponse(
+			404,
+			"invalid_request_error",
+			`Unknown model: ${identity.provider}/${identity.modelId}`,
+		);
+	}
+	if (model.api !== "openrouter-video") {
+		return codedErrorResponse(400, "invalid_request_error", `Model ${model.id} does not support video generation`);
+	}
+	const sessionId = deterministicUuid(`video\u0000${model.provider}/${model.id}`);
+	const apiKey = await resolveGatewayApiKey(
+		bootOpts,
+		model,
+		sessionId,
+		controller.signal,
+		peer,
+		gatewayLogContext(requestId, caller, format, model.provider, model.id),
+	);
+	if (controller.signal.aborted) return aborted();
+	if ("status" in apiKey) return codedErrorResponse(apiKey.status, apiKey.type, apiKey.message);
+	return { model, upstreamId: identity.upstreamId, sessionId, apiKey, controller };
+}
+function videoCredentialTracking(
+	bootOpts: AuthGatewayRouteOptions,
+	model: Model<Api>,
+	sessionId: string,
+	initialKey: ResolvedApiKey,
+	controller: AbortController,
+	peer: string,
+	logContext: GatewayLogContext,
+	onSent: (credentialId: number | undefined) => void,
+) {
+	const credentialIds = new Map([[initialKey.apiKey, initialKey.credentialId]]);
+	return {
+		apiKey: buildGatewayApiKeyResolver(
+			bootOpts,
+			model,
+			sessionId,
+			initialKey,
+			controller.signal,
+			"video",
+			peer,
+			resolvedKey => {
+				const { apiKey, credentialId } = resolvedKey;
+				if (credentialIds.has(apiKey) && credentialIds.get(apiKey) !== credentialId)
+					credentialIds.set(apiKey, undefined);
+				else if (!credentialIds.has(apiKey)) credentialIds.set(apiKey, credentialId);
+			},
+			bootOpts.onUsageLimit,
+			undefined,
+			logContext,
+		),
+		fetch: ((input, init) => {
+			const authorization = new Headers(init?.headers).get("authorization");
+			if (authorization?.startsWith("Bearer ")) {
+				const bearer = authorization.slice(7);
+				if (credentialIds.has(bearer)) onSent(credentialIds.get(bearer));
+			}
+			return (bootOpts.fetch ?? fetch)(input, init);
+		}) satisfies NonNullable<AuthGatewayRouteOptions["fetch"]>,
+		signal: controller.signal,
+	};
+}
+
+function videoOptions(
+	bootOpts: AuthGatewayRouteOptions,
+	resolved: ResolvedVideoRequest,
+	peer: string,
+	logContext: GatewayLogContext,
+) {
+	return videoCredentialTracking(
+		bootOpts,
+		resolved.model,
+		resolved.sessionId,
+		resolved.apiKey,
+		resolved.controller,
+		peer,
+		logContext,
+		credentialId => {
+			resolved.credentialId = credentialId;
+		},
+	);
+}
+
+function logVideoRequest(
+	bootOpts: AuthGatewayRouteOptions,
+	requestId: string,
+	operation: "submit" | "poll" | "content",
+	resolved: ResolvedVideoRequest,
+	peer: string,
+): void {
+	const { model } = resolved;
+	logger.info("auth-gateway request", {
+		requestId,
+		format: `video-${operation}`,
+		model: model.id,
+		resolvedProvider: model.provider,
+		resolvedModel: model.id,
+		stream: operation === "content",
+		peer,
+		...gatewayRequestLogFields(bootOpts, resolved.apiKey),
+	});
+}
+
+// Report completed jobs on each poll; zero-cost, zero-token results remain observed only.
+function recordCompletedUsage(
+	bootOpts: AuthGatewayRouteOptions,
+	resolved: ResolvedVideoRequest,
+	req: Request,
+	job: VideoJob,
+	gatewayId: string,
+): void {
+	if (job.status !== "completed" || job.usage === undefined) return;
+	const client = resolveClientIdentity(req.headers);
+	bootOpts.storage.usage.observe({
+		provider: resolved.model.provider,
+		model: resolved.model.id,
+		usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		costUsd: job.usage.cost.total,
+		client,
+	});
+	if (!hasGatewayUsage(job.usage)) return;
+	// Poll credentials can differ from the credential that billed the submitted job.
+	emitGatewayUsage(bootOpts, {
+		requestId: gatewayId,
+		provider: resolved.model.provider,
+		model: resolved.model.id,
+		usage: job.usage,
+		outcome: "ok",
+		at: Date.now(),
+		client,
+	});
+}
+
+/** OpenRouter-compatible `POST /v1/videos` asynchronous video submit handler. */
+export async function handleVideoSubmit(
+	bootOpts: AuthGatewayRouteOptions,
+	req: Request,
+	peer: string,
+	caller: CallerIdentity,
+): Promise<Response> {
+	const startedAt = performance.now();
+	const requestId = crypto.randomUUID();
+	const controller = mirrorRequestAbort(req);
+	if (controller.signal.aborted) return aborted();
+	let parsed: videoServer.VideoParsedRequest;
+	try {
+		const bytes = await readBoundedRequestBody(req, VIDEO_JSON_MAX_BYTES, controller.signal);
+		parsed = videoServer.parseRequest(JSON.parse(new TextDecoder().decode(bytes)) as unknown);
+	} catch (error) {
+		if (controller.signal.aborted) return aborted();
+		const tooLarge = error instanceof RequestBodyTooLargeError;
+		const message = error instanceof Error ? error.message : String(error);
+		return codedErrorResponse(
+			tooLarge ? 413 : 400,
+			tooLarge ? "payload_too_large" : "invalid_request_error",
+			message,
+		);
+	}
+	if (controller.signal.aborted) return aborted();
+	const model = await resolveGatewayModel(bootOpts.resolveModel, parsed.modelId, caller);
+	if (controller.signal.aborted) return aborted();
+	if (!model) return codedErrorResponse(404, "invalid_request_error", `Unknown model: ${parsed.modelId}`);
+	if (model.api !== "openrouter-video") {
+		return codedErrorResponse(
+			400,
+			"invalid_request_error",
+			`Model ${parsed.modelId} does not support video generation`,
+		);
+	}
+	const sessionId = deterministicUuid(`video\u0000${model.provider}/${model.id}`);
+	const apiKey = await resolveGatewayApiKey(
+		bootOpts,
+		model,
+		sessionId,
+		controller.signal,
+		peer,
+		gatewayLogContext(requestId, caller, "video-submit", model.provider, model.id),
+	);
+	if (controller.signal.aborted) return aborted();
+	if ("status" in apiKey) return codedErrorResponse(apiKey.status, apiKey.type, apiKey.message);
+	let credentialId: number | undefined;
+	logger.info("auth-gateway request", {
+		requestId,
+		format: "video-submit",
+		model: model.id,
+		resolvedProvider: model.provider,
+		resolvedModel: model.id,
+		stream: false,
+		peer,
+		...gatewayRequestLogFields(bootOpts, apiKey),
+	});
+	try {
+		const job = await submitVideo(
+			model,
+			parsed.request,
+			videoCredentialTracking(
+				bootOpts,
+				model,
+				sessionId,
+				apiKey,
+				controller,
+				peer,
+				gatewayLogContext(requestId, caller, "video-submit", model.provider, model.id),
+				selectedCredentialId => {
+					credentialId = selectedCredentialId;
+				},
+			),
+		);
+		const gatewayId = videoServer.encodeGatewayJobId({
+			provider: model.provider,
+			modelId: model.id,
+			upstreamId: job.id,
+		});
+		return json(
+			202,
+			videoServer.encodeSubmitResponse(job, req, gatewayId),
+			gatewayResponseHeaders(model, { requestId, startedAt }),
+		);
+	} catch (error) {
+		if (controller.signal.aborted) return aborted();
+		const classified = classifyGatewayError(error);
+		logGatewayRequestFailure(
+			gatewayLogContext(requestId, caller, "video-submit", model.provider, model.id),
+			classified.status,
+			credentialId,
+		);
+		return codedErrorResponse(classified.status, classified.type, classified.message);
+	}
+}
+
+/** OpenRouter-compatible `GET /v1/videos/:id` asynchronous video poll handler. */
+export async function handleVideoPoll(
+	bootOpts: AuthGatewayRouteOptions,
+	req: Request,
+	peer: string,
+	gatewayId: string,
+	caller: CallerIdentity,
+): Promise<Response> {
+	const startedAt = performance.now();
+	const requestId = crypto.randomUUID();
+	const resolved = await resolveVideoJob(bootOpts, req, peer, gatewayId, caller, requestId, "video-poll");
+	if (resolved instanceof Response) return resolved;
+	logVideoRequest(bootOpts, requestId, "poll", resolved, peer);
+	try {
+		const job = await pollVideo(
+			resolved.model,
+			resolved.upstreamId,
+			videoOptions(
+				bootOpts,
+				resolved,
+				peer,
+				gatewayLogContext(requestId, caller, "video-poll", resolved.model.provider, resolved.model.id),
+			),
+		);
+		recordCompletedUsage(bootOpts, resolved, req, job, gatewayId);
+		return json(
+			200,
+			videoServer.encodePollResponse(job, req, gatewayId),
+			gatewayResponseHeaders(resolved.model, {
+				requestId,
+				...(job.usage !== undefined && { costUsd: job.usage.cost.total }),
+				startedAt,
+			}),
+		);
+	} catch (error) {
+		if (resolved.controller.signal.aborted) return aborted();
+		const classified = classifyGatewayError(error);
+		logGatewayRequestFailure(
+			gatewayLogContext(requestId, caller, "video-poll", resolved.model.provider, resolved.model.id),
+			classified.status,
+			resolved.credentialId,
+		);
+		return codedErrorResponse(classified.status, classified.type, classified.message);
+	}
+}
+
+/** OpenRouter-compatible `GET /v1/videos/:id/content` streaming video content handler. */
+export async function handleVideoContent(
+	bootOpts: AuthGatewayRouteOptions,
+	req: Request,
+	peer: string,
+	gatewayId: string,
+	caller: CallerIdentity,
+): Promise<Response> {
+	const startedAt = performance.now();
+	const requestId = crypto.randomUUID();
+	const resolved = await resolveVideoJob(bootOpts, req, peer, gatewayId, caller, requestId, "video-content");
+	if (resolved instanceof Response) return resolved;
+	logVideoRequest(bootOpts, requestId, "content", resolved, peer);
+	try {
+		const content = await downloadVideo(
+			resolved.model,
+			resolved.upstreamId,
+			videoOptions(
+				bootOpts,
+				resolved,
+				peer,
+				gatewayLogContext(requestId, caller, "video-content", resolved.model.provider, resolved.model.id),
+			),
+		);
+		const headers = new Headers(gatewayResponseHeaders(resolved.model, { requestId, startedAt }));
+		headers.set("Content-Type", content.contentType);
+		headers.set("X-Content-Type-Options", "nosniff");
+		if (content.contentLength !== undefined) headers.set("Content-Length", String(content.contentLength));
+		return new Response(content.body, { status: 200, headers });
+	} catch (error) {
+		if (resolved.controller.signal.aborted) return aborted();
+		const classified = classifyGatewayError(error);
+		logGatewayRequestFailure(
+			gatewayLogContext(requestId, caller, "video-content", resolved.model.provider, resolved.model.id),
+			classified.status,
+			resolved.credentialId,
+		);
+		return codedErrorResponse(classified.status, classified.type, classified.message);
+	}
+}

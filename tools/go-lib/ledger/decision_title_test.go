@@ -124,9 +124,9 @@ func TestRecordSlug(t *testing.T) {
 		recordPath string
 		want       string
 	}{
-		{"docs/designs/platform/oss-forks/fork-releases/design.md", "fork-releases"},
-		{"docs/designs/product/rigel/README.md", "readme"},
-		{"docs/designs/ui/Public-Docs.md", "public-docs"},
+		{"docs/platform/oss-forks/fork-releases/design.md", "fork-releases"},
+		{"docs/product/rigel/README.md", "readme"},
+		{"docs/ui/Public-Docs.md", "public-docs"},
 	}
 	for _, test := range cases {
 		if got := RecordSlug(test.recordPath); got != test.want {

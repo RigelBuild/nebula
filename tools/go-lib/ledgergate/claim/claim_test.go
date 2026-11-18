@@ -57,7 +57,7 @@ func claimConfig(serverURL string) core.Config {
 }
 
 func claimDecision(id string) ledger.DecisionRow {
-	return ledger.DecisionRow{Path: "docs/designs/decisions/ui/" + id + ".md", Line: 2, ID: id}
+	return ledger.DecisionRow{Path: "docs/decisions/ui/" + id + ".md", Line: 2, ID: id}
 }
 
 // lanePayload answers every requested id with state "lane".

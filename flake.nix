@@ -22,7 +22,7 @@
           builtins.fromJSON (builtins.readFile ./release-manifest.json)
         else
           null;
-      packagesFor = system:
+      packagesFor = manifest: system:
         if manifest == null then { } else
           let
             pkgs = import nixpkgs { inherit system; };
@@ -57,10 +57,10 @@
             nativeBuildInputs = [ pkgs.bun ];
             outputHashMode = "recursive";
             outputHashAlgo = "sha256";
-            outputHash = "sha256-4vilrxyUrqqNoFffVBJ6vjzsujoZavi3NpOEar7CPTY=";
+            outputHash = "sha256-unItFE38ueLWvI/ZbHpNbjm9rqCGyYI0ScQTqXfa9/k=";
             buildPhase = ''
               export HOME="$TMPDIR"
-              bun install --frozen-lockfile --ignore-scripts
+              bun install --frozen-lockfile --ignore-scripts --production
             '';
             installPhase = ''
               mkdir -p "$out"
@@ -87,7 +87,36 @@
     in
     {
       packages = forAllSystems (system:
-        packagesFor system // docsBundleFor system);
+        docsBundleFor system // packagesFor manifest system);
+
+      # Eval-only check: a release-manifest entry must win over the source
+      # build. The fixture is an attrset, so the check reads no file and
+      # fetches nothing; it only reads the merged version attribute.
+      checks = forAllSystems (system:
+        let
+          pkgs = import nixpkgs { inherit system; };
+          fixture = {
+            docs-bundle = {
+              version = "9.9.9";
+              upstreamRev = null;
+              "${system}" = {
+                url = "https://example.invalid/docs-bundle.tar.zst";
+                sha256 = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+              };
+            };
+          };
+          merged = docsBundleFor system // packagesFor fixture system;
+          expected = "9.9.9";
+        in
+        {
+          manifest-wins = pkgs.runCommand "docs-bundle-manifest-wins" { } ''
+            test "${merged.docs-bundle.version}" = "${expected}" || {
+              echo "source build won over the release manifest" >&2
+              exit 1
+            }
+            touch $out
+          '';
+        });
 
       devShells = forAllSystems (system:
         let

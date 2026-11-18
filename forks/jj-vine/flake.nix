@@ -98,7 +98,7 @@
             ''
             + lib.optionalString pkgs.stdenv.hostPlatform.isDarwin ''
               # Fail here, not at check-asset, if a dylib comes from the store.
-              if otool -L "$out/bin/jj-vine" | grep -q /nix/store; then
+              if otool -L "$out/bin/jj-vine" | tail -n +2 | grep -q /nix/store; then
                 otool -L "$out/bin/jj-vine"
                 exit 1
               fi

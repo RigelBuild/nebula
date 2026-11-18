@@ -247,8 +247,8 @@ func TestNewPoolFilter(t *testing.T) {
 	})
 
 	t.Run("custom label overrides repo default", func(t *testing.T) {
-		f := NewPoolFilter(map[string]string{"repo": "sealed/only"}, "")
-		assert.Equal(t, "sealed/only", f.labels[pipeline.LabelFilterRepo])
+		f := NewPoolFilter(map[string]string{"repo": "acme/only"}, "")
+		assert.Equal(t, "acme/only", f.labels[pipeline.LabelFilterRepo])
 		// org-id stays server-enforced "*" for system agents
 		assert.Equal(t, "*", f.labels[pipeline.LabelFilterOrg])
 	})
@@ -348,21 +348,21 @@ func TestSatisfiableWorkedExamples(t *testing.T) {
 
 	t.Run("size=large excluded (the waste case)", func(t *testing.T) {
 		task := woodpecker.Task{Labels: map[string]string{
-			"type": "linux", "size": "large", "repo": "sealed/x", "org-id": "1",
+			"type": "linux", "size": "large", "repo": "acme/x", "org-id": "1",
 		}}
 		assert.False(t, pool.Satisfiable(task))
 	})
 
 	t.Run("bare type=linux eligible", func(t *testing.T) {
 		task := woodpecker.Task{Labels: map[string]string{
-			"type": "linux", "repo": "sealed/x", "org-id": "1",
+			"type": "linux", "repo": "acme/x", "org-id": "1",
 		}}
 		assert.True(t, pool.Satisfiable(task))
 	})
 
 	t.Run("type=macos excluded", func(t *testing.T) {
 		task := woodpecker.Task{Labels: map[string]string{
-			"type": "macos", "repo": "sealed/x", "org-id": "1",
+			"type": "macos", "repo": "acme/x", "org-id": "1",
 		}}
 		assert.False(t, pool.Satisfiable(task))
 	})
@@ -405,7 +405,7 @@ func TestAgentFilter(t *testing.T) {
 		assert.Equal(t, "*", f.labels[pipeline.LabelFilterRepo])
 		assert.Equal(t, "large", f.labels["size"])
 		// a bare shared-eligible linux task is absorbable by this static
-		task := woodpecker.Task{Labels: map[string]string{"type": "linux", "repo": "sealed/x", "org-id": "5"}}
+		task := woodpecker.Task{Labels: map[string]string{"type": "linux", "repo": "acme/x", "org-id": "5"}}
 		assert.True(t, f.Satisfiable(task))
 	})
 

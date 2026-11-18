@@ -316,7 +316,7 @@ mod tests {
     }
 
     #[test]
-    fn title_pattern_matches_orion_issue_reference_rule() {
+    fn title_pattern_matches_issue_reference_rule() {
         let checks = SubmitChecksConfig {
             title_pattern: Some(r"(?i)\bRIG-[0-9]+".to_owned()),
             ..SubmitChecksConfig::default()
@@ -336,7 +336,7 @@ mod tests {
     }
 
     #[test]
-    fn spec_impact_matches_orion_line_and_exemption_rules() {
+    fn spec_impact_matches_line_and_exemption_rules() {
         let spec = CompiledSpecImpact::new(&SpecImpactCheckConfig {
             paths: vec![
                 "docs/specs/".to_owned(),

@@ -147,6 +147,15 @@
           };
         in
         { "docs-bundle" = docsBundle; };
+
+      # nix2container builds images with Nix. Its default.nix takes pkgs and
+      # returns the attrset upstream's flake exposes as
+      # packages.<system>.nix2container.
+      nix2containerFor = system:
+        let
+          pkgs = import nixpkgs { inherit system; };
+        in
+        (import ./forks/nix2container { inherit pkgs; }).nix2container;
     in
     {
       # Later attrs win. Source builds come first, docs-bundle next, and
@@ -183,6 +192,13 @@
             touch $out
           '';
         });
+
+      # Nix libraries. lib.<system>.nix2container is the same attrset as
+      # upstream's packages.<system>.nix2container, so consumers can swap
+      # inputs.nix2container for this output.
+      lib = forAllSystems (system: {
+        nix2container = nix2containerFor system;
+      });
 
       devShells = forAllSystems (system:
         let

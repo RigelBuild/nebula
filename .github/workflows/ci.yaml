@@ -83,9 +83,10 @@ jobs:
         run: |
           set -euo pipefail
           system="$(nix eval --impure --raw --expr builtins.currentSystem)"
-          # One build over every package attr, so none is skipped. mapfile keeps
-          # the last name (the read loop dropped it: no trailing newline).
-          mapfile -t attrs < <(nix eval --raw ".#packages.${system}" --apply 'ps: builtins.concatStringsSep "\n" (builtins.attrNames ps)'; echo)
+          # Assign first, so set -e fails the step when nix eval fails.
+          names="$(nix eval --raw ".#packages.${system}" --apply 'ps: builtins.concatStringsSep "\n" (builtins.attrNames ps)')"
+          if [ -z "$names" ]; then echo "no packages found for ${system}" >&2; exit 1; fi
+          mapfile -t attrs <<<"$names"
           nix build --no-link "${attrs[@]/#/.#packages.${system}.}"
       - name: Set up Moon
         run: nix develop --command moon --version
@@ -214,14 +215,17 @@ jobs:
           oauth-client-id: ${{ vars.TS_OIDC_CLIENT_ID }}
           audience: api.tailscale.com/${{ vars.TS_OIDC_CLIENT_ID }}
           tags: tag:gha-nebula
-      # Same step as the ci job: every package output, one build, RIG-10818.
+      # Builds every package output for this runner's system, so a stale
+      # vendorHash or FOD hash fails CI instead of merging green. Takes effect
+      # once the OIDC config is fixed (RIG-10818).
       - name: Build packages
         run: |
           set -euo pipefail
           system="$(nix eval --impure --raw --expr builtins.currentSystem)"
-          # One build over every package attr, so none is skipped. mapfile keeps
-          # the last name (the read loop dropped it: no trailing newline).
-          mapfile -t attrs < <(nix eval --raw ".#packages.${system}" --apply 'ps: builtins.concatStringsSep "\n" (builtins.attrNames ps)'; echo)
+          # Assign first, so set -e fails the step when nix eval fails.
+          names="$(nix eval --raw ".#packages.${system}" --apply 'ps: builtins.concatStringsSep "\n" (builtins.attrNames ps)')"
+          if [ -z "$names" ]; then echo "no packages found for ${system}" >&2; exit 1; fi
+          mapfile -t attrs <<<"$names"
           nix build --no-link "${attrs[@]/#/.#packages.${system}.}"
       - name: Set up Moon
         run: nix develop --command moon --version

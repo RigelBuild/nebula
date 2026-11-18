@@ -32,13 +32,6 @@
         ref-gate = "sha256-WVoZkg5kdUYlATXDDxAA/yozThBwyYSKHwLoUsuIBfg=";
       };
 
-      # The package names the CI build step expects (see ci.yaml "Build
-      # packages"). The ci-packages check keeps this list equal to the outputs.
-      ciPackageNames = [
-        "code-shape-gate" "design-ledger-gate" "dl-claim" "dl-list"
-        "dl-reconcile" "docs-bundle" "fork-sync" "length-gate" "ref-gate"
-      ];
-
       # Does a command's go.mod replace the shared go-lib module? The replace
       # target is relative to tools/<name>; it counts only if it resolves to
       # exactly tools/go-lib. A commented or longer path does not count.
@@ -213,7 +206,7 @@
           expected = "9.9.9";
         in
         {
-          manifest-wins = pkgs.runCommand "docs-bundle-manifest-wins" { } ''
+          manifest-wins = pkgs.runCommand "nebula-manifest-wins" { } ''
             test "${merged.docs-bundle.version}" = "${expected}" || {
               echo "source build won over the release manifest" >&2
               exit 1
@@ -221,7 +214,7 @@
             touch $out
           '';
           # A command that replaces go-lib must ship tools/go-lib in its source.
-          go-lib-included = pkgs.runCommand "docs-bundle-go-lib-included" { } ''
+          go-lib-included = pkgs.runCommand "nebula-go-lib-included" { } ''
             test -f "${commandSource "dl-claim"}/tools/go-lib/go.mod" || {
               echo "dl-claim replaces go-lib but tools/go-lib is missing from its source" >&2
               exit 1
@@ -230,7 +223,7 @@
           '';
           # usesGoLibFor must reject a commented replace and accept a live one.
           # Evaluated through the same function commandSource uses.
-          go-lib-detection = pkgs.runCommand "docs-bundle-go-lib-detection" { } ''
+          go-lib-detection = pkgs.runCommand "nebula-go-lib-detection" { } ''
             ${if usesGoLibFor "fixture" "# replace github.com/x/go-lib => ../go-lib\n" then ''
               echo "a commented replace was accepted as go-lib" >&2
               exit 1
@@ -241,26 +234,6 @@
             ''}
             touch $out
           '';
-          # The CI build step builds ciPackageNames. Fail eval when that list
-          # drifts from the package outputs, so a package cannot be skipped.
-          ci-packages = pkgs.runCommand "docs-bundle-ci-packages" { } (
-            let
-              outs = builtins.sort builtins.lessThan (builtins.attrNames self.packages.${system});
-              ci = builtins.sort builtins.lessThan ciPackageNames;
-            in
-            if outs == ci then "touch $out"
-            else throw "CI package list drifted from packages.${system}: ${builtins.concatStringsSep " " ci} vs ${builtins.concatStringsSep " " outs}"
-          );
-          # Mutant: drop one name. The drift comparison must reject it, so this
-          # check throws when the short list would wrongly be accepted.
-          ci-packages-mutant = pkgs.runCommand "docs-bundle-ci-packages-mutant" { } (
-            let
-              outs = builtins.sort builtins.lessThan (builtins.attrNames self.packages.${system});
-              short = builtins.sort builtins.lessThan (lib.init ciPackageNames);
-            in
-            if outs == short then throw "mutant: the drift check accepted a list with one name dropped"
-            else "touch $out"
-          );
         });
 
       devShells = forAllSystems (system:

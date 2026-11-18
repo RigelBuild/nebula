@@ -4,7 +4,7 @@ release: {
 	artifacts: {
 		"jj-hooks-bin": {
 			kind:     "nix"
-			attr:     "jj-hooks-bin"
+			attr:     "jj-hooks-static"
 			binaries: ["jj-hooks", "jj-hp"]
 		}
 	}

@@ -4,7 +4,7 @@ release: {
 	artifacts: {
 		"jj-vine": {
 			kind:     "nix"
-			attr:     "jj-vine"
+			attr:     "jj-vine-static"
 			binaries: ["jj-vine"]
 		}
 	}

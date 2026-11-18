@@ -148,7 +148,6 @@ jobs:
             kind=$(jq -r .kind <<<"$b")
             if [ "$kind" = nix ]; then
               # Nix-built: nix build .#<attr> in the project's flake. Its bin/ holds the binaries.
-              # The T6 check-asset gate is for Go's static builds; a Nix build is portable by its flake.
               nixOut=$(nix build --no-link --print-out-paths "./$project#$(jq -r .attr <<<"$b")")
               for name in $(jq -r '.binaries[]' <<<"$b"); do
                 install -m 0755 "$nixOut/bin/$name" "$stage/bin/$name"
@@ -156,9 +155,12 @@ jobs:
             else
               for name in $(jq -r '.binaries[]' <<<"$b"); do
                 go -C "$project" build -trimpath -o "$stage/bin/$name" .
-                "$RUNNER_TEMP/cd" check-asset -system "$SYSTEM" "$stage/bin/$name"
               done
             fi
+            # Every kind: a consumer runs the asset without this build's /nix/store.
+            for name in $(jq -r '.binaries[]' <<<"$b"); do
+              "$RUNNER_TEMP/cd" check-asset -system "$SYSTEM" "$stage/bin/$name"
+            done
             tar -C "$stage" -cf - bin | zstd -19 -q -o "$RUNNER_TEMP/assets/$pkg-$version-$SYSTEM.tar.zst"
           done
       - name: Find built assets

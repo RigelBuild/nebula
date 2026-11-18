@@ -6,6 +6,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -99,4 +102,32 @@ func contains(list []string, want string) bool {
 		}
 	}
 	return false
+}
+
+// TestCDChecksEveryAssetKind pins the release invariant: a consumer runs the
+// asset without the build's /nix/store, so cd.yaml runs check-asset after the
+// kind branch, on nix and Go binaries alike, never inside one branch only.
+func TestCDChecksEveryAssetKind(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", ".github", "workflows", "cd.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wf := string(data)
+	branch := strings.Index(wf, `if [ "$kind" = nix ]; then`)
+	if branch < 0 {
+		t.Fatal("cd.yaml: no nix kind branch")
+	}
+	end := strings.Index(wf[branch:], "\n            fi\n")
+	if end < 0 {
+		t.Fatal("cd.yaml: nix kind branch has no closing fi")
+	}
+	end += branch
+	if strings.Contains(wf[branch:end], "check-asset") {
+		t.Fatal("cd.yaml: check-asset runs inside a kind branch; it must gate every kind")
+	}
+	check := strings.Index(wf[end:], `"$RUNNER_TEMP/cd" check-asset -system "$SYSTEM"`)
+	tarball := strings.Index(wf[end:], "zstd -19")
+	if check < 0 || tarball < 0 || check > tarball {
+		t.Fatal("cd.yaml: check-asset must run on every kind before the tarball is packed")
+	}
 }

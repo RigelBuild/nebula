@@ -60,8 +60,59 @@
           };
         };
 
+      # The portable release build nebula CD ships as the jj-vine asset. A
+      # release asset must run without this build's /nix/store: on Linux,
+      # pkgsStatic makes a static musl ELF; on darwin, which cannot link fully
+      # static, it links only the system libSystem under /usr/lib. CD's
+      # check-asset gate enforces both rules.
+      mkJjVineStatic =
+        pkgs:
+        let
+          target = if pkgs.stdenv.hostPlatform.isLinux then pkgs.pkgsStatic else pkgs;
+        in
+        target.rustPlatform.buildRustPackage {
+          pname = "jj-vine-static";
+          inherit version;
+          src = lib.fileset.toSource {
+            root = ./.;
+            fileset = lib.fileset.unions [
+              ./Cargo.toml
+              ./Cargo.lock
+              ./README.md
+              ./src
+            ];
+          };
+          cargoLock.lockFile = ./Cargo.lock;
+          # aws-lc-sys builds its C sources with cmake.
+          nativeBuildInputs = [ pkgs.cmake ];
+          # The suite needs jj and forge fixtures; this build only smoke-tests.
+          doCheck = false;
+          doInstallCheck = true;
+          installCheckPhase = ''
+            runHook preInstallCheck
+            "$out/bin/jj-vine" --version >/dev/null
+          ''
+          + lib.optionalString pkgs.stdenv.hostPlatform.isDarwin ''
+            # Fail here, not at check-asset, if a dylib comes from the store.
+            if otool -L "$out/bin/jj-vine" | grep -q /nix/store; then
+              otool -L "$out/bin/jj-vine"
+              exit 1
+            fi
+          ''
+          + ''
+            runHook postInstallCheck
+          '';
+          meta = {
+            description = "Portable jj-vine release binary";
+            homepage = "https://codeberg.org/abrenneke/jj-vine";
+            license = lib.licenses.mit;
+            mainProgram = "jj-vine";
+          };
+        };
+
       packages = forAllSystems (system: {
         jj-vine = mkJjVine nixpkgs.legacyPackages.${system} artifacts.${system};
+        jj-vine-static = mkJjVineStatic nixpkgs.legacyPackages.${system};
       });
     in
     {

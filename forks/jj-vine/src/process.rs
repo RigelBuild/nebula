@@ -1076,7 +1076,15 @@ mod tests {
     fn is_running(pid: &str) -> bool {
         let stat = match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
             Ok(stat) => stat,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return false,
+            // Linux can reap the process after its stat file opens and before
+            // the read. The read then fails with ESRCH, the same as a missing
+            // file: the process is gone.
+            Err(error)
+                if error.kind() == std::io::ErrorKind::NotFound
+                    || error.raw_os_error() == Some(libc::ESRCH) =>
+            {
+                return false;
+            }
             Err(error) => panic!("cannot inspect process {pid}: {error}"),
         };
         let state = stat

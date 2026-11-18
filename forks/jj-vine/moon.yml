@@ -21,12 +21,12 @@ tasks:
     args: ['fmt', '--check']
     options:
       cache: false
-      # Deliberately off: rust-toolchain.toml pins nightly-2026-08-21 for rustfmt. The nebula devshell has stable 1.99 only, and the fork's own CI covers fmt.
+      # Deliberately off: rust-toolchain.toml pins nightly-2026-08-21 for rustfmt, and the nebula devshell has stable 1.99 only.
       runInCI: false
   clippy:
     command: 'cargo'
     args: ['clippy', '--tests']
     options:
       cache: false
-      # Deliberately off: rust-toolchain.toml pins nightly-2026-08-21 for clippy. The nebula devshell has stable 1.99 only, and the fork's own CI covers clippy.
+      # Deliberately off: rust-toolchain.toml pins nightly-2026-08-21 for clippy, and the nebula devshell has stable 1.99 only.
       runInCI: false

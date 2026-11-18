@@ -1,0 +1,32 @@
+# yaml-language-server: $schema=https://moonrepo.dev/schemas/project.json
+#
+# Tasks run from this project's directory, which is the fork tree root.
+layer: 'application'
+language: 'typescript'
+tasks:
+  install:
+    command: 'npm'
+    args: ['ci']
+    inputs:
+      - package.json
+      - package-lock.json
+    options:
+      # nebula devshell has no node or npm; see RIG-10145
+      runInCI: false
+  build:
+    command: 'npm'
+    args: ['run', 'build']
+    deps:
+      - install
+    options:
+      # nebula devshell has no node or npm; see RIG-10145
+      runInCI: false
+  test:
+    command: 'npm'
+    args: ['test']
+    deps:
+      - install
+    options:
+      cache: false
+      # nebula devshell has no node or npm; see RIG-10145
+      runInCI: false

@@ -112,10 +112,15 @@ jobs:
           : > "$RUNNER_TEMP/held/${{ matrix.system }}"
           for project in $PROJECTS; do
             id=$(basename "$project")
-            # A project with no test task has no tests; that is not red.
-            if ! nix develop --command moon task "$id:test" >/dev/null 2>&1; then
-              echo "$project has no test task"
-              continue
+            # Only moon's unknown_task means "no tests". Any other moon or devshell
+            # error fails the job rather than releasing an untested project.
+            if ! out=$(nix develop --command moon task "$id:test" 2>&1); then
+              if grep -q 'unknown_task' <<<"$out"; then
+                echo "$project has no test task"
+                continue
+              fi
+              echo "$out"
+              exit 1
             fi
             if ! nix develop --command moon run "$id:test" --affected=false; then
               echo "::warning::$project is red on ${{ matrix.system }}; holding it"
@@ -138,10 +143,6 @@ jobs:
             if grep -qx "$pkg" "$RUNNER_TEMP/held/$SYSTEM"; then continue; fi
             project=$(jq -r .project <<<"$b")
             version=$(jq -r .version <<<"$b")
-            if [ ! -f "$project/go.mod" ]; then
-              echo "::error::$pkg: only Go binaries have a CD build step; $project has no go.mod"
-              exit 1
-            fi
             stage="$RUNNER_TEMP/stage/$pkg"
             mkdir -p "$stage/bin"
             for name in $(jq -r '.binaries[]' <<<"$b"); do
@@ -205,9 +206,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p "$RUNNER_TEMP/assets"
+          mkdir -p "$RUNNER_TEMP/previous"
           previous=$(jq -r '.previousTag // empty' "$RUNNER_TEMP/in/plan/plan.json")
           if [ -n "$previous" ]; then
-            gh release download "$previous" --dir "$RUNNER_TEMP/assets" --pattern '*.tar.zst'
+            # A Release with no binary assets is an empty set, not an error.
+            if [ "$(gh release view "$previous" --json assets --jq '[.assets[].name | select(endswith(".tar.zst"))] | length')" != 0 ]; then
+              gh release download "$previous" --dir "$RUNNER_TEMP/previous" --pattern '*.tar.zst'
+            fi
           fi
       - name: Publish release-manifest.json on main
         id: publish
@@ -217,14 +222,23 @@ jobs:
           REPOSITORY: ${{ github.repository }}
         run: |
           tag="nebula-$(date -u +%Y%m%d)-$RUN_NUMBER"
-          # Rebuilt assets replace any same-named copy from the previous Release.
-          find "$RUNNER_TEMP/in" -name '*.tar.zst' -exec mv -f {} "$RUNNER_TEMP/assets/" \;
           held=$(find "$RUNNER_TEMP/in" -path '*/held/*' -type f -exec cat {} + | sort -u | paste -sd, -)
+          # A package held on any system keeps its previous assets everywhere, so
+          # its newly built assets from the other systems stay out of the release set.
+          jq -r --arg held "$held" '($held | split(",")) as $h | .binaries[]
+            | select(.package as $p | $h | index($p) | not) | "\(.package)-\(.version)-"' \
+            "$RUNNER_TEMP/in/plan/plan.json" > "$RUNNER_TEMP/released-prefixes"
+          find "$RUNNER_TEMP/in" -name '*.tar.zst' | while read -r f; do
+            name=$(basename "$f")
+            while read -r prefix; do
+              case "$name" in "$prefix"*) mv "$f" "$RUNNER_TEMP/assets/"; break ;; esac
+            done < "$RUNNER_TEMP/released-prefixes"
+          done
           git config user.name 'rigelbuild-nebula-release[bot]'
           git config user.email 'rigelbuild-nebula-release[bot]@users.noreply.github.com'
           go -C tools/cd build -o "$RUNNER_TEMP/cd" .
           commit=$("$RUNNER_TEMP/cd" publish -plan "$RUNNER_TEMP/in/plan/plan.json" -tag "$tag" \
-            -assets "$RUNNER_TEMP/assets" -held "$held" \
+            -assets "$RUNNER_TEMP/assets" -previous-assets "$RUNNER_TEMP/previous" -held "$held" \
             -base-url "https://github.com/$REPOSITORY/releases/download/" \
             -system x86_64-linux -system aarch64-linux -system aarch64-darwin)
           "$RUNNER_TEMP/cd" guard "$commit"
@@ -248,5 +262,7 @@ jobs:
           held=$(jq -r '.held | join(", ")' "$RUNNER_TEMP/release-manifest.json")
           notes="Source: $(jq -r .source "$RUNNER_TEMP/release-manifest.json")"
           if [ -n "$held" ]; then notes="$notes"$'\n\n'"Held (previous asset kept): $held"; fi
+          not_built=$(jq -r '.notBuilt | join(", ")' "$RUNNER_TEMP/in/plan/plan.json")
+          if [ -n "$not_built" ]; then notes="$notes"$'\n\n'"Not built by CD (no build step for this toolchain): $not_built"; fi
           gh release create "$TAG" --verify-tag --title "$TAG" --notes "$notes" \
             "$RUNNER_TEMP/release-manifest.json" "$RUNNER_TEMP/SHA256SUMS" "${files[@]}"

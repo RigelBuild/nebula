@@ -123,6 +123,7 @@ func manifestFlags(flags *flag.FlagSet) *manifestInput {
 	flags.StringVar(&in.planPath, "plan", "", "plan JSON from cd plan")
 	flags.StringVar(&in.tag, "tag", "", "release tag, nebula-<yyyymmdd>-<run>")
 	flags.StringVar(&in.assets, "assets", "", "directory holding <pkg>-<version>-<system>.tar.zst assets")
+	flags.StringVar(&in.previous, "previous-assets", "", "directory holding the previous Release's assets")
 	flags.StringVar(&in.baseURL, "base-url", "", "download URL prefix; the tag and asset name are appended")
 	flags.Var((*listFlag)(&in.held), "held", "package held by a red test (repeatable)")
 	flags.Var((*listFlag)(&in.systems), "system", "release system (repeatable)")

@@ -40,6 +40,9 @@ type Plan struct {
 	Projects    []string        `json:"projects"`
 	Binaries    []Binary        `json:"binaries"`
 	Build       []string        `json:"build"`
+	// NotBuilt lists binary packages CD has no build step for (no go.mod). They
+	// are not tested, built, held or put in the manifest; the notes list them.
+	NotBuilt []string `json:"notBuilt"`
 }
 
 func makePlan(ctx context.Context, repo string) (Plan, error) {
@@ -51,11 +54,26 @@ func makePlan(ctx context.Context, repo string) (Plan, error) {
 	if err != nil {
 		return Plan{}, err
 	}
-	binaries, err := listBinaries(repo)
+	listed, err := listBinaries(repo)
 	if err != nil {
 		return Plan{}, err
 	}
-	p := Plan{Source: head, Binaries: binaries}
+	p := Plan{Source: head, NotBuilt: []string{}}
+	var binaries []Binary
+	notBuiltProjects := map[string]bool{}
+	for _, b := range listed {
+		if _, err := os.Stat(filepath.Join(repo, b.Project, "go.mod")); err != nil {
+			if !errors.Is(err, os.ErrNotExist) {
+				return Plan{}, err
+			}
+			p.NotBuilt = append(p.NotBuilt, b.Package)
+			notBuiltProjects[b.Project] = true
+			continue
+		}
+		binaries = append(binaries, b)
+	}
+	p.Binaries = binaries
+	all = slices.DeleteFunc(all, func(project string) bool { return notBuiltProjects[project] })
 
 	tag, prev, raw, err := newestRelease(ctx, repo)
 	if err != nil {

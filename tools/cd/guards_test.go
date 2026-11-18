@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -157,6 +158,7 @@ func TestPlanPicksRun100OverRun99OnTheSameDay(t *testing.T) {
 func TestPlanReleasesForkBinariesWithUpstreamRev(t *testing.T) {
 	dir := newRepo(t)
 	writeFile(t, dir, "forks/vine/component.cue", strings.ReplaceAll(toolCUE, "%s", "vine"))
+	writeFile(t, dir, "forks/vine/go.mod", "module vine\n")
 	writeFile(t, dir, "forks/vine/upstream.json", `{"repo":"r","branch":"main","commit":"0c03418"}`)
 	commitAll(t, dir, "vine component")
 	p, err := makePlan(context.Background(), dir)
@@ -167,7 +169,7 @@ func TestPlanReleasesForkBinariesWithUpstreamRev(t *testing.T) {
 	if !reflect.DeepEqual(p.Binaries[2], want) {
 		t.Fatalf("binaries = %+v, want fork entry %+v", p.Binaries, want)
 	}
-	m, err := buildManifest(p, "nebula-20261117-1", makeAssets(t, []string{"x86_64-linux"}, "alpha", "beta", "vine"),
+	m, err := buildManifest(p, "nebula-20261117-1", makeAssets(t, []string{"x86_64-linux"}, "alpha", "beta", "vine"), "",
 		"https://x", []string{"x86_64-linux"}, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -199,7 +201,7 @@ func TestManifestCarriesUnbuiltPackagesIntoThisRelease(t *testing.T) {
 	assets := makeAssets(t, systems, "alpha", "beta")
 	p := Plan{Source: "s", Previous: previousRelease(t, assets), Build: []string{"alpha"},
 		Binaries: []Binary{{Package: "alpha", Version: "1.2.0"}, {Package: "beta", Version: "1.2.0"}}}
-	m, err := buildManifest(p, "nebula-20261117-2", assets, "https://x", systems, nil)
+	m, err := buildManifest(p, "nebula-20261117-2", assets, assets, "https://x", systems, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,13 +212,13 @@ func TestManifestCarriesUnbuiltPackagesIntoThisRelease(t *testing.T) {
 
 	// A copied asset whose bytes differ from the previous Release is refused.
 	writeFile(t, assets, "beta-1.2.0-x86_64-linux.tar.zst", "tampered")
-	if _, err := buildManifest(p, "nebula-20261117-2", assets, "https://x", systems, nil); !errors.Is(err, errAssetMismatch) {
+	if _, err := buildManifest(p, "nebula-20261117-2", assets, assets, "https://x", systems, nil); !errors.Is(err, errAssetMismatch) {
 		t.Fatalf("err = %v, want errAssetMismatch", err)
 	}
 
 	// An unbuilt package with no previous entry is an error, not a silent drop.
 	p.Previous = nil
-	_, err = buildManifest(p, "nebula-20261117-2", assets, "https://x", systems, nil)
+	_, err = buildManifest(p, "nebula-20261117-2", assets, assets, "https://x", systems, nil)
 	if err == nil || !strings.Contains(err.Error(), "no previous Release entry") {
 		t.Fatalf("err = %v, want the no-previous-entry error", err)
 	}
@@ -227,7 +229,7 @@ func TestReleaseFilesWritesSumsAndSkipsHeldAssets(t *testing.T) {
 	assets := makeAssets(t, systems, "alpha", "beta")
 	p := Plan{Source: "s", Build: []string{"alpha", "beta"},
 		Binaries: []Binary{{Package: "alpha", Version: "1.2.0"}, {Package: "beta", Version: "1.2.0"}}}
-	m, err := buildManifest(p, "nebula-20261117-3", assets, "https://x", systems, []string{"beta"})
+	m, err := buildManifest(p, "nebula-20261117-3", assets, "", "https://x", systems, []string{"beta"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -318,5 +320,97 @@ func TestCheckAssetELFInterp(t *testing.T) {
 	}
 	if err := checkAsset(path, "x86_64-linux"); !errors.Is(err, errAssetCheck) {
 		t.Fatalf("ELF with PT_INTERP: err = %v, want errAssetCheck", err)
+	}
+}
+
+// TestHeldOnOneSystemKeepsThePreviousAssetEverywhere: beta is red on
+// x86_64-linux but built on aarch64-linux. The new aarch64 bytes sit in the
+// release set; the manifest must still hold beta at the previous asset on
+// every system, and the release set must carry the previous bytes.
+func TestHeldOnOneSystemKeepsThePreviousAssetEverywhere(t *testing.T) {
+	systems := []string{"x86_64-linux", "aarch64-linux"}
+	previous := makeAssets(t, systems, "beta")
+	prev := Manifest{Source: "old", Tag: "nebula-20261101-1", Packages: map[string]Package{"beta": {Version: "1.2.0", Systems: map[string]Asset{}}}}
+	for _, s := range systems {
+		name := "beta-1.2.0-" + s + ".tar.zst"
+		sum, err := fileSHA256(filepath.Join(previous, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		prev.Packages["beta"].Systems[s] = Asset{URL: "https://x/nebula-20261101-1/" + name, SHA256: sum}
+	}
+	prevData, _ := json.Marshal(prev)
+	assets := makeAssets(t, systems, "alpha")
+	writeFile(t, assets, "beta-1.2.0-aarch64-linux.tar.zst", "new aarch64 bytes")
+	p := Plan{Source: "s", Previous: prevData, Build: []string{"alpha", "beta"},
+		Binaries: []Binary{{Package: "alpha", Version: "1.2.0"}, {Package: "beta", Version: "1.2.0"}}}
+	m, err := buildManifest(p, "nebula-20261117-4", assets, previous, "https://x", systems, []string{"beta"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(m.Held, []string{"beta"}) {
+		t.Fatalf("held = %v, want [beta]", m.Held)
+	}
+	for _, s := range systems {
+		got := m.Packages["beta"].Systems[s]
+		if got.SHA256 != prev.Packages["beta"].Systems[s].SHA256 {
+			t.Fatalf("%s: beta sha256 = %s, want the previous asset", s, got.SHA256)
+		}
+		sum, err := fileSHA256(filepath.Join(assets, "beta-1.2.0-"+s+".tar.zst"))
+		if err != nil || sum != got.SHA256 {
+			t.Fatalf("%s: release set has %s (%v), want the previous bytes", s, sum, err)
+		}
+	}
+}
+
+func TestPlanSkipsNonGoBinaries(t *testing.T) {
+	dir := newRepo(t)
+	writeFile(t, dir, "tools/hooks/moon.yml", "layer: tool\n")
+	writeFile(t, dir, "tools/hooks/Cargo.toml", "[package]\n")
+	writeFile(t, dir, "tools/hooks/component.cue", strings.ReplaceAll(toolCUE, "%s", "hooks"))
+	commitAll(t, dir, "rust tool")
+	p, err := makePlan(context.Background(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(p.NotBuilt, []string{"hooks"}) {
+		t.Fatalf("notBuilt = %v, want [hooks]", p.NotBuilt)
+	}
+	if slices.Contains(p.Projects, "tools/hooks") || slices.Contains(p.Build, "hooks") {
+		t.Fatalf("a non-Go binary was planned: projects %v, build %v", p.Projects, p.Build)
+	}
+	m, err := buildManifest(p, "nebula-20261117-5", makeAssets(t, []string{"x86_64-linux"}, "alpha", "beta"), "",
+		"https://x", []string{"x86_64-linux"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := m.Packages["hooks"]; ok || slices.Contains(m.Held, "hooks") {
+		t.Fatalf("hooks must stay out of the manifest: %+v", m)
+	}
+}
+
+func TestPublishRefusesAReRunOfTheReleasedRun(t *testing.T) {
+	f := newPublishFixture(t)
+	release(t, f.work, "nebula-20261117-6", f.source, nil)
+	testGit(t, f.work, "push", "-q", "origin", "main", "--tags")
+	if _, err := publish(context.Background(), f.options("nebula-20261117-6")); !errors.Is(err, errStaleRelease) {
+		t.Fatalf("err = %v, want errStaleRelease for a re-run of the same source", err)
+	}
+}
+
+func TestReleaseFilesRefusesChangedBytes(t *testing.T) {
+	systems := []string{"x86_64-linux"}
+	assets := makeAssets(t, systems, "alpha")
+	p := Plan{Source: "s", Build: []string{"alpha"}, Binaries: []Binary{{Package: "alpha", Version: "1.2.0"}}}
+	m, err := buildManifest(p, "nebula-20261117-7", assets, "", "https://x", systems, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, _ := json.Marshal(m)
+	dir := t.TempDir()
+	writeFile(t, dir, manifestFile, string(data))
+	writeFile(t, assets, "alpha-1.2.0-x86_64-linux.tar.zst", "swapped after the manifest")
+	if _, err := releaseFiles(filepath.Join(dir, manifestFile), assets, filepath.Join(dir, "SHA256SUMS")); !errors.Is(err, errAssetMismatch) {
+		t.Fatalf("err = %v, want errAssetMismatch", err)
 	}
 }

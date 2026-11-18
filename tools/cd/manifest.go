@@ -131,6 +131,7 @@ type manifestInput struct {
 	planPath string
 	tag      string
 	assets   string
+	previous string
 	baseURL  string
 	held     []string
 	systems  []string
@@ -149,7 +150,7 @@ func (in *manifestInput) build() ([]byte, error) {
 	if err := json.Unmarshal(data, &p); err != nil {
 		return nil, fmt.Errorf("decode plan: %w", err)
 	}
-	m, err := buildManifest(p, in.tag, in.assets, in.baseURL, in.systems, in.held)
+	m, err := buildManifest(p, in.tag, in.assets, in.previous, in.baseURL, in.systems, in.held)
 	if err != nil {
 		return nil, err
 	}
@@ -160,7 +161,7 @@ func (in *manifestInput) build() ([]byte, error) {
 	return append(out, '\n'), nil
 }
 
-func buildManifest(p Plan, tag, assets, baseURL string, systems, held []string) (Manifest, error) {
+func buildManifest(p Plan, tag, assets, previous, baseURL string, systems, held []string) (Manifest, error) {
 	var prev Manifest
 	if len(p.Previous) > 0 {
 		if err := json.Unmarshal(p.Previous, &prev); err != nil {
@@ -183,7 +184,7 @@ func buildManifest(p Plan, tag, assets, baseURL string, systems, held []string) 
 				}
 				return Manifest{}, fmt.Errorf("%s was not built and has no previous Release entry", b.Package)
 			}
-			entry, err := carry(old, assets, prefix)
+			entry, err := carry(old, previous, assets, prefix)
 			if err != nil {
 				return Manifest{}, fmt.Errorf("%s: %w", b.Package, err)
 			}
@@ -205,19 +206,26 @@ func buildManifest(p Plan, tag, assets, baseURL string, systems, held []string) 
 	return m, nil
 }
 
-// carry copies a previous entry into this Release: each asset must be present in
-// assets with its recorded sha256, and its URL moves under this tag.
-func carry(old Package, assets, prefix string) (Package, error) {
+// carry copies a previous entry into this Release. Each asset is read from
+// previous, the previous Release's downloaded assets, must match its recorded
+// sha256, and is copied into assets over any newly built file of the same name
+// (a package held on one system may have been rebuilt on another). Its URL
+// moves under this tag.
+func carry(old Package, previous, assets, prefix string) (Package, error) {
 	entry := old
 	entry.Systems = map[string]Asset{}
 	for system, a := range old.Systems {
 		name := path.Base(a.URL)
-		sum, err := fileSHA256(filepath.Join(assets, name))
+		src := filepath.Join(previous, name)
+		sum, err := fileSHA256(src)
 		if err != nil {
 			return Package{}, fmt.Errorf("%w %s: %w", errMissingAsset, name, err)
 		}
 		if sum != a.SHA256 {
 			return Package{}, fmt.Errorf("%w: %s has sha256 %s, previous Release recorded %s", errAssetMismatch, name, sum, a.SHA256)
+		}
+		if err := copyFile(src, filepath.Join(assets, name)); err != nil {
+			return Package{}, err
 		}
 		entry.Systems[system] = Asset{URL: prefix + name, SHA256: sum}
 	}
@@ -260,6 +268,23 @@ func releaseFiles(manifestPath, assets, sumsPath string) ([]string, error) {
 		return nil, err
 	}
 	return files, nil
+}
+
+func copyFile(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
+		return err
+	}
+	return out.Close()
 }
 
 func fileSHA256(path string) (string, error) {

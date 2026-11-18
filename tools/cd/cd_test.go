@@ -64,6 +64,7 @@ func newRepo(t *testing.T) string {
 		writeFile(t, dir, "tools/"+name+"/moon.yml", "layer: tool\n")
 		writeFile(t, dir, "tools/"+name+"/component.cue", sprintfCUE(name))
 		writeFile(t, dir, "tools/"+name+"/main.go", "package main\n")
+		writeFile(t, dir, "tools/"+name+"/go.mod", "module "+name+"\n")
 	}
 	writeFile(t, dir, "tools/lib/moon.yml", "layer: tool\n")
 	writeFile(t, dir, "tools/lib/component.cue", `release: {base: "0.1.0", artifacts: {lib: {kind: "library"}}}`+"\n")
@@ -187,7 +188,7 @@ func TestManifestSchemaShape(t *testing.T) {
 	data, _ := json.Marshal(p)
 	writeFile(t, filepath.Dir(planPath), "plan.json", string(data))
 	in := &manifestInput{
-		planPath: planPath, tag: "nebula-20261117-42", assets: assets,
+		planPath: planPath, tag: "nebula-20261117-42", assets: assets, previous: assets,
 		baseURL: "https://github.com/RigelBuild/nebula/releases/download/", held: []string{"beta"}, systems: systems,
 	}
 	out, err := in.build()

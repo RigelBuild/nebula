@@ -129,7 +129,8 @@ jobs:
               echo "$out"
               exit 1
             fi
-            if ! nix develop ".#$shell" --command moon run "$id:test" --affected=false; then
+            # moon run drops runInCI:false tasks when CI is set, so CI is unset on this command only.
+            if ! nix develop ".#$shell" --command env -u CI moon run "$id:test" --affected=false; then
               echo "::warning::$project is red on ${{ matrix.system }}; holding it"
               jq -r --arg p "$project" '.binaries[] | select(.project == $p) | .package' \
                 "$RUNNER_TEMP/plan.json" >> "$RUNNER_TEMP/held/${{ matrix.system }}"

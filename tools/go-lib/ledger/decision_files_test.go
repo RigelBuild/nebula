@@ -18,7 +18,7 @@ import (
 	"github.com/yuin/goldmark/renderer/html"
 )
 
-const testPath = "docs/designs/decisions/meta/DL-297.md"
+const testPath = "docs/decisions/meta/DL-297.md"
 
 const good = "---\n" +
 	"id: DL-297\n" +
@@ -91,7 +91,7 @@ func TestParseDecisionFile(t *testing.T) {
 		Decision:     "Exactly two docs repos | one public",
 		Status:       "Active (Matt, 2026-10-07)",
 		RecordRaw:    "../../meta/public-docs-repo.md#approach",
-		RecordPath:   "docs/designs/meta/public-docs-repo.md",
+		RecordPath:   "docs/meta/public-docs-repo.md",
 		RecordAnchor: "approach",
 		Title:        "",
 	}
@@ -101,7 +101,7 @@ func TestParseDecisionFile(t *testing.T) {
 }
 
 func TestParseDecisionFileLargeID(t *testing.T) {
-	filePath := "docs/designs/decisions/meta/DL-1000.md"
+	filePath := "docs/decisions/meta/DL-1000.md"
 	text := replaceGood("id: DL-297", "id: DL-1000")
 	text = strings.Replace(text, "Active (Matt, 2026-10-07)", "Superseded by DL-1001 (Matt, 2026-10-07)", 1)
 	got := parseForTest(t, []byte(text), filePath)
@@ -305,7 +305,7 @@ func readGolden[T any](t *testing.T, file string) T {
 func TestRenderDecisionIndex(t *testing.T) {
 	row := func(id, decision string) DecisionRow {
 		text := replaceGood("id: DL-297", "id: "+id)
-		got := parseForTest(t, []byte(text), "docs/designs/decisions/meta/"+id+".md")
+		got := parseForTest(t, []byte(text), "docs/decisions/meta/"+id+".md")
 		got.Decision = decision
 		return got
 	}
@@ -337,9 +337,9 @@ func TestRenderDecisionIndex(t *testing.T) {
 		t.Errorf("RenderDecisionIndex() depends on input order:\n%s\n%s", got, reversed)
 	}
 	late := row("DL-001", "d DL-001")
-	late.Path = "docs/designs/decisions/zeta/DL-001.md"
+	late.Path = "docs/decisions/zeta/DL-001.md"
 	early := row("DL-002", "d DL-002")
-	early.Path = "docs/designs/decisions/alpha/DL-002.md"
+	early.Path = "docs/decisions/alpha/DL-002.md"
 	lines := strings.Split(RenderDecisionIndex([]DecisionRow{early, late}), "\n")
 	if !strings.HasPrefix(lines[2], "| [DL-001]") || !strings.HasPrefix(lines[3], "| [DL-002]") {
 		t.Fatalf("index lines = %#v, want numeric id order", lines)
@@ -350,7 +350,7 @@ func TestRenderDecisionIndexFixtureGoldens(t *testing.T) {
 	golden := readGolden[fixtureIndexGolden](t, "fixture-index.json")
 	row := func(id, decision string) DecisionRow {
 		text := replaceGood("id: DL-297", "id: "+id)
-		got := parseForTest(t, []byte(text), "docs/designs/decisions/meta/"+id+".md")
+		got := parseForTest(t, []byte(text), "docs/decisions/meta/"+id+".md")
 		got.Decision = decision
 		return got
 	}

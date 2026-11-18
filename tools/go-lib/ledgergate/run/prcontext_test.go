@@ -84,12 +84,12 @@ func TestPRContextFromNonPRDispatchWithCoordinatesRunsLeg(t *testing.T) {
 func TestPRContextFromWoodpeckerCarriesFilesBodyAndBranch(t *testing.T) {
 	got := PRContextFrom(envOf(map[string]string{
 		"CI_PIPELINE_EVENT":           "pull_request",
-		"CI_PIPELINE_FILES":           `["docs/designs/ui/record.md"]`,
+		"CI_PIPELINE_FILES":           `["docs/ui/record.md"]`,
 		"CI_COMMIT_PULL_REQUEST_BODY": "Issue details",
 		"CI_COMMIT_SOURCE_BRANCH":     "feature/design",
 	}))
 	want := PRContextWoodpecker{Changed: core.Changed{
-		Files:      []string{"docs/designs/ui/record.md"},
+		Files:      []string{"docs/ui/record.md"},
 		Body:       mo.Some("Issue details"),
 		HeadBranch: "feature/design",
 	}}
@@ -102,7 +102,7 @@ func TestPRContextFromWoodpeckerCarriesFilesBodyAndBranch(t *testing.T) {
 func TestPRContextFromNonPRWoodpeckerEventSkips(t *testing.T) {
 	got := PRContextFrom(envOf(map[string]string{
 		"CI_PIPELINE_EVENT": "push",
-		"CI_PIPELINE_FILES": `["docs/designs/ui/record.md"]`,
+		"CI_PIPELINE_FILES": `["docs/ui/record.md"]`,
 	}))
 	if got != (PRContextSkip{}) {
 		t.Fatalf("PRContextFrom = %#v, want PRContextSkip", got)
@@ -222,13 +222,13 @@ func TestReadPullRequestThroughInjectedRunner(t *testing.T) {
 			return `{"headRefName":"feature/head","body":"body","isCrossRepository":true,` +
 				`"headRepositoryOwner":{"login":"contributor"},"author":{"login":"app/renovate"}}`, nil
 		}
-		return "src/main.ts\ndocs/designs/decision.md\n", nil
+		return "src/main.ts\ndocs/decision.md\n", nil
 	}
 	got, err := readPullRequestWith(context.Background(), run, "public/project", "12")
 	if err != nil {
 		t.Fatalf("readPullRequestWith error: %v", err)
 	}
-	wantFiles := []string{"src/main.ts", "docs/designs/decision.md"}
+	wantFiles := []string{"src/main.ts", "docs/decision.md"}
 	if !reflect.DeepEqual(got.Changed.Files, wantFiles) {
 		t.Fatalf("files = %v, want %v", got.Changed.Files, wantFiles)
 	}

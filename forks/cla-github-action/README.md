@@ -1,11 +1,9 @@
-# Sealed Security CLA GitHub Action
+# CLA GitHub Action
 
 > [!NOTE]
-> **Maintained by [Sealed Security](https://sealedsecurity.com) for use on [`sealedsecurity/seal`](https://github.com/sealedsecurity/seal).**
->
 > This is a fork of [`contributor-assistant/github-action`](https://github.com/contributor-assistant/github-action), which the upstream maintainer [archived in March 2026](https://github.com/contributor-assistant/github-action/commit/58daaf8). All the original code, mechanics, and contributor attribution are preserved; we maintain it here so we can pin a stable SHA and fix bugs that affect us without depending on a service we don't control.
 >
-> External users are welcome to depend on this fork, but be aware that the only support guarantee is "whatever Sealed Security needs." If you need a more general-purpose CLA action, fork ours (or fork the original) and maintain it for your own use.
+> External users are welcome to depend on this fork. If you need a more general-purpose CLA action, fork this one (or the original) and maintain it for your own use.
 
 ---
 
@@ -47,15 +45,16 @@ jobs:
     steps:
       - name: "CLA Assistant"
         if: (github.event.comment.body == 'recheck' || github.event.comment.body == 'I have read the CLA Document and I hereby sign the CLA') || github.event_name == 'pull_request_target'
-        # Pin to a specific commit on this fork's main branch.
-        uses: sealedsecurity/cla-github-action@<PIN_A_COMMIT_SHA>
+        # The standalone RigelBuild/cla-github-action repo is archived; this
+        # action now lives in RigelBuild/nebula. Pin a commit SHA.
+        uses: RigelBuild/nebula/forks/cla-github-action@<PIN_A_COMMIT_SHA>
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Only required when storing signatures in a remote repository/organization.
           # PERSONAL_ACCESS_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
         with:
           path-to-signatures: 'signatures/version1/cla.json'
-          path-to-document: 'https://github.com/sealedsecurity/seal/blob/main/CLA.md'
+          path-to-document: 'https://github.com/owner/repo/blob/main/CLA.md'
           # The signatures branch should not be protected.
           branch: 'main'
           allowlist: user1,bot*
@@ -94,7 +93,7 @@ Only required when using a remote signatures repository. Create a [Personal Acce
 
 | Name                            | Requirement | Description | Example |
 | ------------------------------- | ----------- | ----------- | ------- |
-| `path-to-document`              | required    | Full URL to the document to sign. Can be a file in the repository or a Gist. | `https://github.com/sealedsecurity/seal/blob/main/CLA.md` |
+| `path-to-document`              | required    | Full URL to the document to sign. Can be a file in the repository or a Gist. | `https://github.com/owner/repo/blob/main/CLA.md` |
 | `path-to-signatures`            | optional    | Path to the JSON signatures file in the (local or remote) repository. | `signatures/version1/cla.json` |
 | `branch`                        | optional    | Branch where signatures are stored. Default `master`. | `main` |
 | `allowlist`                     | optional    | Comma-separated users/bots that don't have to sign. Wildcards supported. | `user1,user2,bot*` |
@@ -111,7 +110,7 @@ Only required when using a remote signatures repository. Create a [Personal Acce
 
 ## Upstream attribution
 
-This action is a fork of [`contributor-assistant/github-action`](https://github.com/contributor-assistant/github-action), originally created by SAP and the CLA Assistant project. See the upstream contributor list for everyone who built and maintained this code before the upstream archival. We maintain the fork to preserve a working CLA flow for the [`sealedsecurity/seal`](https://github.com/sealedsecurity/seal) open-source repository now that the upstream is read-only.
+This action is a fork of [`contributor-assistant/github-action`](https://github.com/contributor-assistant/github-action), originally created by SAP and the CLA Assistant project. See the upstream contributor list for everyone who built and maintained this code before the upstream archival. We maintain the fork so the action can be pinned to a stable SHA now that the upstream is read-only.
 
 ## License
 

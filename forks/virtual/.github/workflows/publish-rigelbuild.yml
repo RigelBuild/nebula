@@ -76,9 +76,9 @@ jobs:
             echo "tag=latest" >> "$GITHUB_OUTPUT"
           fi
       - name: Publish @rigelbuild/solid-virtual
-        # Auth is the NPM_TOKEN secret (custodied via the orion Pulumi github
-        # stack per DL-015), not OIDC trusted publishing — hence the ignored
-        # use-trusted-publishing audit on the publish line. pnpm 11 reads the
+        # Auth is the NPM_TOKEN secret (custodied in IaC), not OIDC trusted
+        # publishing, hence the ignored use-trusted-publishing audit on the
+        # publish line. pnpm 11 reads the
         # per-registry _authToken from the user-level ~/.npmrc; the token is
         # written there rather than passed as a config env var because a
         # URL-scoped pnpm config key (//registry.npmjs.org/:_authToken) cannot
@@ -100,7 +100,7 @@ jobs:
           TAG: ${{ steps.disttag.outputs.tag }}
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
           # Force npm provenance OFF: repository.url points at upstream
-          # TanStack/virtual per DL-015, which would 422 a provenance upload
+          # TanStack/virtual, which would 422 a provenance upload
           # from the RigelBuild/virtual publishing repo. pnpm 11 reads
           # provenance only from this env key, never from any .npmrc; the
           # clean name exports fine in Actions.

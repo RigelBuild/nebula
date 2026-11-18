@@ -1,8 +1,8 @@
-# sealed fork of `woodpecker-ci/autoscaler`
+# Fork of `woodpecker-ci/autoscaler`
 
-This is a sealed-owned fork of the upstream Woodpecker autoscaler
+This is a fork of the upstream Woodpecker autoscaler
 ([`woodpecker-ci/autoscaler`](https://github.com/woodpecker-ci/autoscaler)),
-carrying a **label-aware scaling patch** (SEA-1122) on top of an otherwise
+carrying a **label-aware scaling patch** on top of an otherwise
 unmodified upstream. It is Apache-2.0, same as upstream; `LICENSE` is retained
 and the diff is kept minimal and attributable so the patch can be offered
 upstream later.
@@ -31,8 +31,7 @@ This fork makes the scaler count only **label-satisfiable** demand per pool:
   clamps and the entire create/drain/cleanup lifecycle are inherited unchanged.
 
 No Woodpecker **server** change is needed — the per-task labels are already in
-`/api/queue/info`. The design record lives in the sealed repo at
-`docs/designs/platform/label-aware-autoscaler.md` (SEA-1122).
+`/api/queue/info`.
 
 - `providers/kubernetes/` — adds a Kubernetes pod provider for scaling agent
   workloads from queue demand. Agent pods use a supplied Pod template and a
@@ -46,13 +45,13 @@ No Woodpecker **server** change is needed — the per-task labels are already in
   so rebases stay cheap.
 - **Rebase opportunistically** onto upstream releases; the minimal-diff
   discipline keeps that a small, low-conflict operation. Do not accumulate
-  sealed-isms outside the two engine touchpoints above.
+  fork-specific changes outside the two engine touchpoints above.
 
 ## Build & publish
 
 `.github/workflows/publish-image.yaml` publishes the multi-arch
 `ghcr.io/rigelbuild/autoscaler:<version>` image on a `v*.*.*-rigel.*` tag,
 or by manual `workflow_dispatch` with an explicit version.
-No `:latest` is deployed. The elastic-runner pool's IaC pins that image by
-digest. Only the scaler process changes; the pool's VPC/IAM, cloud-init,
+No `:latest` is deployed. Deployments pin that image by digest. An upgrade
+changes only the scaler process; the pool's network, IAM, cloud-init,
 labels and admin token stay the same.

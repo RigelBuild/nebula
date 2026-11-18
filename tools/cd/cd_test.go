@@ -15,12 +15,26 @@ import (
 	"testing"
 )
 
+// gitIdentity is the environment every test git runs under: a fixed author and
+// committer, and no user or system config, so a runner's git setup cannot leak in.
+var gitIdentity = []string{
+	"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t",
+	"GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1",
+}
+
+// hermeticGit puts gitIdentity in the test process environment. commitManifest
+// runs git with no per-command env, so only the process env reaches it.
+func hermeticGit(t *testing.T) {
+	t.Helper()
+	for _, kv := range gitIdentity {
+		k, v, _ := strings.Cut(kv, "=")
+		t.Setenv(k, v)
+	}
+}
+
 func testGit(t *testing.T, dir string, args ...string) string {
 	t.Helper()
-	out, err := gitRun(context.Background(), dir, []string{
-		"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t",
-		"GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1",
-	}, nil, args...)
+	out, err := gitRun(context.Background(), dir, gitIdentity, nil, args...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,6 +72,7 @@ images: {}
 // newRepo makes a repo with binary tools alpha and beta, library tool lib and fork vine.
 func newRepo(t *testing.T) string {
 	t.Helper()
+	hermeticGit(t)
 	dir := t.TempDir()
 	testGit(t, dir, "init", "-q", "-b", "main")
 	for _, name := range []string{"alpha", "beta"} {

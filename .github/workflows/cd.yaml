@@ -366,6 +366,7 @@ jobs:
           # The token reaches git as GIT_CONFIG_* env, never as a command argument.
           # printf is a shell builtin, so the token is not passed to an exec'd program.
           auth=$(printf 'x-access-token:%s' "$TAP_TOKEN" | base64 -w0)
+          echo "::add-mask::$auth"
           export GIT_CONFIG_COUNT=1
           export GIT_CONFIG_KEY_0='http.https://github.com/.extraheader'
           export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $auth"
@@ -380,7 +381,7 @@ jobs:
             echo "homebrew-tap formulae unchanged; no commit"
             exit 0
           fi
-          git -C "$tap" config user.name 'rigelbuild-nebula-release[bot]'
-          git -C "$tap" config user.email 'rigelbuild-nebula-release[bot]@users.noreply.github.com'
+          git -C "$tap" config user.name 'rigelbuild-automation[bot]'
+          git -C "$tap" config user.email 'rigelbuild-automation[bot]@users.noreply.github.com'
           git -C "$tap" commit -q -m "chore(formula): sync nebula ${RUN_NUMBER} formulae"
           git -C "$tap" push -q origin HEAD:refs/heads/main

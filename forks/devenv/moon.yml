@@ -1,7 +1,7 @@
 # yaml-language-server: $schema=https://moonrepo.dev/schemas/project.json
 #
 # Tasks run from this project's directory, which is the fork tree root.
-# The nebula devshell has no Rust toolchain, so CI skips these tasks until one is added. See RIG-10145.
+# The devshell has cargo, but not the Nix C++ headers or bindgen that nix-bindings needs. CI skips these tasks until those are added.
 layer: 'application'
 language: 'rust'
 tasks:
@@ -9,12 +9,12 @@ tasks:
     command: cargo
     args: ['build']
     options:
-      # No Rust toolchain in the nebula devshell; see RIG-10145.
+      # Blocker: nix-bindings needs Nix C++ headers and bindgen. The devshell has neither.
       runInCI: false
   test:
     command: cargo
     args: ['test']
     options:
       cache: false
-      # No Rust toolchain in the nebula devshell; see RIG-10145.
+      # Same blocker as build: nix-bindings needs Nix C++ headers and bindgen.
       runInCI: false

@@ -98,7 +98,8 @@ func TestGoMetricsMeasuresSymlinkedFile(t *testing.T) {
 	}
 	entries := values[codeshape.MetricGoStatements]["pkg/link.go"]
 	if len(entries) != 1 || entries[0].Value != 41 {
-		t.Fatalf("pkg/link.go entries = %#v; want one entry with value 41 (all: %#v)", entries, values[codeshape.MetricGoStatements])
+		t.Fatalf("pkg/link.go entries = %#v; want one entry with value 41 (all: %#v)",
+			entries, values[codeshape.MetricGoStatements])
 	}
 }
 

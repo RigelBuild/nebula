@@ -32,12 +32,26 @@
         ref-gate = "sha256-WVoZkg5kdUYlATXDDxAA/yozThBwyYSKHwLoUsuIBfg=";
       };
 
+      # Does a command's go.mod replace the shared go-lib module? The replace
+      # target is relative to tools/<name>; it counts only if it resolves to
+      # exactly tools/go-lib. A commented or longer path does not count.
+      usesGoLibFor = name: gomod:
+        let
+          resolve = target:
+            lib.concatStringsSep "/" (lib.foldl' (acc: p:
+              if p == ".." then lib.init acc else if p == "." then acc else acc ++ [ p ])
+              [ ] (lib.splitString "/" "tools/${name}/${target}"));
+          replaceTargets = map (line: lib.last (lib.splitString " => " line))
+            (lib.filter (line: lib.hasPrefix "replace " line && lib.hasInfix " => " line)
+              (lib.splitString "\n" gomod));
+        in
+        lib.any (target: resolve target == "tools/go-lib") replaceTargets;
+
       # Source for one command: its own directory, plus tools/go-lib when its
       # go.mod replaces the shared module.
       commandSource = name:
         let
-          usesGoLib = lib.hasInfix "=> ../go-lib"
-            (builtins.readFile (./tools + "/${name}/go.mod"));
+          usesGoLib = usesGoLibFor name (builtins.readFile (./tools + "/${name}/go.mod"));
         in
         lib.fileset.toSource {
           root = ./.;
@@ -47,10 +61,27 @@
         };
 
       # checkTools are extra binaries a command's tests look up on PATH.
-      # code-shape-gate's tests run the Go and TypeScript linters and check
-      # their pinned versions (golangci-lint 2.15.0, biome 2.6.5).
+      # code-shape-gate's tests run the Go and TypeScript linters and require
+      # exact versions (codeshape/toolversion.go). Fail eval when nixpkgs
+      # drifts from them, so a nix flake update cannot break the check phase
+      # silently. The input to pin is nixpkgs (nixpkgs.url in this flake).
       checkTools = {
-        code-shape-gate = pkgs: [ pkgs.golangci-lint pkgs.biome pkgs.go ];
+        code-shape-gate = pkgs:
+          let
+            requireVersion = pkg: expected:
+              if pkg.version == expected then pkg
+              else throw ''
+                ${pkg.pname} ${pkg.version} does not match the ${expected} that
+                tools/code-shape-gate/codeshape/toolversion.go requires.
+                Pin nixpkgs (inputs.nixpkgs.url in flake.nix) to a revision
+                that ships ${pkg.pname} ${expected}, or update toolversion.go
+                and this check together.
+              '';
+          in
+          [
+            (requireVersion pkgs.golangci-lint "2.15.0")
+            (requireVersion pkgs.biome "2.6.5")
+          ];
       };
 
       buildCommand = pkgs: name: vendorHash:
@@ -180,6 +211,27 @@
               echo "source build won over the release manifest" >&2
               exit 1
             }
+            touch $out
+          '';
+          # A command that replaces go-lib must ship tools/go-lib in its source.
+          go-lib-included = pkgs.runCommand "docs-bundle-go-lib-included" { } ''
+            test -f "${commandSource "dl-claim"}/tools/go-lib/go.mod" || {
+              echo "dl-claim replaces go-lib but tools/go-lib is missing from its source" >&2
+              exit 1
+            }
+            touch $out
+          '';
+          # usesGoLibFor must reject a commented replace and accept a live one.
+          # Evaluated through the same function commandSource uses.
+          go-lib-detection = pkgs.runCommand "docs-bundle-go-lib-detection" { } ''
+            ${if usesGoLibFor "fixture" "# replace github.com/x/go-lib => ../go-lib\n" then ''
+              echo "a commented replace was accepted as go-lib" >&2
+              exit 1
+            '' else ""}
+            ${if usesGoLibFor "fixture" "replace github.com/x/go-lib => ../go-lib\n" then "" else ''
+              echo "a live replace to ../go-lib was not accepted" >&2
+              exit 1
+            ''}
             touch $out
           '';
         });

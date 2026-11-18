@@ -76,6 +76,17 @@ jobs:
           oauth-client-id: ${{ vars.TS_OIDC_CLIENT_ID }}
           audience: api.tailscale.com/${{ vars.TS_OIDC_CLIENT_ID }}
           tags: tag:gha-nebula
+      # Builds every package output for this runner's system, so a stale
+      # vendorHash or FOD hash fails CI instead of merging green. Takes effect
+      # once the OIDC config is fixed (RIG-10818).
+      - name: Build packages
+        run: |
+          set -euo pipefail
+          system="$(nix eval --impure --raw --expr builtins.currentSystem)"
+          nix eval --raw ".#packages.${system}" --apply 'ps: builtins.concatStringsSep "\n" (builtins.attrNames ps)' \
+            | while read -r attr; do
+              nix build ".#packages.${system}.${attr}" --no-link
+            done
       - name: Set up Moon
         run: nix develop --command moon --version
       - name: Run affected projects

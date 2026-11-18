@@ -84,10 +84,6 @@ jobs:
           git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git" || true
           git fetch origin main
           nix develop --command moon ci --base origin/main
-      - name: Run ref-gate over the tree
-        env:
-          CGO_ENABLED: '0'
-        run: nix develop --command go -C tools/ref-gate run . --config ref-gate.config.json
   external:
     name: CI (${{ matrix.system }})
     if: >-
@@ -142,10 +138,6 @@ jobs:
           git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git" || true
           git fetch origin main
           nix develop --command moon ci --base origin/main
-      - name: Run ref-gate over the tree
-        env:
-          CGO_ENABLED: '0'
-        run: nix develop --command go -C tools/ref-gate run . --config ref-gate.config.json
   main:
     name: CI (${{ matrix.system }})
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -222,7 +214,27 @@ jobs:
           git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git" || true
           git fetch origin main
           nix develop --command moon ci --base origin/main
+  ref-gate:
+    name: ref-gate
+    if: >-
+      github.event_name == 'pull_request' ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check out approved source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version: '1.27.4'
+          cache: false
       - name: Run ref-gate over the tree
         env:
           CGO_ENABLED: '0'
-        run: nix develop --command go -C tools/ref-gate run . --config ref-gate.config.json
+        run: go -C tools/ref-gate run . --config ref-gate.config.json

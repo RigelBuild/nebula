@@ -22,7 +22,8 @@ CI reads four repository variables: `NIX_CACHE_SUBSTITUTER`,
 `NIX_CACHE_PUBLIC_KEY`, `MOON_REMOTE_CACHE_HOST`, and
 `MOON_REMOTE_CACHE_INSTANCE_NAME`. An unset variable leaves its setting empty.
 
-The `Run ref-gate over the tree` step in each job scans every tracked file with `tools/ref-gate` and fails the job on a hit. Its allowlist is `tools/ref-gate/ref-gate.config.json`.
+The `ref-gate` job scans every tracked file with `tools/ref-gate` and fails on
+a hit. Its allowlist is `tools/ref-gate/ref-gate.config.json`.
 
 ## Layout
 

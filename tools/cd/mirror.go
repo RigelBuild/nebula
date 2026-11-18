@@ -7,10 +7,20 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 )
 
 var errNoSplit = errors.New("git subtree split found no history for the prefix")
+
+// mirrorState is the outcome of one syncMirror call. The CLI prints it.
+type mirrorState string
+
+const (
+	mirrorUnchanged mirrorState = "unchanged"
+	mirrorPushed    mirrorState = "pushed"
+	mirrorSkipped   mirrorState = "skipped"
+)
 
 // mirrorOptions names one sync-out mirror: the repository path to split out,
 // the mirror's clone URL and branch, and the token that may push to it.
@@ -31,32 +41,44 @@ func subtreeSplit(ctx context.Context, repo, prefix, commit string) (string, err
 	return split, nil
 }
 
-// needsPush reports whether a mirror whose branch is at tip must take split.
-// An empty tip is a mirror branch with no commits yet.
-func needsPush(split, tip string) bool {
-	return split != tip
-}
-
-// syncMirror splits o.prefix at HEAD and pushes it to the mirror branch only when
-// the split differs from the branch tip. It reports the split and whether it pushed.
-// The push is a fast-forward: a split that does not extend the tip is rejected.
-func syncMirror(ctx context.Context, o mirrorOptions) (string, bool, error) {
+// syncMirror splits o.prefix at HEAD and moves the mirror branch to the split by
+// a fast-forward push. An equal tip is unchanged. An empty mirror takes the split.
+// A tip that is not an ancestor of the split is unrelated history: the push is
+// skipped and a warning goes to warn, because adopting that history is Matt's
+// decision (RIG-10830). The push never forces.
+func syncMirror(ctx context.Context, o mirrorOptions, warn io.Writer) (string, mirrorState, error) {
 	split, err := subtreeSplit(ctx, o.repo, o.prefix, "HEAD")
 	if err != nil {
-		return "", false, err
+		return "", "", err
 	}
 	env := authEnv(o.token)
 	tip, err := mirrorTip(ctx, o.repo, env, o.url, o.branch)
 	if err != nil {
-		return "", false, err
+		return "", "", err
 	}
-	if !needsPush(split, tip) {
-		return split, false, nil
+	if tip == split {
+		return split, mirrorUnchanged, nil
+	}
+	if tip != "" {
+		// Fetch the tip so its commit exists locally for the ancestry check.
+		if _, err := gitRun(ctx, o.repo, env, nil, "fetch", "--no-tags", "-q", o.url, "refs/heads/"+o.branch); err != nil {
+			return "", "", err
+		}
+		ancestor, err := isAncestor(ctx, o.repo, tip, split)
+		if err != nil {
+			return "", "", err
+		}
+		if !ancestor {
+			if _, err := fmt.Fprintf(warn, "::warning::mirror %s branch %s is not an ancestor of split %s: unrelated history, not pushing (RIG-10830)\n", o.url, tip, split); err != nil {
+				return "", "", err
+			}
+			return split, mirrorSkipped, nil
+		}
 	}
 	if _, err := gitRun(ctx, o.repo, env, nil, "push", o.url, split+":refs/heads/"+o.branch); err != nil {
-		return "", false, err
+		return "", "", err
 	}
-	return split, true, nil
+	return split, mirrorPushed, nil
 }
 
 // mirrorTip returns the SHA of url's branch, or "" when the branch does not exist.

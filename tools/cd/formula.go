@@ -36,7 +36,8 @@ var formulaBlocks = map[string]formulaBlock{
 
 // writeFormulas writes Formula/<tool>.rb into outDir for every manifest package
 // that has release assets. Packages without assets, such as non-binary tools,
-// get no formula. It returns the written paths in name order.
+// get no formula, and a Formula/<tool>.rb for a tool the manifest no longer
+// releases is removed. It returns the written paths in name order.
 func writeFormulas(manifestPath, outDir string) ([]string, error) {
 	data, err := os.ReadFile(manifestPath)
 	if err != nil {
@@ -55,6 +56,22 @@ func writeFormulas(manifestPath, outDir string) ([]string, error) {
 	sort.Strings(names)
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		return nil, err
+	}
+	// Drop formulae for tools no longer released, so the tap never keeps a stale one.
+	keep := make(map[string]bool, len(names))
+	for _, name := range names {
+		keep[name+".rb"] = true
+	}
+	stale, err := filepath.Glob(filepath.Join(outDir, "*.rb"))
+	if err != nil {
+		return nil, err
+	}
+	for _, file := range stale {
+		if !keep[filepath.Base(file)] {
+			if err := os.Remove(file); err != nil {
+				return nil, err
+			}
+		}
 	}
 	written := make([]string, 0, len(names))
 	for _, name := range names {
@@ -112,7 +129,8 @@ func renderFormula(name string, p Package) ([]byte, error) {
 		b.WriteString("    end\n")
 	}
 	b.WriteString("  end\n")
-	b.WriteString("\n  def install\n    bin.install Dir[\"bin/*\"]\n  end\nend\n")
+	// Release assets hold one top-level bin/ directory. Homebrew enters it before install.
+	b.WriteString("\n  def install\n    bin.install Dir[\"*\"]\n  end\nend\n")
 	return []byte(b.String()), nil
 }
 

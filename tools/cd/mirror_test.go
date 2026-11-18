@@ -3,7 +3,9 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"strings"
 	"testing"
 )
 
@@ -41,72 +43,119 @@ func TestSubtreeSplitRejectsPrefixWithoutHistory(t *testing.T) {
 	}
 }
 
-func TestNeedsPush(t *testing.T) {
-	tests := []struct {
-		name, split, tip string
-		want             bool
-	}{
-		{"empty mirror takes the split", "aaa", "", true},
-		{"mirror at the split skips the push", "aaa", "aaa", false},
-		{"moved split pushes", "bbb", "aaa", true},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := needsPush(tt.split, tt.tip); got != tt.want {
-				t.Fatalf("needsPush(%q, %q) = %t, want %t", tt.split, tt.tip, got, tt.want)
-			}
-		})
-	}
-}
-
-// TestSyncMirrorPushesOnlyWhenTheSplitMoves drives syncMirror against a bare
-// local remote: the first call pushes, an unchanged prefix is skipped, and a
-// new prefix commit pushes again.
-func TestSyncMirrorPushesOnlyWhenTheSplitMoves(t *testing.T) {
-	ctx := context.Background()
-	src := t.TempDir()
+// newSyncSource returns a repo with one commit that touches tools/jj-hooks.
+func newSyncSource(t *testing.T) (src string) {
+	t.Helper()
+	src = t.TempDir()
 	testGit(t, src, "init", "-q", "-b", "main")
 	writeFile(t, src, "tools/jj-hooks/main.go", "package main\n")
 	commitAll(t, src, "add jj-hooks")
-	remote := t.TempDir()
-	testGit(t, remote, "init", "-q", "--bare", "-b", "main")
-	o := mirrorOptions{repo: src, prefix: "tools/jj-hooks", url: remote, branch: "main"}
+	return src
+}
 
-	first, pushed, err := syncMirror(ctx, o)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !pushed {
-		t.Fatal("first sync did not push to an empty mirror")
-	}
-	if tip := testGit(t, remote, "rev-parse", "main"); tip != first {
-		t.Fatalf("mirror tip = %s, want split %s", tip, first)
-	}
+// TestSyncMirrorTakesTheSplitOnlyWhenItExtendsTheTip drives syncMirror against a
+// bare local remote with three tips: unrelated history is skipped with a warning,
+// an ancestor tip is fast-forwarded, and an equal tip is a no-op.
+func TestSyncMirrorTakesTheSplitOnlyWhenItExtendsTheTip(t *testing.T) {
+	ctx := context.Background()
 
-	again, pushed, err := syncMirror(ctx, o)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if pushed || again != first {
-		t.Fatalf("unchanged sync pushed=%t split=%s, want no push at %s", pushed, again, first)
-	}
+	t.Run("unrelated history skips the push with a warning", func(t *testing.T) {
+		src := newSyncSource(t)
+		remote := t.TempDir()
+		testGit(t, remote, "init", "-q", "--bare", "-b", "main")
+		other := t.TempDir()
+		testGit(t, other, "init", "-q", "-b", "main")
+		writeFile(t, other, "unrelated.txt", "u\n")
+		unrelatedTip := commitAll(t, other, "unrelated history")
+		testGit(t, other, "push", "-q", remote, "main")
+		o := mirrorOptions{repo: src, prefix: "tools/jj-hooks", url: remote, branch: "main"}
 
-	writeFile(t, src, "tools/jj-hooks/main.go", "package main\n// v2\n")
-	commitAll(t, src, "change jj-hooks")
-	moved, pushed, err := syncMirror(ctx, o)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !pushed || moved == first {
-		t.Fatalf("moved sync pushed=%t split=%s, want a push of a new split", pushed, moved)
-	}
-	if tip := testGit(t, remote, "rev-parse", "main"); tip != moved {
-		t.Fatalf("mirror tip = %s, want new split %s", tip, moved)
-	}
+		var warn bytes.Buffer
+		split, state, err := syncMirror(ctx, o, &warn)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if state != mirrorSkipped {
+			t.Fatalf("state = %s, want %s", state, mirrorSkipped)
+		}
+		if tip := testGit(t, remote, "rev-parse", "main"); tip != unrelatedTip {
+			t.Fatalf("mirror tip = %s, want the unrelated tip %s left alone (split %s)", tip, unrelatedTip, split)
+		}
+		if !strings.Contains(warn.String(), "RIG-10830") {
+			t.Fatalf("warning = %q, want it to name RIG-10830", warn.String())
+		}
+	})
+
+	t.Run("ancestor tip is fast-forwarded", func(t *testing.T) {
+		src := newSyncSource(t)
+		remote := t.TempDir()
+		testGit(t, remote, "init", "-q", "--bare", "-b", "main")
+		o := mirrorOptions{repo: src, prefix: "tools/jj-hooks", url: remote, branch: "main"}
+		first, _, err := syncMirror(ctx, o, &bytes.Buffer{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		writeFile(t, src, "tools/jj-hooks/main.go", "package main\n// v2\n")
+		commitAll(t, src, "change jj-hooks")
+
+		var warn bytes.Buffer
+		moved, state, err := syncMirror(ctx, o, &warn)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if state != mirrorPushed || moved == first {
+			t.Fatalf("state = %s split = %s, want a push of a new split after %s", state, moved, first)
+		}
+		if tip := testGit(t, remote, "rev-parse", "main"); tip != moved {
+			t.Fatalf("mirror tip = %s, want new split %s", tip, moved)
+		}
+		if warn.Len() != 0 {
+			t.Fatalf("fast-forward wrote a warning: %q", warn.String())
+		}
+	})
+
+	t.Run("equal tip is a no-op", func(t *testing.T) {
+		src := newSyncSource(t)
+		remote := t.TempDir()
+		testGit(t, remote, "init", "-q", "--bare", "-b", "main")
+		o := mirrorOptions{repo: src, prefix: "tools/jj-hooks", url: remote, branch: "main"}
+		first, _, err := syncMirror(ctx, o, &bytes.Buffer{})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		again, state, err := syncMirror(ctx, o, &bytes.Buffer{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if state != mirrorUnchanged || again != first {
+			t.Fatalf("state = %s split = %s, want unchanged at %s", state, again, first)
+		}
+	})
 }
 
 func TestAuthEnvIsEmptyWithoutToken(t *testing.T) {
 	if env := authEnv(""); env != nil {
 		t.Fatalf("authEnv(\"\") = %v, want nil", env)
+	}
+}
+
+// TestAuthEnvPassesTokenThroughGitConfigOnly checks L2 and M2: a non-empty token
+// reaches git as a GIT_CONFIG_* header and never as a command argument.
+func TestAuthEnvPassesTokenThroughGitConfigOnly(t *testing.T) {
+	const token = "ghs_exampletoken"
+	env := authEnv(token)
+	want := []string{
+		"GIT_CONFIG_COUNT=1",
+		"GIT_CONFIG_KEY_0=http.https://github.com/.extraheader",
+		"GIT_CONFIG_VALUE_0=AUTHORIZATION: basic eC1hY2Nlc3MtdG9rZW46Z2hzX2V4YW1wbGV0b2tlbg==",
+	}
+	if len(env) != len(want) {
+		t.Fatalf("authEnv(token) = %v, want %v", env, want)
+	}
+	for i := range want {
+		if env[i] != want[i] {
+			t.Fatalf("authEnv(token)[%d] = %q, want %q", i, env[i], want[i])
+		}
 	}
 }

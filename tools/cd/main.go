@@ -22,7 +22,7 @@ func main() {
 }
 
 func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
-	err := dispatch(ctx, args, stdout)
+	err := dispatch(ctx, args, stdout, stderr)
 	if err != nil {
 		fmt.Fprintln(stderr, "cd:", err)
 		return 1
@@ -30,7 +30,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-func dispatch(ctx context.Context, args []string, stdout io.Writer) error {
+func dispatch(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
 		return errUsage
 	}
@@ -139,15 +139,11 @@ func dispatch(ctx context.Context, args []string, stdout io.Writer) error {
 		if *prefix == "" || *url == "" {
 			return errUsage
 		}
-		split, pushed, err := syncMirror(ctx, mirrorOptions{
+		split, state, err := syncMirror(ctx, mirrorOptions{
 			repo: *repo, prefix: *prefix, url: *url, branch: *branch, token: os.Getenv("MIRROR_TOKEN"),
-		})
+		}, stderr)
 		if err != nil {
 			return err
-		}
-		state := "unchanged"
-		if pushed {
-			state = "pushed"
 		}
 		_, err = fmt.Fprintf(stdout, "%s %s %s\n", state, *url, split)
 		return err

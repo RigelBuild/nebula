@@ -1,12 +1,12 @@
-# jj-hp gate: devenv worktree build-image failure — empirical root cause
+# jj-hp gate: devenv worktree image-build failure — empirical root cause
 
 Empirical investigation (jj-hooks lane; carried over at extraction as the findings sibling
 of the bootstrap pre-warm design record,
 `docs/designs/tools/jj-hp-gate-worktree-devenv-bootstrap.md`).
-Peer `org/service-owner` reported: pre-push `hk` gate's `ci:build-image-*-amd64`
+Peer `org/service-owner` reported: pre-push `hk` gate's parallel image-build
 legs fail in the ephemeral `/tmp/jj-hooks-worktree-*` worktree with "Failed to
 evaluate devenv configuration" at `.devenv/bootstrap/default.nix`; blocked a
-downstream tracker issue; worked around with `jj-vine --no-hooks`.
+downstream issue; worked around with `jj-vine --no-hooks`.
 
 ## Peer's stated root cause — DISPROVEN
 
@@ -34,20 +34,19 @@ missing-file import.
 - **devenv does NOT rewrite `bootstrap/default.nix` when present** (md5 + mtime
   stable across repeated evals). So a materialized bootstrap → no regen.
 - **The consumer's existing race mitigation is INEFFECTIVE.** Its per-leg dotfile override
-  (`devenvDotfile`) sets a per-leg `DEVENV_DOTFILE=/tmp/<consumer>-ci-devenv-<attr>-<system>`
-  specifically to stop "two parallel legs race on `bootstrap/default.nix` and one
-  fails its import eval." PROVEN not to work: bootstrap regenerates under
+  (a per-leg `DEVENV_DOTFILE` pointing at a `/tmp` directory) was meant to stop parallel
+  legs racing on the bootstrap file. PROVEN not to work: bootstrap regenerates under
   `<repo>/.devenv/bootstrap` regardless of `DEVENV_DOTFILE` (a real
   image-build leg left bootstrap in `$WT/.devenv/bootstrap`, the
   `/tmp` override dir never got one). So the intended isolation does not happen.
-- **Mechanism:** `moon ci` (via hk) runs multiple affected `build-image-*-amd64`
+- **Mechanism:** `moon ci` (via hk) runs multiple affected image-build
   legs IN PARALLEL inside the ONE jj-hp worktree. On a COLD store (a
   changed image input → wide eval windows), the legs cold-regenerate the SAME
   `<worktree>/.devenv/bootstrap/default.nix` concurrently; the loser reads a
   transient/partial state → "Failed to evaluate devenv configuration." A normal
   checkout has bootstrap pre-materialized → no regen → no race. Matches all
   three observed facts: worktree-only, parallel-legs-only ("only the 2
-  build-image legs failed"), cold-store-triggered.
+  image-build legs failed"), cold-store-triggered.
 
 ## Honesty caveat
 
@@ -80,6 +79,6 @@ repro would upgrade this from strongly-grounded to demonstrated.
 - jj-hp worktree creation: `src/worktree.rs:40-55` (detached, no `.devenv/`
   since gitignored: `.gitignore:18` `.devenv*`).
 - devenv self-regen + not-rewritten-when-present: proven empirically.
-- Consumer ineffective mitigation: its per-leg dotfile override in the image-build script.
-- Consumer parallel legs in one gate: its `build-image-*` moon tasks, run by
+- Consumer ineffective mitigation: its per-leg dotfile override, described above.
+- Consumer parallel legs in one gate: its image-build moon tasks, run by
   `moon ci`.

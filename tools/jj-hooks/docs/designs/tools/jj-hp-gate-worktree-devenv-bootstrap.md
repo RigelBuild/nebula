@@ -7,18 +7,17 @@ Tracking issue: `mattwilkinsonn/jj-hooks#13`. Crate: `jj-hooks` (this repo, the
 standalone `jj-hp` binary), released, currently v0.3.11. This record and its
 empirical findings sibling
 (`docs/designs/tools/jj-hp-gate-worktree-devenv-bootstrap-findings.md`) were
-carried over when jj-hooks was extracted from the `mattwilkinsonn/zireael`
-monorepo back to standalone; the two sibling records it composes with — the
-gate-cache + auto-allow record (monorepo #294) and the v0.3.9 repo-env
-mechanism (monorepo #289) — remain in the zireael monorepo history and were not
-carried.
+carried over when jj-hooks was extracted from an earlier monorepo back to
+standalone; the two sibling records it composes with — the gate-cache +
+auto-allow record and the v0.3.9 repo-env mechanism — remain in that monorepo's
+history and were not carried.
 
 ## Problem / Intent
 
 The jj-hp pre-push gate runs the consumer repo's configured hk gate command (for
 example `moon ci`) inside an ephemeral detached worktree (then under
 `/tmp/jj-hooks-worktree-*`). When a consumer repo's gate fans out
-multiple parallel `devenv` evaluations (its `ci:build-image-*-amd64` legs),
+multiple parallel `devenv` evaluations (its parallel image-build legs),
 the legs intermittently fail with "Failed to evaluate devenv configuration" at
 `<worktree>/.devenv/bootstrap/default.nix` — worktree-only, parallel-only,
 cold-store-only. Root cause (empirically established, full writeup in the
@@ -79,15 +78,15 @@ devenv-in-use and cleanly no-op otherwise.
 - **Single-crate version number** — bump the one `[package].version` field
   (`Cargo.toml:4`, currently `0.3.11`). The standalone is a single crate, not a
   workspace: there is no `[workspace.package]` field and no internal path-dep
-  pin to rewrite (the monorepo's jj-gt→jj-hooks path dep is now a crates.io
+  pin to rewrite (the earlier monorepo's jj-gt→jj-hooks path dep is now a crates.io
   version dep in the separate jj-gt repo). **Markdownlint-clean** under
   `.markdownlint-cli2.jsonc` (MD013 off).
 
 ## Evidence base
 
 All file:line references are to this standalone repo's `src/`/`tests/`/root
-(the `src/**` tree is a byte-identical re-home of the monorepo's
-`tools/jj-hooks/`, so the line numbers carry over unchanged). The empirical
+(the `src/**` tree is a byte-identical re-home of an earlier monorepo's copy of
+this crate, so the line numbers carry over unchanged). The empirical
 devenv findings are in the findings sibling
 (`docs/designs/tools/jj-hp-gate-worktree-devenv-bootstrap-findings.md`) and are
 cited as established.
@@ -212,7 +211,7 @@ cited as established.
       );
   ```
 
-  And the newer twin `gate_cache.rs` (from monorepo #294/T1): opt-out read
+  And the newer twin `gate_cache.rs` (from the earlier monorepo's T1 change): opt-out read
   once at the entrypoints (`gate_cache_enabled`, `gate_cache.rs:95-99`),
   decision cached process-globally keyed by canonicalized `workspace_root`
   (`gate_cache.rs:33-47`), applied by a low-level helper with no `JjCli` in
@@ -570,7 +569,7 @@ Test cycle (red→green, existing harness):
   recording hook (the `:696-707` per-child-file pattern) asserts every
   parallel worktree got its own materialized bootstrap.
 
-Acceptance: driver-run against a real consumer repo — a gate run of its `ci:build-image-*-amd64`
+Acceptance: driver-run against a real consumer repo — a gate run of its parallel image-build
 fan-out in a jj-hp worktree finds `.devenv/bootstrap` pre-materialized (no
 leg regenerates it: md5+mtime of `bootstrap/default.nix` stable across the
 run), and repeated gate runs no longer reproduce "Failed to evaluate devenv
@@ -592,7 +591,7 @@ Test cycle: `cargo fmt -p jj-hooks -- --check`, `cargo clippy -p jj-hooks
 --all-targets -- -D warnings`, `cargo nextest run -p jj-hooks`, markdownlint
 on touched docs — all green (`rule://pre-finish-checks`). Driver-run
 acceptance: the T1 consumer scenario re-verified on the released binary, and the
-consumer's internal tracker issue unblocks without `--no-hooks`.
+consumer's blocked gate passes without `--no-hooks`.
 
 ## Tasks
 
@@ -632,7 +631,7 @@ with the designed-against assumption:
   skips and the first gate keeps today's cold-regen race exposure — exactly
   the status quo, never worse. Designed-against assumption: this population is
   effectively empty (direnv evaluates on first shell entry; OMP auto-allows;
-  jj-hp's own auto-allow from monorepo #294 resolves blocked clones). If Matt wants
+  jj-hp's own auto-allow from the earlier monorepo's gate-cache change resolves blocked clones). If Matt wants
   that edge closed too, the follow-up would be a serialized warming
   `devenv shell -- true`-style eval behind the same opt-out — deliberately NOT
   in this record (adds a devenv-binary PATH dependency + a multi-second

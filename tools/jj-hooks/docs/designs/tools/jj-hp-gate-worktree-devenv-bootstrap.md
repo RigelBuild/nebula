@@ -15,10 +15,10 @@ carried.
 
 ## Problem / Intent
 
-The jj-hp pre-push gate runs the consumer repo's configured hk gate command (in
-orion, `moon ci`) inside an ephemeral detached worktree (then under
+The jj-hp pre-push gate runs the consumer repo's configured hk gate command (for
+example `moon ci`) inside an ephemeral detached worktree (then under
 `/tmp/jj-hooks-worktree-*`). When a consumer repo's gate fans out
-multiple parallel `devenv` evaluations (orion's `ci:build-image-*-amd64` legs),
+multiple parallel `devenv` evaluations (its `ci:build-image-*-amd64` legs),
 the legs intermittently fail with "Failed to evaluate devenv configuration" at
 `<worktree>/.devenv/bootstrap/default.nix` — worktree-only, parallel-only,
 cold-store-only. Root cause (empirically established, full writeup in the
@@ -32,7 +32,7 @@ jj-hp pre-materializes `.devenv/bootstrap` in the gate worktree BEFORE any
 hook runner fires, so the worktree behaves like a normal checkout.
 
 Matt ruled Option C (2026-08-23, frozen): jj-hooks pre-warms bootstrap
-universally (this record); the orion lane separately removes its ineffective
+universally (this record); the consumer repo separately removes its ineffective
 `DEVENV_DOTFILE` mitigation (out of scope here). Hard constraint from the same
 ruling: "jj-hp isn't always used with devenv" — the pre-warm MUST detect
 devenv-in-use and cleanly no-op otherwise.
@@ -306,7 +306,7 @@ evaluated at least once). Two distinct outcomes:
 sources not at the repo root) is not detected and keeps the status quo. This is
 a false-negative, never a false-positive — a miss = today's cold-regen
 behavior, never worse — so it's non-load-bearing (the only known racing
-consumer, orion, is root-level). Noted so "universal" is understood as
+consumer is root-level). Noted so "universal" is understood as
 "every root-level devenv consumer," not literally every layout.
 
 ### Fork 2 — materialization: `std::fs` copy; skip when the primary has none
@@ -459,7 +459,7 @@ established convention, not new surface.
 ### Landing order
 
 T1 (mechanism + opt-out + tests) is the fix; T2 closes docs + release. The
-orion-lane `DEVENV_DOTFILE` removal is out of scope (Matt's Option C ruling
+consumer-lane `DEVENV_DOTFILE` removal is out of scope (Matt's Option C ruling
 splits it to that lane).
 
 ## Plan
@@ -570,7 +570,7 @@ Test cycle (red→green, existing harness):
   recording hook (the `:696-707` per-child-file pattern) asserts every
   parallel worktree got its own materialized bootstrap.
 
-Acceptance: driver-run on orion — a gate run of the `ci:build-image-*-amd64`
+Acceptance: driver-run against a real consumer repo — a gate run of its `ci:build-image-*-amd64`
 fan-out in a jj-hp worktree finds `.devenv/bootstrap` pre-materialized (no
 leg regenerates it: md5+mtime of `bootstrap/default.nix` stable across the
 run), and repeated gate runs no longer reproduce "Failed to evaluate devenv
@@ -591,8 +591,8 @@ Interfaces: none new — docs + the one version field.
 Test cycle: `cargo fmt -p jj-hooks -- --check`, `cargo clippy -p jj-hooks
 --all-targets -- -D warnings`, `cargo nextest run -p jj-hooks`, markdownlint
 on touched docs — all green (`rule://pre-finish-checks`). Driver-run
-acceptance: the T1 orion scenario re-verified on the released binary, and the
-orion lane unblocks its internal tracker issue (RIG-2569) without `--no-hooks`.
+acceptance: the T1 consumer scenario re-verified on the released binary, and the
+consumer's internal tracker issue unblocks without `--no-hooks`.
 
 ## Tasks
 
@@ -604,7 +604,7 @@ orion lane unblocks its internal tracker issue (RIG-2569) without `--no-hooks`.
   `Worktree::create` and gated by `JJ_HOOKS_NO_BOOTSTRAP_PREWARM` /
   `jj-hooks.bootstrap-prewarm` (strict parse, read once at the three
   entrypoints); unit + integration + non-regression + fixup-purity + batch
-  tests; driver acceptance on orion
+  tests; driver acceptance on a real consumer repo
 - [ ] T2 — README (mechanism + opt-out) + changelog (#13) + version bump to
   `0.3.12` (`Cargo.toml:4`); full fmt/clippy/nextest/markdownlint
 

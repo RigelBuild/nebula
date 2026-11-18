@@ -84,6 +84,10 @@ jobs:
           git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git" || true
           git fetch origin main
           nix develop --command moon ci --base origin/main
+      - name: Run ref-gate over the tree
+        env:
+          CGO_ENABLED: '0'
+        run: nix develop --command go -C tools/ref-gate run . --config ref-gate.config.json
   external:
     name: CI (${{ matrix.system }})
     if: >-
@@ -138,6 +142,10 @@ jobs:
           git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git" || true
           git fetch origin main
           nix develop --command moon ci --base origin/main
+      - name: Run ref-gate over the tree
+        env:
+          CGO_ENABLED: '0'
+        run: nix develop --command go -C tools/ref-gate run . --config ref-gate.config.json
   main:
     name: CI (${{ matrix.system }})
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -214,3 +222,7 @@ jobs:
           git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git" || true
           git fetch origin main
           nix develop --command moon ci --base origin/main
+      - name: Run ref-gate over the tree
+        env:
+          CGO_ENABLED: '0'
+        run: nix develop --command go -C tools/ref-gate run . --config ref-gate.config.json

@@ -76,7 +76,7 @@ jobs:
             echo "tag=latest" >> "$GITHUB_OUTPUT"
           fi
       - name: Publish @rigelbuild/solid-virtual
-        # Auth is the NPM_TOKEN secret (custodied via the orion Pulumi github
+        # Auth is the NPM_TOKEN secret (custodied via the private Pulumi github
         # stack per DL-015), not OIDC trusted publishing — hence the ignored
         # use-trusted-publishing audit on the publish line. pnpm 11 reads the
         # per-registry _authToken from the user-level ~/.npmrc; the token is

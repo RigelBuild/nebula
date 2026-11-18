@@ -20,13 +20,28 @@ import (
 
 const manifestFile = "release-manifest.json"
 
+// Artifact kinds in component.cue. kindGo is built with go build in the project
+// directory; kindNix is built with nix build .#<attr> in the project directory.
+const (
+	kindGo  = "binary"
+	kindNix = "nix"
+)
+
 var errNotDescendant = errors.New("HEAD does not descend from the previous release source")
+var (
+	errNixAttr  = errors.New("nix artifact needs an attr")
+	errNixFlake = errors.New("nix artifact project has no flake.nix")
+)
 
 // Binary is one releasable binary package declared by a tool's component.cue.
 type Binary struct {
 	Package string `json:"package"`
 	Project string `json:"project"`
 	Version string `json:"version"`
+	// Kind is how CD builds the package: kindGo or kindNix.
+	Kind string `json:"kind"`
+	// Attr is the flake attribute a kindNix package builds: nix build .#<attr>.
+	Attr string `json:"attr,omitempty"`
 	// UpstreamRev is the imported upstream commit, for forks only.
 	UpstreamRev string   `json:"upstreamRev,omitempty"`
 	Binaries    []string `json:"binaries"`
@@ -62,6 +77,10 @@ func makePlan(ctx context.Context, repo string) (Plan, error) {
 	var binaries []Binary
 	notBuiltProjects := map[string]bool{}
 	for _, b := range listed {
+		if b.Kind == kindNix {
+			binaries = append(binaries, b)
+			continue
+		}
 		if _, err := os.Stat(filepath.Join(repo, b.Project, "go.mod")); err != nil {
 			if !errors.Is(err, os.ErrNotExist) {
 				return Plan{}, err
@@ -166,6 +185,7 @@ type component struct {
 		Base      string `json:"base"`
 		Artifacts map[string]struct {
 			Kind     string   `json:"kind"`
+			Attr     string   `json:"attr"`
 			Binaries []string `json:"binaries"`
 		} `json:"artifacts"`
 	} `json:"release"`
@@ -202,13 +222,21 @@ func listBinaries(repo string) ([]Binary, error) {
 			}
 		}
 		for name, a := range c.Release.Artifacts {
-			if a.Kind != "binary" {
+			if a.Kind != kindGo && a.Kind != kindNix {
 				continue
 			}
 			if c.Release.Base == "" || len(a.Binaries) == 0 {
 				return nil, fmt.Errorf("%s: binary artifact %q needs release.base and binaries", m, name)
 			}
-			out = append(out, Binary{Package: name, Project: project, Version: c.Release.Base, UpstreamRev: upstreamRev, Binaries: a.Binaries})
+			if a.Kind == kindNix {
+				if a.Attr == "" {
+					return nil, fmt.Errorf("%w: %s: artifact %q", errNixAttr, m, name)
+				}
+				if _, err := os.Stat(filepath.Join(filepath.Dir(m), "flake.nix")); err != nil {
+					return nil, fmt.Errorf("%w: %s: %w", errNixFlake, m, err)
+				}
+			}
+			out = append(out, Binary{Package: name, Project: project, Version: c.Release.Base, Kind: a.Kind, Attr: a.Attr, UpstreamRev: upstreamRev, Binaries: a.Binaries})
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Package < out[j].Package })

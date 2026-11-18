@@ -145,10 +145,20 @@ jobs:
             version=$(jq -r .version <<<"$b")
             stage="$RUNNER_TEMP/stage/$pkg"
             mkdir -p "$stage/bin"
-            for name in $(jq -r '.binaries[]' <<<"$b"); do
-              go -C "$project" build -trimpath -o "$stage/bin/$name" .
-              "$RUNNER_TEMP/cd" check-asset -system "$SYSTEM" "$stage/bin/$name"
-            done
+            kind=$(jq -r .kind <<<"$b")
+            if [ "$kind" = nix ]; then
+              # Nix-built: nix build .#<attr> in the project's flake. Its bin/ holds the binaries.
+              # The T6 check-asset gate is for Go's static builds; a Nix build is portable by its flake.
+              nixOut=$(nix build --no-link --print-out-paths "./$project#$(jq -r .attr <<<"$b")")
+              for name in $(jq -r '.binaries[]' <<<"$b"); do
+                install -m 0755 "$nixOut/bin/$name" "$stage/bin/$name"
+              done
+            else
+              for name in $(jq -r '.binaries[]' <<<"$b"); do
+                go -C "$project" build -trimpath -o "$stage/bin/$name" .
+                "$RUNNER_TEMP/cd" check-asset -system "$SYSTEM" "$stage/bin/$name"
+              done
+            fi
             tar -C "$stage" -cf - bin | zstd -19 -q -o "$RUNNER_TEMP/assets/$pkg-$version-$SYSTEM.tar.zst"
           done
       - name: Find built assets
@@ -327,9 +337,9 @@ jobs:
             echo "jj-hooks Release-asset copy skipped: the mirror was not updated (RIG-10830)"
             exit 0
           fi
-          # Runs only when the manifest has per-system jj-hooks assets. Today it has
-          # none: jj-hooks is notBuilt until RIG-10817, so the copy is skipped.
-          if ! git show "$COMMIT:release-manifest.json" | jq -e '(.["jj-hooks"] // {}) | [.["x86_64-linux"], .["aarch64-linux"], .["aarch64-darwin"]] | any(type == "object")' >/dev/null; then
+          # Runs only when the manifest has per-system jj-hooks-bin assets (the Nix-built
+          # jj-hooks package in tools/jj-hooks/component.cue).
+          if ! git show "$COMMIT:release-manifest.json" | jq -e '(.["jj-hooks-bin"] // {}) | [.["x86_64-linux"], .["aarch64-linux"], .["aarch64-darwin"]] | any(type == "object")' >/dev/null; then
             echo "jj-hooks Release-asset copy skipped: no per-system jj-hooks assets in release-manifest.json"
             exit 0
           fi

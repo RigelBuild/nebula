@@ -54,6 +54,9 @@ func TestExportExcludesNebulaOwnedFiles(t *testing.T) {
 			}
 			writeTestFile(t, fixture.root, "forks/widget/upstream.json", string(encoded)+"\n")
 		}},
+		{name: "component.cue", edit: func(t *testing.T, fixture *syncFixture) {
+			writeTestFile(t, fixture.root, "forks/widget/component.cue", "id: \"widget\"\n")
+		}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			fixture := newSyncFixture(t, false)

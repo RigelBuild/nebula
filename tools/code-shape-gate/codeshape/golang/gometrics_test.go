@@ -77,31 +77,28 @@ func TestGoMetricsThroughSymlinkedRoot(t *testing.T) {
 	}
 }
 
-// TestRepositoryRelativeKeepsBaseName checks that repositoryRelative resolves only the directory. A reported path
-// whose parent directory is a symlink must map to the resolved directory with its own base name kept. Resolving the
-// whole path would replace the base name with the target's name. The gate never measures a symlinked .go file, so
-// this is a direct unit check of the helper, not a GoMetrics run.
-func TestRepositoryRelativeKeepsBaseName(t *testing.T) {
-	root, err := filepath.EvalSymlinks(t.TempDir())
+// TestGoMetricsMeasuresSymlinkedFile measures a Go file that is a relative symlink inside the repository. The
+// reported path must keep the symlink's own name (pkg/link.go), not the target's name. Resolving the whole path
+// would report it under the target's name and lose the measurement, so the value would be 0 instead of 41.
+func TestGoMetricsMeasuresSymlinkedFile(t *testing.T) {
+	root := goTestRepo(t, "package p\nfunc Parent() {}\n")
+	trackedFile(t, root, "shared/target.go", "package p\nfunc Large() {\n"+strings.Repeat("println(1)\n", 41)+"}\n")
+	err := os.MkdirAll(filepath.Join(root, "pkg"), 0o755)
 	if err != nil {
 		t.Fatal(err)
 	}
-	realDir := filepath.Join(root, "real")
-	err = os.Mkdir(realDir, 0o755)
-	if err != nil {
-		t.Fatal(err)
-	}
-	linkDir := filepath.Join(root, "linked")
-	err = os.Symlink(realDir, linkDir)
+	err = os.Symlink(filepath.Join("..", "shared", "target.go"), filepath.Join(root, "pkg", "link.go"))
 	if err != nil {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
-	got, err := repositoryRelative(root, filepath.Join(linkDir, "x.go"))
+	commitFiles(t, root)
+	values, _, err := GoMetrics(t.Context(), root, testConfig())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != filepath.Join("real", "x.go") {
-		t.Fatalf("repositoryRelative = %q; want %q", got, filepath.Join("real", "x.go"))
+	entries := values[codeshape.MetricGoStatements]["pkg/link.go"]
+	if len(entries) != 1 || entries[0].Value != 41 {
+		t.Fatalf("pkg/link.go entries = %#v; want one entry with value 41 (all: %#v)", entries, values[codeshape.MetricGoStatements])
 	}
 }
 

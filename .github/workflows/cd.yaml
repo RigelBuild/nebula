@@ -178,6 +178,9 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    outputs:
+      tag: ${{ steps.publish.outputs.tag }}
+      commit: ${{ steps.publish.outputs.commit }}
     steps:
       - name: Mint release App token
         id: app
@@ -266,3 +269,103 @@ jobs:
           if [ -n "$not_built" ]; then notes="$notes"$'\n\n'"Not built by CD (no build step for this toolchain): $not_built"; fi
           gh release create "$TAG" --verify-tag --title "$TAG" --notes "$notes" \
             "$RUNNER_TEMP/release-manifest.json" "$RUNNER_TEMP/SHA256SUMS" "${files[@]}"
+      - name: Mint release App token for homebrew-tap
+        id: tap
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510
+        with:
+          app-id: ${{ vars.NEBULA_RELEASE_APP_ID }}
+          private-key: ${{ secrets.NEBULA_RELEASE_APP_PRIVATE_KEY }}
+          owner: RigelBuild
+          repositories: homebrew-tap
+          permission-contents: write
+      - name: Commit Homebrew formulae to homebrew-tap
+        env:
+          CGO_ENABLED: '0'
+          COMMIT: ${{ steps.publish.outputs.commit }}
+          GH_TOKEN: ${{ steps.tap.outputs.token }}
+          RUN_NUMBER: ${{ github.run_number }}
+        run: |
+          # Writes Formula/<tool>.rb from this Release's manifest; commits only on change.
+          git show "$COMMIT:release-manifest.json" > "$RUNNER_TEMP/release-manifest.json"
+          go -C tools/cd build -o "$RUNNER_TEMP/cd" .
+          tap="$RUNNER_TEMP/homebrew-tap"
+          git init -q "$tap"
+          git -C "$tap" remote add origin https://github.com/RigelBuild/homebrew-tap.git
+          # The token reaches git through the clone's config, never a command line.
+          git -C "$tap" config "http.https://github.com/.extraheader" "AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
+          git -C "$tap" fetch -q --depth 1 origin main
+          git -C "$tap" checkout -q -B main FETCH_HEAD
+          "$RUNNER_TEMP/cd" formula -manifest "$RUNNER_TEMP/release-manifest.json" -out "$tap/Formula"
+          git -C "$tap" add -A Formula
+          if git -C "$tap" diff --cached --quiet; then
+            echo "homebrew-tap formulae unchanged; no commit"
+            exit 0
+          fi
+          git -C "$tap" config user.name 'rigelbuild-nebula-release[bot]'
+          git -C "$tap" config user.email 'rigelbuild-nebula-release[bot]@users.noreply.github.com'
+          git -C "$tap" commit -q -m "chore(formula): sync nebula ${RUN_NUMBER} formulae"
+          git -C "$tap" push -q origin HEAD:refs/heads/main
+
+  sync-out:
+    name: Sync out (jj-hooks)
+    needs: release
+    environment: main
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check out released commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ needs.release.outputs.commit }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version: '1.27.4'
+          cache: false
+      - name: Mint sync App token
+        id: sync
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510
+        with:
+          app-id: ${{ vars.NEBULA_SYNC_APP_ID }}
+          private-key: ${{ secrets.NEBULA_SYNC_APP_PRIVATE_KEY }}
+          owner: mattwilkinsonn
+          repositories: jj-hooks
+          permission-contents: write
+      - name: Mirror jj-hooks
+        id: mirror
+        env:
+          CGO_ENABLED: '0'
+          MIRROR_TOKEN: ${{ steps.sync.outputs.token }}
+        run: |
+          # Pushes the tools/jj-hooks split only when it differs from the mirror tip.
+          go -C tools/cd build -o "$RUNNER_TEMP/cd" .
+          "$RUNNER_TEMP/cd" mirror -repo . -prefix tools/jj-hooks \
+            -url https://github.com/mattwilkinsonn/jj-hooks.git -branch main > "$RUNNER_TEMP/mirror.txt"
+          cat "$RUNNER_TEMP/mirror.txt"
+          echo "split=$(awk '{print $3}' "$RUNNER_TEMP/mirror.txt")" >> "$GITHUB_OUTPUT"
+      - name: Copy jj-hooks Release assets to the mirror
+        env:
+          COMMIT: ${{ needs.release.outputs.commit }}
+          NEBULA_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.sync.outputs.token }}
+          TAG: ${{ needs.release.outputs.tag }}
+          SPLIT: ${{ steps.mirror.outputs.split }}
+        run: |
+          # Runs only when the manifest has a jj-hooks entry. Today it has none:
+          # jj-hooks is notBuilt until RIG-10817, so the copy is skipped.
+          if ! git show "$COMMIT:release-manifest.json" | jq -e '.["jj-hooks"]' >/dev/null; then
+            echo "jj-hooks Release-asset copy skipped: no jj-hooks entry in release-manifest.json"
+            exit 0
+          fi
+          if gh release view "$TAG" --repo mattwilkinsonn/jj-hooks >/dev/null 2>&1; then
+            echo "jj-hooks Release $TAG already exists; no copy"
+            exit 0
+          fi
+          assets="$RUNNER_TEMP/jj-hooks-assets"
+          mkdir -p "$assets"
+          GH_TOKEN="$NEBULA_TOKEN" gh release download "$TAG" --repo RigelBuild/nebula --pattern 'jj-hooks-*' --dir "$assets"
+          gh release create "$TAG" --repo mattwilkinsonn/jj-hooks --target "$SPLIT" \
+            --title "$TAG" --notes "Copied from RigelBuild/nebula $TAG" "$assets"/*

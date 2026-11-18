@@ -21,6 +21,14 @@
 	"ignore": [],
 	"carveOutPaths": ["tools/ref-gate/ref-gate.config.json"],
 	"carveOutPrefixes": [],
-	"allowlist": {},
+	"allowlist": {
+		"forks/oh-my-pi/packages/catalog/src/models.json": "oh-my-pi fixture: model ids, not a private-repo reference.",
+		"forks/oh-my-pi/packages/mnemopi/test/beam-recall-unit.test.ts": "oh-my-pi fixture: recall test text, not a private-repo reference.",
+		"forks/oh-my-pi/packages/mnemopi/test/recall-precision-regressions.test.ts": "oh-my-pi fixture: recall test text, not a private-repo reference.",
+		"forks/oh-my-pi/crates/pi-natives/tools/cache/deepseek-v3.tokenizer.json": "oh-my-pi fixture: tokenizer vocabulary, not a private-repo reference.",
+		"forks/oh-my-pi/crates/pi-natives/tools/cache/deepseek-v4.tokenizer.json": "oh-my-pi fixture: tokenizer vocabulary, not a private-repo reference.",
+		"forks/oh-my-pi/crates/pi-natives/tools/cache/glm-5.tokenizer.json": "oh-my-pi fixture: tokenizer vocabulary, not a private-repo reference.",
+		"forks/oh-my-pi/crates/pi-natives/tools/cache/qwen3.8.tokenizer.json": "oh-my-pi fixture: tokenizer vocabulary, not a private-repo reference."
+	},
 	"remediationDoc": "README.md"
 }

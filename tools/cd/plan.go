@@ -24,10 +24,12 @@ var errNotDescendant = errors.New("HEAD does not descend from the previous relea
 
 // Binary is one releasable binary package declared by a tool's component.cue.
 type Binary struct {
-	Package  string   `json:"package"`
-	Project  string   `json:"project"`
-	Version  string   `json:"version"`
-	Binaries []string `json:"binaries"`
+	Package string `json:"package"`
+	Project string `json:"project"`
+	Version string `json:"version"`
+	// UpstreamRev is the imported upstream commit, for forks only.
+	UpstreamRev string   `json:"upstreamRev,omitempty"`
+	Binaries    []string `json:"binaries"`
 }
 
 // Plan is the batch job's build plan and the previous Release it builds on.
@@ -55,22 +57,14 @@ func makePlan(ctx context.Context, repo string) (Plan, error) {
 	}
 	p := Plan{Source: head, Binaries: binaries}
 
-	tags, err := git(ctx, repo, "tag", "--list", "nebula-*", "--sort=-v:refname")
+	tag, prev, raw, err := newestRelease(ctx, repo)
 	if err != nil {
 		return Plan{}, err
 	}
-	if tags == "" {
+	if tag == "" {
 		p.Projects = all
 	} else {
-		p.PreviousTag = lines(tags)[0]
-		raw, err := git(ctx, repo, "show", p.PreviousTag+":"+manifestFile)
-		if err != nil {
-			return Plan{}, err
-		}
-		var prev Manifest
-		if err := json.Unmarshal([]byte(raw), &prev); err != nil {
-			return Plan{}, fmt.Errorf("decode %s manifest: %w", p.PreviousTag, err)
-		}
+		p.PreviousTag = tag
 		p.Previous = json.RawMessage(raw)
 		ok, err := isAncestor(ctx, repo, prev.Source, head)
 		if err != nil {
@@ -159,11 +153,16 @@ type component struct {
 	} `json:"release"`
 }
 
-// listBinaries reads every tools/*/component.cue artifact of kind "binary".
+// listBinaries reads every tools/*/component.cue and forks/*/component.cue
+// artifact of kind "binary". A fork's upstreamRev comes from its upstream.json.
 func listBinaries(repo string) ([]Binary, error) {
-	matches, err := filepath.Glob(filepath.Join(repo, "tools", "*", "component.cue"))
-	if err != nil {
-		return nil, err
+	var matches []string
+	for _, root := range []string{"tools", "forks"} {
+		found, err := filepath.Glob(filepath.Join(repo, root, "*", "component.cue"))
+		if err != nil {
+			return nil, err
+		}
+		matches = append(matches, found...)
 	}
 	ctx := cuecontext.New()
 	var out []Binary
@@ -177,7 +176,13 @@ func listBinaries(repo string) ([]Binary, error) {
 		if err := value.Decode(&c); err != nil {
 			return nil, fmt.Errorf("decode %s: %w", m, err)
 		}
-		project := path.Join("tools", filepath.Base(filepath.Dir(m)))
+		project := path.Join(filepath.Base(filepath.Dir(filepath.Dir(m))), filepath.Base(filepath.Dir(m)))
+		upstreamRev := ""
+		if strings.HasPrefix(project, "forks/") {
+			if upstreamRev, err = readUpstreamRev(filepath.Join(filepath.Dir(m), "upstream.json")); err != nil {
+				return nil, err
+			}
+		}
 		for name, a := range c.Release.Artifacts {
 			if a.Kind != "binary" {
 				continue
@@ -185,11 +190,46 @@ func listBinaries(repo string) ([]Binary, error) {
 			if c.Release.Base == "" || len(a.Binaries) == 0 {
 				return nil, fmt.Errorf("%s: binary artifact %q needs release.base and binaries", m, name)
 			}
-			out = append(out, Binary{Package: name, Project: project, Version: c.Release.Base, Binaries: a.Binaries})
+			out = append(out, Binary{Package: name, Project: project, Version: c.Release.Base, UpstreamRev: upstreamRev, Binaries: a.Binaries})
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Package < out[j].Package })
 	return out, nil
+}
+
+func readUpstreamRev(file string) (string, error) {
+	data, err := os.ReadFile(file)
+	if err != nil {
+		return "", err
+	}
+	var u struct {
+		Commit string `json:"commit"`
+	}
+	if err := json.Unmarshal(data, &u); err != nil {
+		return "", fmt.Errorf("decode %s: %w", file, err)
+	}
+	if u.Commit == "" {
+		return "", fmt.Errorf("%s has no commit", file)
+	}
+	return u.Commit, nil
+}
+
+// newestRelease returns the newest nebula-* tag and its manifest, or "" with no tag.
+func newestRelease(ctx context.Context, repo string) (string, Manifest, string, error) {
+	tags, err := git(ctx, repo, "tag", "--list", "nebula-*", "--sort=-v:refname")
+	if err != nil || tags == "" {
+		return "", Manifest{}, "", err
+	}
+	tag := lines(tags)[0]
+	raw, err := git(ctx, repo, "show", tag+":"+manifestFile)
+	if err != nil {
+		return "", Manifest{}, "", err
+	}
+	var m Manifest
+	if err := json.Unmarshal([]byte(raw), &m); err != nil {
+		return "", Manifest{}, "", fmt.Errorf("decode %s manifest: %w", tag, err)
+	}
+	return tag, m, raw, nil
 }
 
 func writeJSON(out string, stdout io.Writer, v any) error {

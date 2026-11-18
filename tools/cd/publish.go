@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 )
@@ -14,6 +15,7 @@ import (
 var (
 	errGuard        = errors.New("release commit must change only " + manifestFile)
 	errPushRejected = errors.New("push rejected on every attempt")
+	errStaleRelease = errors.New("a newer Release already covers this source")
 )
 
 // guard refuses a commit unless it has one parent and changes only release-manifest.json.
@@ -44,6 +46,8 @@ type publishOptions struct {
 	manifest *manifestInput
 	// beforePush lets tests move the remote branch between commit and push.
 	beforePush func(attempt int) error
+	// commit builds the release commit; nil means commitManifest. Tests replace it.
+	commit func(ctx context.Context, repo, parent string, data []byte, tag string) (string, error)
 }
 
 // publish commits the manifest on the fetched branch tip and pushes it, retrying
@@ -63,7 +67,11 @@ func publish(ctx context.Context, o publishOptions) (string, error) {
 	}
 	ref := "refs/remotes/" + o.remote + "/" + o.branch
 	for attempt := 1; attempt <= o.attempts; attempt++ {
-		if _, err := git(ctx, o.repo, "fetch", "--no-tags", o.remote, "+refs/heads/"+o.branch+":"+ref); err != nil {
+		if _, err := git(ctx, o.repo, "fetch", "--no-tags", o.remote,
+			"+refs/heads/"+o.branch+":"+ref, "+refs/tags/nebula-*:refs/tags/nebula-*"); err != nil {
+			return "", err
+		}
+		if err := checkNewestRelease(ctx, o.repo, source); err != nil {
 			return "", err
 		}
 		tip, err := git(ctx, o.repo, "rev-parse", ref)
@@ -84,7 +92,11 @@ func publish(ctx context.Context, o publishOptions) (string, error) {
 				return "", err
 			}
 		}
-		commit, err := commitManifest(ctx, o.repo, tip, data, o.manifest.tag)
+		makeCommit := o.commit
+		if makeCommit == nil {
+			makeCommit = commitManifest
+		}
+		commit, err := makeCommit(ctx, o.repo, tip, data, o.manifest.tag)
 		if err != nil {
 			return "", err
 		}
@@ -96,13 +108,47 @@ func publish(ctx context.Context, o publishOptions) (string, error) {
 				return "", err
 			}
 		}
-		if _, err := git(ctx, o.repo, "push", "--porcelain", o.remote, commit+":refs/heads/"+o.branch); err == nil {
+		retry, err := push(ctx, o.repo, o.remote, commit+":refs/heads/"+o.branch)
+		if err == nil {
 			return commit, nil
-		} else if !strings.Contains(err.Error(), "rejected") {
+		}
+		if !retry {
 			return "", err
 		}
 	}
 	return "", fmt.Errorf("%w (%d attempts)", errPushRejected, o.attempts)
+}
+
+// checkNewestRelease refuses unless the newest nebula-* tag's source is an
+// ancestor of source, so a re-run of an older run never rolls the manifest back.
+func checkNewestRelease(ctx context.Context, repo, source string) error {
+	tag, prev, _, err := newestRelease(ctx, repo)
+	if err != nil || tag == "" {
+		return err
+	}
+	ok, err := isAncestor(ctx, repo, prev.Source, source)
+	if err != nil {
+		return err
+	}
+	if !ok || prev.Source == source {
+		return fmt.Errorf("%w: %s has source %s; this run tested %s", errStaleRelease, tag, prev.Source, source)
+	}
+	return nil
+}
+
+// push pushes refspec. It reports retry=true only for a non-fast-forward
+// rejection (main moved); a ruleset or hook denial fails at once.
+func push(ctx context.Context, repo, remote, refspec string) (bool, error) {
+	command := exec.CommandContext(ctx, "git", "push", "--porcelain", remote, refspec) //nolint:gosec // Fixed binary, no shell.
+	command.Dir = repo
+	out, err := command.CombinedOutput()
+	if err == nil {
+		return false, nil
+	}
+	text := string(out)
+	retry := strings.Contains(text, "[rejected]") &&
+		(strings.Contains(text, "non-fast-forward") || strings.Contains(text, "fetch first"))
+	return retry, fmt.Errorf("git push %s %s: %w: %s", remote, refspec, err, strings.TrimSpace(text))
 }
 
 // commitManifest writes data as release-manifest.json on parent's tree through a

@@ -166,8 +166,15 @@ func makeAssets(t *testing.T, systems []string, pkgs ...string) string {
 
 func TestManifestSchemaShape(t *testing.T) {
 	systems := []string{"x86_64-linux", "aarch64-darwin"}
+	assets := makeAssets(t, systems, "alpha")
+	writeFile(t, assets, "beta-1.0.0-x86_64-linux.tar.zst", "old beta")
+	betaSum, err := fileSHA256(filepath.Join(assets, "beta-1.0.0-x86_64-linux.tar.zst"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	prev, err := json.Marshal(Manifest{Source: "old", Tag: "nebula-20261101-1", Packages: map[string]Package{
-		"beta": {Version: "1.0.0", UpstreamRev: "abc", Systems: map[string]Asset{"x86_64-linux": {URL: "u", SHA256: "bb"}}},
+		"beta": {Version: "1.0.0", UpstreamRev: "abc", Systems: map[string]Asset{"x86_64-linux": {
+			URL: "https://x/nebula-20261101-1/beta-1.0.0-x86_64-linux.tar.zst", SHA256: betaSum}}},
 	}})
 	if err != nil {
 		t.Fatal(err)
@@ -180,7 +187,7 @@ func TestManifestSchemaShape(t *testing.T) {
 	data, _ := json.Marshal(p)
 	writeFile(t, filepath.Dir(planPath), "plan.json", string(data))
 	in := &manifestInput{
-		planPath: planPath, tag: "nebula-20261117-42", assets: makeAssets(t, systems, "alpha"),
+		planPath: planPath, tag: "nebula-20261117-42", assets: assets,
 		baseURL: "https://github.com/RigelBuild/nebula/releases/download/", held: []string{"beta"}, systems: systems,
 	}
 	out, err := in.build()
@@ -215,8 +222,8 @@ func TestManifestSchemaShape(t *testing.T) {
 	}
 
 	in.held = nil
-	if _, err := in.build(); err == nil {
-		t.Fatal("a built package with a missing asset must fail")
+	if _, err := in.build(); !errors.Is(err, errMissingAsset) {
+		t.Fatalf("a built package with a missing asset: err = %v, want errMissingAsset", err)
 	}
 }
 

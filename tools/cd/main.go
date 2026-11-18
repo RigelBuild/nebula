@@ -14,7 +14,7 @@ import (
 	"strings"
 )
 
-var errUsage = errors.New("usage: cd <plan|manifest|guard|publish|check-asset> [flags]")
+var errUsage = errors.New("usage: cd <plan|manifest|guard|publish|release-files|check-asset> [flags]")
 
 func main() {
 	// The process root context: main is the one place a root context is created.
@@ -82,6 +82,23 @@ func dispatch(ctx context.Context, args []string, stdout io.Writer) error {
 		}
 		_, err = fmt.Fprintln(stdout, commit)
 		return err
+	case "release-files":
+		manifest := flags.String("manifest", manifestFile, "release manifest")
+		assets := flags.String("assets", "", "directory holding the assets")
+		sums := flags.String("sums", "SHA256SUMS", "SHA256SUMS output path")
+		if err := flags.Parse(args[1:]); err != nil {
+			return err
+		}
+		files, err := releaseFiles(*manifest, *assets, *sums)
+		if err != nil {
+			return err
+		}
+		for _, f := range files {
+			if _, err := fmt.Fprintln(stdout, f); err != nil {
+				return err
+			}
+		}
+		return nil
 	case "check-asset":
 		system := flags.String("system", "", "target system, for example aarch64-darwin")
 		if err := flags.Parse(args[1:]); err != nil {

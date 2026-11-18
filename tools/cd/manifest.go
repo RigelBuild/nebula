@@ -10,13 +10,17 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"slices"
 	"sort"
 	"strings"
 )
 
-var errMissingAsset = errors.New("missing release asset")
+var (
+	errMissingAsset  = errors.New("missing release asset")
+	errAssetMismatch = errors.New("release asset sha256 mismatch")
+)
 
 // Asset is one per-system download of a package.
 type Asset struct {
@@ -163,35 +167,99 @@ func buildManifest(p Plan, tag, assets, baseURL string, systems, held []string) 
 			return Manifest{}, fmt.Errorf("decode previous manifest: %w", err)
 		}
 	}
+	prefix := strings.TrimSuffix(baseURL, "/") + "/" + tag + "/"
 	m := Manifest{Source: p.Source, Tag: tag, Held: []string{}, Packages: map[string]Package{}}
 	for _, b := range p.Binaries {
+		built := slices.Contains(p.Build, b.Package)
 		if slices.Contains(held, b.Package) {
 			m.Held = append(m.Held, b.Package)
-			if old, ok := prev.Packages[b.Package]; ok {
-				m.Packages[b.Package] = old
+			built = false
+		}
+		if !built {
+			old, ok := prev.Packages[b.Package]
+			if !ok {
+				if slices.Contains(held, b.Package) {
+					continue // Held before its first Release: the notes list it.
+				}
+				return Manifest{}, fmt.Errorf("%s was not built and has no previous Release entry", b.Package)
 			}
+			entry, err := carry(old, assets, prefix)
+			if err != nil {
+				return Manifest{}, fmt.Errorf("%s: %w", b.Package, err)
+			}
+			m.Packages[b.Package] = entry
 			continue
 		}
-		if !slices.Contains(p.Build, b.Package) {
-			if old, ok := prev.Packages[b.Package]; ok {
-				m.Packages[b.Package] = old
-				continue
-			}
-			return Manifest{}, fmt.Errorf("%s was not built and has no previous Release entry", b.Package)
-		}
-		entry := Package{Version: b.Version, Systems: map[string]Asset{}}
+		entry := Package{Version: b.Version, UpstreamRev: b.UpstreamRev, Systems: map[string]Asset{}}
 		for _, system := range systems {
 			name := fmt.Sprintf("%s-%s-%s.tar.zst", b.Package, b.Version, system)
 			sum, err := fileSHA256(filepath.Join(assets, name))
 			if err != nil {
 				return Manifest{}, fmt.Errorf("%w %s: %w", errMissingAsset, name, err)
 			}
-			entry.Systems[system] = Asset{URL: strings.TrimSuffix(baseURL, "/") + "/" + tag + "/" + name, SHA256: sum}
+			entry.Systems[system] = Asset{URL: prefix + name, SHA256: sum}
 		}
 		m.Packages[b.Package] = entry
 	}
 	sort.Strings(m.Held)
 	return m, nil
+}
+
+// carry copies a previous entry into this Release: each asset must be present in
+// assets with its recorded sha256, and its URL moves under this tag.
+func carry(old Package, assets, prefix string) (Package, error) {
+	entry := old
+	entry.Systems = map[string]Asset{}
+	for system, a := range old.Systems {
+		name := path.Base(a.URL)
+		sum, err := fileSHA256(filepath.Join(assets, name))
+		if err != nil {
+			return Package{}, fmt.Errorf("%w %s: %w", errMissingAsset, name, err)
+		}
+		if sum != a.SHA256 {
+			return Package{}, fmt.Errorf("%w: %s has sha256 %s, previous Release recorded %s", errAssetMismatch, name, sum, a.SHA256)
+		}
+		entry.Systems[system] = Asset{URL: prefix + name, SHA256: sum}
+	}
+	return entry, nil
+}
+
+// releaseFiles writes SHA256SUMS for every asset the manifest references and
+// returns those asset paths. Assets the manifest does not reference are not released.
+func releaseFiles(manifestPath, assets, sumsPath string) ([]string, error) {
+	data, err := os.ReadFile(manifestPath)
+	if err != nil {
+		return nil, err
+	}
+	var m Manifest
+	if err := json.Unmarshal(data, &m); err != nil {
+		return nil, fmt.Errorf("decode manifest: %w", err)
+	}
+	var names []string
+	for _, p := range m.Packages {
+		for _, a := range p.Systems {
+			name := path.Base(a.URL)
+			sum, err := fileSHA256(filepath.Join(assets, name))
+			if err != nil {
+				return nil, fmt.Errorf("%w %s: %w", errMissingAsset, name, err)
+			}
+			if sum != a.SHA256 {
+				return nil, fmt.Errorf("%w: %s", errAssetMismatch, name)
+			}
+			names = append(names, sum+"  "+name)
+		}
+	}
+	sort.Slice(names, func(i, j int) bool { return names[i][66:] < names[j][66:] })
+	var sums strings.Builder
+	files := make([]string, 0, len(names))
+	for _, line := range names {
+		sums.WriteString(line + "\n")
+		files = append(files, filepath.Join(assets, line[66:]))
+	}
+	if err := os.WriteFile(sumsPath, []byte(sums.String()), 0o644); err != nil {
+		return nil, err
+	}
+	return files, nil
 }
 
 func fileSHA256(path string) (string, error) {

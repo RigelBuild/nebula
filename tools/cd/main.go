@@ -22,7 +22,7 @@ func main() {
 }
 
 func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
-	err := dispatch(ctx, args, stdout)
+	err := dispatch(ctx, args, stdout, stderr)
 	if err != nil {
 		fmt.Fprintln(stderr, "cd:", err)
 		return 1
@@ -30,7 +30,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-func dispatch(ctx context.Context, args []string, stdout io.Writer) error {
+func dispatch(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
 		return errUsage
 	}
@@ -113,6 +113,40 @@ func dispatch(ctx context.Context, args []string, stdout io.Writer) error {
 			}
 		}
 		return nil
+	case "formula":
+		manifest := flags.String("manifest", manifestFile, "release manifest")
+		out := flags.String("out", "Formula", "directory to write Formula/<tool>.rb into")
+		if err := flags.Parse(args[1:]); err != nil {
+			return err
+		}
+		written, err := writeFormulas(*manifest, *out)
+		if err != nil {
+			return err
+		}
+		for _, f := range written {
+			if _, err := fmt.Fprintln(stdout, f); err != nil {
+				return err
+			}
+		}
+		return nil
+	case "mirror":
+		prefix := flags.String("prefix", "", "repository path to split out, for example tools/jj-hooks")
+		url := flags.String("url", "", "mirror clone URL, for example https://github.com/mattwilkinsonn/jj-hooks.git")
+		branch := flags.String("branch", "main", "mirror branch to push")
+		if err := flags.Parse(args[1:]); err != nil {
+			return err
+		}
+		if *prefix == "" || *url == "" {
+			return errUsage
+		}
+		split, state, err := syncMirror(ctx, mirrorOptions{
+			repo: *repo, prefix: *prefix, url: *url, branch: *branch, token: os.Getenv("MIRROR_TOKEN"),
+		}, stderr)
+		if err != nil {
+			return err
+		}
+		_, err = fmt.Fprintf(stdout, "%s %s %s\n", state, *url, split)
+		return err
 	}
 	return errUsage
 }

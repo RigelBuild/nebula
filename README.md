@@ -29,8 +29,9 @@ a hit. Its allowlist is `tools/ref-gate/ref-gate.config.json`.
 
 - `.github/workflows/ci.yaml` — advisory affected-project CI.
 - `forks/<name>/` — imported upstream source; style gates exclude this tree.
-- `forks/<name>/moon.yml` and `forks/<name>/upstream.json` — nebula-owned
-  project manifest and sync record inside each fork tree; `fork-sync export`
-  leaves them out of upstream patches.
+- `forks/<name>/moon.yml`, `forks/<name>/upstream.json`, and
+  `forks/<name>/component.cue` — nebula-owned project manifest, sync record,
+  and release component inside each fork tree; `fork-sync export` leaves them
+  out of upstream patches.
 - `tools/<name>/` — first-party public tools, each with its own `moon.yml`.
 - `docs/designs/<project>/` — public design records.

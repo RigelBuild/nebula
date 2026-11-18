@@ -110,11 +110,18 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/held"
           : > "$RUNNER_TEMP/held/${{ matrix.system }}"
+          # One eval per job: the devShell names for this system. Kept apart from jq
+          # so a failed eval exits under bash -e (the step has no pipefail).
+          shells_json=$(nix eval --json ".#devShells.${{ matrix.system }}" --apply builtins.attrNames)
+          shells=$(jq -r '.[]' <<<"$shells_json")
           for project in $PROJECTS; do
             id=$(basename "$project")
+            # A project with its own devShell (named after the project) enters it; others use default.
+            shell=default
+            if grep -Fqx "$id" <<<"$shells"; then shell=$id; fi
             # Only moon's unknown_task means "no tests". Any other moon or devshell
             # error fails the job rather than releasing an untested project.
-            if ! out=$(nix develop --command moon task "$id:test" 2>&1); then
+            if ! out=$(nix develop ".#$shell" --command moon task "$id:test" 2>&1); then
               if grep -q 'unknown_task' <<<"$out"; then
                 echo "$project has no test task"
                 continue
@@ -122,7 +129,7 @@ jobs:
               echo "$out"
               exit 1
             fi
-            if ! nix develop --command moon run "$id:test" --affected=false; then
+            if ! nix develop ".#$shell" --command moon run "$id:test" --affected=false; then
               echo "::warning::$project is red on ${{ matrix.system }}; holding it"
               jq -r --arg p "$project" '.binaries[] | select(.project == $p) | .package' \
                 "$RUNNER_TEMP/plan.json" >> "$RUNNER_TEMP/held/${{ matrix.system }}"
@@ -145,8 +152,20 @@ jobs:
             version=$(jq -r .version <<<"$b")
             stage="$RUNNER_TEMP/stage/$pkg"
             mkdir -p "$stage/bin"
+            kind=$(jq -r .kind <<<"$b")
+            if [ "$kind" = nix ]; then
+              # Nix-built: nix build .#<attr> in the project's flake. Its bin/ holds the binaries.
+              nixOut=$(nix build --no-link --print-out-paths "./$project#$(jq -r .attr <<<"$b")")
+              for name in $(jq -r '.binaries[]' <<<"$b"); do
+                install -m 0755 "$nixOut/bin/$name" "$stage/bin/$name"
+              done
+            else
+              for name in $(jq -r '.binaries[]' <<<"$b"); do
+                go -C "$project" build -trimpath -o "$stage/bin/$name" .
+              done
+            fi
+            # Every kind: a consumer runs the asset without this build's /nix/store.
             for name in $(jq -r '.binaries[]' <<<"$b"); do
-              go -C "$project" build -trimpath -o "$stage/bin/$name" .
               "$RUNNER_TEMP/cd" check-asset -system "$SYSTEM" "$stage/bin/$name"
             done
             tar -C "$stage" -cf - bin | zstd -19 -q -o "$RUNNER_TEMP/assets/$pkg-$version-$SYSTEM.tar.zst"
@@ -327,9 +346,9 @@ jobs:
             echo "jj-hooks Release-asset copy skipped: the mirror was not updated (RIG-10830)"
             exit 0
           fi
-          # Runs only when the manifest has per-system jj-hooks assets. Today it has
-          # none: jj-hooks is notBuilt until RIG-10817, so the copy is skipped.
-          if ! git show "$COMMIT:release-manifest.json" | jq -e '(.["jj-hooks"] // {}) | [.["x86_64-linux"], .["aarch64-linux"], .["aarch64-darwin"]] | any(type == "object")' >/dev/null; then
+          # Runs only when the manifest has per-system jj-hooks-bin assets (the Nix-built
+          # jj-hooks package in tools/jj-hooks/component.cue).
+          if ! git show "$COMMIT:release-manifest.json" | jq -e '(.["jj-hooks-bin"] // {}) | [.["x86_64-linux"], .["aarch64-linux"], .["aarch64-darwin"]] | any(type == "object")' >/dev/null; then
             echo "jj-hooks Release-asset copy skipped: no per-system jj-hooks assets in release-manifest.json"
             exit 0
           fi

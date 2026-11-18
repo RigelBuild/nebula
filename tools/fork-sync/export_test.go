@@ -38,7 +38,7 @@ func TestExportAppliesToOutbox(t *testing.T) {
 	}
 }
 
-// TestExportExcludesNebulaOwnedFiles: moon.yml and upstream.json belong to nebula, so an export must not carry them.
+// TestExportExcludesNebulaOwnedFiles: moon.yml, upstream.json, and component.cue belong to nebula, so an export must not carry them.
 func TestExportExcludesNebulaOwnedFiles(t *testing.T) {
 	for _, test := range []struct {
 		name string
@@ -53,6 +53,9 @@ func TestExportExcludesNebulaOwnedFiles(t *testing.T) {
 				t.Fatal(err)
 			}
 			writeTestFile(t, fixture.root, "forks/widget/upstream.json", string(encoded)+"\n")
+		}},
+		{name: "component.cue", edit: func(t *testing.T, fixture *syncFixture) {
+			writeTestFile(t, fixture.root, "forks/widget/component.cue", "id: \"widget\"\n")
 		}},
 	} {
 		t.Run(test.name, func(t *testing.T) {

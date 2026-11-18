@@ -165,7 +165,7 @@ func TestPlanReleasesForkBinariesWithUpstreamRev(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := Binary{Package: "vine", Project: "forks/vine", Version: "1.2.0", UpstreamRev: "0c03418", Binaries: []string{"vine"}}
+	want := Binary{Package: "vine", Project: "forks/vine", Version: "1.2.0", Kind: kindGo, UpstreamRev: "0c03418", Binaries: []string{"vine"}}
 	if !reflect.DeepEqual(p.Binaries[2], want) {
 		t.Fatalf("binaries = %+v, want fork entry %+v", p.Binaries, want)
 	}

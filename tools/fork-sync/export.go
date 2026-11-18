@@ -73,7 +73,7 @@ func exportFork(ctx context.Context, root string, options exportOptions, out io.
 	if _, err := git(ctx, root, nil, "rev-parse", "--verify", right+"^{commit}"); err != nil {
 		return fmt.Errorf("resolve range end: %w", err)
 	}
-	patch, err := git(ctx, root, nil, "diff", "--binary", "--find-renames", "--full-index", left, right, "--", "forks/"+options.Name, ":(exclude)forks/"+options.Name+"/moon.yml", ":(exclude)forks/"+options.Name+"/upstream.json")
+	patch, err := git(ctx, root, nil, "diff", "--binary", "--find-renames", "--full-index", left, right, "--", "forks/"+options.Name, ":(exclude)forks/"+options.Name+"/moon.yml", ":(exclude)forks/"+options.Name+"/upstream.json", ":(exclude)forks/"+options.Name+"/component.cue")
 	if err != nil {
 		return fmt.Errorf("create nebula export diff: %w", err)
 	}

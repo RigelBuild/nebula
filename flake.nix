@@ -54,7 +54,7 @@
         in
         {
           default = pkgs.mkShell {
-            packages = with pkgs; [ go bun moon rumdl biome cargo rustc clippy rustfmt cargo-nextest golangci-lint jujutsu ];
+            packages = with pkgs; [ go bun moon rumdl biome cargo rustc clippy rustfmt cargo-nextest golangci-lint jujutsu pre-commit prek lefthook pkl hk ];
           };
         });
     };

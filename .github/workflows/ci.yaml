@@ -76,9 +76,7 @@ jobs:
           oauth-client-id: ${{ vars.TS_OIDC_CLIENT_ID }}
           audience: api.tailscale.com/${{ vars.TS_OIDC_CLIENT_ID }}
           tags: tag:gha-nebula
-      # Builds every package output for this runner's system, so a stale
-      # vendorHash or FOD hash fails CI instead of merging green. Takes effect
-      # once the OIDC config is fixed (RIG-10818).
+      # Builds every package so a stale vendorHash or FOD hash fails CI.
       - name: Build packages
         run: |
           set -euo pipefail
@@ -215,9 +213,7 @@ jobs:
           oauth-client-id: ${{ vars.TS_OIDC_CLIENT_ID }}
           audience: api.tailscale.com/${{ vars.TS_OIDC_CLIENT_ID }}
           tags: tag:gha-nebula
-      # Builds every package output for this runner's system, so a stale
-      # vendorHash or FOD hash fails CI instead of merging green. Takes effect
-      # once the OIDC config is fixed (RIG-10818).
+      # Builds every package so a stale vendorHash or FOD hash fails CI.
       - name: Build packages
         run: |
           set -euo pipefail

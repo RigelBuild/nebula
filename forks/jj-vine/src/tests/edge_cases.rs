@@ -656,17 +656,29 @@ fn decomposed_foreign_bookmark_bypasses_mine_only_when_named_bare() -> Result<()
     let repo = TestRepo::with_local_remote();
     as_current_user(&repo);
 
-    let decomposed_name = "cafe\u{301}";
+    // jj may store a non-ASCII name in a different Unicode normalization form
+    // than the one written (macOS returns the precomposed form). Use the name
+    // jj stores, so the bare revset is the stored spelling.
+    let written_name = "cafe\u{301}";
     repo.jj.exec(["new", "main"])?;
     repo.create_change("e.txt", "e", "Decomposed name")
-        .create_bookmark(decomposed_name);
+        .create_bookmark(written_name);
     make_foreign(&repo)?;
 
-    let changes = submission_changes(&repo, decomposed_name)?;
-    assert_eq!(sorted_names(&changes), vec![decomposed_name.to_owned()]);
+    let stored_name = repo
+        .jj
+        .log("bookmarks()")?
+        .iter()
+        .flat_map(|change| change.bookmarks.iter())
+        .map(|info| info.name().to_owned())
+        .find(|name| name != "main" && name.starts_with("caf"))
+        .expect("stored bookmark for the non-ASCII name");
 
-    let changes = submission_changes(&repo, &format!("present({decomposed_name})"))?;
-    assert_is_empty!(changes, "generalized revset for {decomposed_name}");
+    let changes = submission_changes(&repo, &stored_name)?;
+    assert_eq!(sorted_names(&changes), vec![stored_name.clone()]);
+
+    let changes = submission_changes(&repo, &format!("present({stored_name})"))?;
+    assert_is_empty!(changes, "generalized revset for {stored_name}");
 
     Ok(())
 }

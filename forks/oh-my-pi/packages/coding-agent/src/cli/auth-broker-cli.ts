@@ -1,0 +1,1555 @@
+/**
+ * `omp auth-broker` command handlers.
+ *
+ * Sub-verbs:
+ *   - `serve [--bind=…] [--trust-proxy-headers]` — boots the broker against the local SQLite store.
+ *   - `token` / `token --regenerate` — manages the bearer token file.
+ *   - `login <provider> [--via=user@host]` — logs into a provider locally, or
+ *     via SSH tunnel into a remote broker host.
+ *   - `import <file|dir>` — imports CLIProxyAPI-style JSON credentials into
+ *     the local SQLite store (typical use: `import ~/.cliproxy/auth`).
+ *   - `migrate --from-local [--include-env] [--include-oauth] [--dry-run]` —
+ *     uploads local SQLite + env API keys to the broker, skipping anything
+ *     the broker already has.
+ *   - `status` — health-pings the configured remote broker.
+ */
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+import * as readline from "node:readline";
+import {
+	type AuthCredential,
+	type AuthCredentialSnapshotEntry,
+	AuthStorage,
+	getEnvApiKey,
+	getOAuthProviders,
+	isSameOAuthAccount,
+	listProvidersWithEnvKey,
+	matchesReplacementCredential,
+	type OAuthCredential,
+	type OAuthProvider,
+	PROVIDER_REGISTRY,
+	SqliteAuthCredentialStore,
+} from "@oh-my-pi/pi-ai";
+import {
+	AuthBrokerClient,
+	canonicalizePlan,
+	canonicalizeProviderId,
+	DEFAULT_AUTH_BROKER_BIND,
+	type SubscriptionLookup,
+	type ApiKeyMetricsConfig,
+	validateApiKeyMetricsConfig,
+	UNIDENTIFIED_ACCOUNT,
+	startAuthBroker,
+} from "@oh-my-pi/pi-ai/auth-broker";
+import { refreshOAuthToken } from "@oh-my-pi/pi-ai/oauth";
+import type { OAuthCredentials } from "@oh-my-pi/pi-ai/oauth/types";
+import { $which, APP_NAME, getAgentDbPath, getAgentDir, getConfigRootDir, logger, VERSION } from "@oh-my-pi/pi-utils";
+import { cfgAuthBrokerMetrics } from "../config/model-settings";
+import chalk from "@oh-my-pi/pi-utils/chalk";
+import { findDuplicateJsonKey } from "@oh-my-pi/pi-utils/json-lexer";
+import { setTransports as setLoggerTransports } from "@oh-my-pi/pi-utils/logger";
+import { $ } from "bun";
+import { Settings } from "../config/settings";
+import { refreshManagedMcpOAuthCredential } from "../mcp/oauth-credentials";
+import { isManagedMCPOAuthCredentialId, mcpOAuthServerUrlFromCredentialId } from "../mcp/oauth-flow";
+import { resolveAuthBrokerConfig } from "../session/auth-broker-config";
+import { pickIndex, pickOAuthProvider, runTerminalOAuthLogin } from "./oauth-terminal";
+import { ensureTokenFile, generateToken, writeTokenFile } from "./token-file";
+
+export type AuthBrokerAction = "serve" | "token" | "login" | "logout" | "status" | "import" | "migrate" | "list";
+
+export interface AuthBrokerCommandArgs {
+	action: AuthBrokerAction;
+	flags: {
+		json?: boolean;
+		bind?: string;
+		trustProxyHeaders?: boolean;
+		regenerate?: boolean;
+		/** `token`/`serve`: operate on the scrape-scoped `/metrics` token. */
+		metrics?: boolean;
+		via?: string;
+		provider?: string;
+		dryRun?: boolean;
+		/** `login`/`logout`: provider id. `import`: filesystem path. */
+		source?: string;
+		/** `import`: keep credentials whose JSON had `disabled: true`. */
+		includeDisabled?: boolean;
+		/** `migrate`: also upload local OAuth (default: api_key only, since OAuth is via cliproxy import). */
+		includeOauth?: boolean;
+		/** `migrate`: also capture env-var API keys for providers not yet on broker. */
+		includeEnv?: boolean;
+		/** `migrate`: required `--from-local` source. Reserved for future sources. */
+		fromLocal?: boolean;
+		/** `serve`: path to the JSON subscription-config file. */
+		subscriptionsConfig?: string;
+		/** `serve`: path to the JSON bounded API-key metrics config file. */
+		apiKeyMetricsConfig?: string;
+		/**
+		 * `serve`: expose the scrape-scoped `GET /metrics` endpoint. Absent means
+		 * "not specified" so env and config can still enable it; the flag itself
+		 * wins whenever it is passed.
+		 */
+		enableMetrics?: boolean;
+		/**
+		 * `serve`: force `/metrics` off. The parser cannot express `false` for a
+		 * boolean flag (a present flag is always `true`, and `--enable-metrics=false`
+		 * is a usage error), so without this spelling an inherited env/config `true`
+		 * could not be overridden from the command line and the documented
+		 * flag-over-env-over-config precedence only worked in one direction.
+		 */
+		noEnableMetrics?: boolean;
+	};
+}
+
+const ACTIONS: readonly AuthBrokerAction[] = [
+	"serve",
+	"token",
+	"login",
+	"logout",
+	"import",
+	"migrate",
+	"status",
+	"list",
+];
+
+/** Callback ports baked from the per-provider OAuth flow modules. */
+const CALLBACK_PORTS: Record<string, number> = Object.fromEntries(
+	PROVIDER_REGISTRY.flatMap(provider =>
+		provider.callbackPort != null ? [[provider.id, provider.callbackPort] as [string, number]] : [],
+	),
+);
+
+/** Master bearer token file — authorizes the entire vault. */
+function getTokenFilePath(): string {
+	return path.join(getConfigRootDir(), "auth-broker.token");
+}
+
+/**
+ * Scrape-scoped read-only token file. Authorizes ONLY `GET /metrics`, never the
+ * vault routes, so a scrape credential is least-privilege and distinct from the
+ * master bearer. A fixed path mirroring the master bearer's convention: this
+ * file — not a one-shot stdout print — is a stable deterministic source a
+ * secrets-staging step can read. Rotation: re-mint (rewrites the file),
+ * re-stage, re-converge.
+ */
+function getMetricsTokenFilePath(): string {
+	return path.join(getConfigRootDir(), "auth-broker-metrics.token");
+}
+
+/** Env var honored by `serve` when `--subscriptions-config` is not passed (flag wins). */
+const SUBSCRIPTIONS_ENV = "OMP_AUTH_BROKER_SUBSCRIPTIONS";
+
+/** Env var honored by `serve` when `--api-key-metrics-config` is not passed. */
+const API_KEY_METRICS_ENV = "OMP_AUTH_BROKER_API_KEY_METRICS";
+
+/** Env var honored by `serve` when `--enable-metrics` is not passed (flag wins). */
+const METRICS_ENABLED_ENV = "OMP_AUTH_BROKER_METRICS";
+
+/** Env var carrying the scrape token value directly. */
+const METRICS_TOKEN_ENV = "OMP_AUTH_BROKER_METRICS_TOKEN";
+
+/**
+ * Env var pointing at a file holding the scrape token — the shape a k8s secret
+ * mount or a systemd credential takes.
+ */
+const METRICS_TOKEN_FILE_ENV = "OMP_AUTH_BROKER_METRICS_TOKEN_FILE";
+
+/**
+ * Strict truthy parse for the enablement env var: only `1` and `true` (any
+ * case) enable. Unset, empty, and every other value are false, so a typo or a
+ * leftover `OMP_AUTH_BROKER_METRICS=0` never silently opens the endpoint.
+ */
+function parseMetricsEnv(raw: string | undefined): boolean {
+	if (raw === undefined) return false;
+	const normalized = raw.trim().toLowerCase();
+	return normalized === "1" || normalized === "true";
+}
+
+/**
+ * Whether `serve` exposes `GET /metrics`. Off unless an operator asks for it:
+ * an existing deployment that changes nothing gains neither the endpoint nor
+ * the scrape-token file.
+ *
+ * Precedence: flag > env > config. `enableMetrics` is only meaningful when
+ * explicitly passed, so an absent flag arrives as `undefined` and falls through
+ * to the env and config layers; `--enable-metrics` present means enabled.
+ */
+async function resolveMetricsEnabled(enableMetrics: boolean | undefined): Promise<boolean> {
+	if (enableMetrics !== undefined) return enableMetrics;
+	const env = process.env[METRICS_ENABLED_ENV];
+	if (env !== undefined) return parseMetricsEnv(env);
+	try {
+		// Pinned to the agent dir, never the launch cwd: a project `.omp/config.yml`
+		// merges over global and could expose this endpoint or override a global `false`.
+		const settings = await Settings.loadReadOnly({ cwd: getAgentDir() });
+		return cfgAuthBrokerMetrics.get(settings);
+	} catch {
+		// Config is the weakest source and the broker must still boot without it;
+		// an unreadable or malformed config leaves the endpoint off, matching the
+		// default rather than failing the whole service.
+		return false;
+	}
+}
+
+/**
+ * A resolved scrape token plus where it came from.
+ *
+ * `source` names the origin for an operator (the env var name, or the file
+ * path). `file` is the file whose bytes ARE the token, present only when one
+ * backs it — an env-supplied value has none, so reporting a path would send an
+ * operator to a file that does not exist. `managedBy` names the env var that
+ * provisioned the token, and is absent for one omp minted itself: rotating a
+ * provisioned token belongs to whatever injected it, so rewriting the mint file
+ * would not change the credential `serve` accepts.
+ */
+interface MetricsTokenSource {
+	token: string;
+	source: string;
+	file?: string;
+	managedBy?: string;
+}
+
+/**
+ * The scrape token for `GET /metrics`, in precedence order: the literal env
+ * value, then a file the env points at, then the mint-to-disk file.
+ *
+ * A provisioned token never touches disk — the injecting env vars exist so a
+ * secret can live only in the orchestrator, so minting alongside one would
+ * write the operator a second copy they did not ask for.
+ *
+ * Setting both injection vars is rejected rather than resolved: the two would
+ * disagree on rotation, and silently preferring one leaves an operator staging
+ * a value the broker is not accepting.
+ *
+ * Whether a var provisions the token is decided by its PRESENCE, not by whether
+ * it holds anything usable. An explicitly empty value is a broken injection, not
+ * an absent one: treating it as unset would mint a different token to disk and
+ * start the broker successfully, so every scraper configured from that same
+ * (empty) secret 401s, and the no-disk-copy contract an injecting deployment
+ * relies on is bypassed. Fail loudly instead.
+ */
+async function resolveMetricsToken(): Promise<MetricsTokenSource> {
+	const literal = process.env[METRICS_TOKEN_ENV];
+	const file = process.env[METRICS_TOKEN_FILE_ENV];
+	if (literal !== undefined && file !== undefined) {
+		throw new Error(
+			`Set only one of ${METRICS_TOKEN_ENV} or ${METRICS_TOKEN_FILE_ENV} (both are set; they would disagree on rotation)`,
+		);
+	}
+	if (literal !== undefined) {
+		// `isAuthorized()` trims the bearer value out of the Authorization header
+		// before comparing, so an injected token carrying a stray newline (common
+		// when a file-backed secret is piped into the environment) would never
+		// match and every scrape would 401. Trim to the same shape the file path
+		// already uses, and reject a value that trims away rather than storing an
+		// empty token that silently disables auth.
+		const token = literal.trim();
+		if (token.length === 0) {
+			throw new Error(`${METRICS_TOKEN_ENV} is set but empty or contains only whitespace`);
+		}
+		return { token, source: METRICS_TOKEN_ENV, managedBy: METRICS_TOKEN_ENV };
+	}
+	if (file !== undefined) {
+		// An empty or whitespace-only path names no file, so there is nothing to
+		// read and nothing the operator meant omp to mint in its place.
+		const filePath = file.trim();
+		if (filePath.length === 0) {
+			throw new Error(`${METRICS_TOKEN_FILE_ENV} is set but empty; it must name a file holding the scrape token`);
+		}
+		// A mounted secret almost always ends in a newline, which is not part of
+		// the bearer value.
+		const token = (await Bun.file(filePath).text()).trim();
+		if (token.length === 0) throw new Error(`${METRICS_TOKEN_FILE_ENV} points at an empty file: ${filePath}`);
+		return { token, source: filePath, file: filePath, managedBy: METRICS_TOKEN_FILE_ENV };
+	}
+	const mintPath = getMetricsTokenFilePath();
+	return { token: await ensureTokenFile(mintPath), source: mintPath, file: mintPath };
+}
+
+/**
+ * What `serve` should do about `/metrics`. A discriminated union so a disabled
+ * broker has no token to accidentally wire up: the token only exists on the
+ * enabled arm.
+ */
+export type ServeMetricsDecision = { enabled: false } | { enabled: true; token: string; source: string };
+
+/**
+ * The whole `/metrics` decision for `serve`. Resolving enablement first is the
+ * load-bearing ordering: when the endpoint is off this returns before touching
+ * the scrape token, so no file is minted and nothing new appears on disk for a
+ * deployment that simply upgraded.
+ */
+export async function resolveServeMetrics(enableMetrics: boolean | undefined): Promise<ServeMetricsDecision> {
+	if (!(await resolveMetricsEnabled(enableMetrics))) return { enabled: false };
+	const { token, source } = await resolveMetricsToken();
+	return { enabled: true, token, source };
+}
+
+/**
+ * Collapse the `--enable-metrics` / `--no-enable-metrics` pair into the tri-state
+ * {@link resolveMetricsEnabled} expects: `true`, `false`, or `undefined` to defer
+ * to env then config. Both flags together is operator error with two opposite
+ * readings, so it is rejected rather than silently resolved.
+ */
+export function resolveEnableMetricsFlag(
+	enableMetrics: boolean | undefined,
+	noEnableMetrics: boolean | undefined,
+): boolean | undefined {
+	if (enableMetrics === true && noEnableMetrics === true) {
+		throw new Error("--enable-metrics and --no-enable-metrics cannot be used together");
+	}
+	if (noEnableMetrics === true) return false;
+	return enableMetrics;
+}
+
+/**
+ * On-disk JSON shape for the subscription config. `accounts` is keyed by the
+ * opaque provider accountId (`accountLabelOf`); `plans` by
+ * `"<provider>:<canonical-plan>"`. `startedAt` is an ISO `YYYY-MM-DD` monthly
+ * billing anchor, converted from UTC midnight to unix seconds for the renderer.
+ *
+ * One account label can hold subscriptions in several organizations, and in
+ * several providers. The account-level `provider`/`org` describe one scope (the
+ * org-less fallback when `org` is absent); the optional `orgs` map carries the
+ * remaining org scopes of that provider, and the optional `providers` map
+ * carries the other providers that hand out the same account label, each with
+ * its own `org`/`plan`/`startedAt`/`orgs`. A single JSON property per account
+ * label cannot represent the same label twice, so the extra scopes nest rather
+ * than repeat as duplicate top-level keys.
+ */
+interface SubscriptionsConfigFile {
+	accounts?: Record<
+		string,
+		{ provider?: unknown; org?: unknown; plan?: unknown; startedAt?: unknown; orgs?: unknown; providers?: unknown }
+	>;
+	plans?: Record<string, { capacityWeight?: unknown; monthlyPriceUsd?: unknown }>;
+}
+
+/**
+ * Read + parse the subscription-config file into a {@link SubscriptionLookup}.
+ * Fails loudly (throws) on a parse error or malformed shape so the broker never
+ * silently emits partial series. A present `startedAt` ISO date becomes the
+ * UTC-midnight unix-seconds anchor consumed by the renderer; absence stays absent.
+ *
+ * `metricsEnabled` short-circuits the read entirely, mirroring how
+ * {@link resolveServeMetrics} returns before touching the scrape token when the
+ * endpoint is off. Subscription data is consumed ONLY by the `/metrics` route,
+ * so with the route disabled — the default, or an explicit
+ * `--no-enable-metrics` — a stale, missing, or malformed file must not keep the
+ * broker from starting. Reading it anyway would make disabling the feature
+ * unable to recover from a metrics-only misconfiguration.
+ */
+export async function loadSubscriptionsConfig(
+	pathArg: string | undefined,
+	metricsEnabled: boolean,
+): Promise<SubscriptionLookup | undefined> {
+	if (!metricsEnabled) return undefined;
+	const file = pathArg ?? process.env[SUBSCRIPTIONS_ENV];
+	if (!file) return undefined;
+	const raw = await Bun.file(file).text();
+	return parseSubscriptionsConfig(raw, file);
+}
+
+/** Read and validate the non-secret API-key metrics config only while metrics are enabled. */
+export async function loadApiKeyMetricsConfig(
+	pathArg: string | undefined,
+	metricsEnabled: boolean,
+): Promise<ApiKeyMetricsConfig | undefined> {
+	if (!metricsEnabled) return undefined;
+	const file = pathArg ?? process.env[API_KEY_METRICS_ENV];
+	if (!file) return undefined;
+	const raw = await Bun.file(file).text();
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(raw);
+	} catch (error) {
+		throw new Error(
+			`API-key metrics config ${file} is not valid JSON: ${error instanceof Error ? error.message : String(error)}`,
+		);
+	}
+	const duplicate = findDuplicateJsonKey(raw);
+	if (duplicate !== undefined) {
+		throw new Error(`API-key metrics config ${file}: duplicate key ${JSON.stringify(duplicate)}`);
+	}
+	return validateApiKeyMetricsConfig(parsed, `API-key metrics config ${file}`);
+}
+
+/** A non-null, non-array plain JSON object. */
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Parse a strict `YYYY-MM-DD` string as UTC midnight, rejecting shaped-valid but
+ * out-of-range dates (`2026-02-29`) that {@link Date.parse} would silently
+ * normalize into the next month. Returns epoch milliseconds, or `undefined` if
+ * the components do not round-trip back to the input.
+ */
+function parseUtcDate(value: string): number | undefined {
+	const [year, month, day] = value.split("-").map(Number);
+	const ms = Date.UTC(year, month - 1, day);
+	const date = new Date(ms);
+	if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) {
+		return undefined;
+	}
+	return ms;
+}
+
+/**
+ * Reject keys the loader does not understand. The per-field checks below only
+ * validate keys they know, so a misspelling (`startAt` for `startedAt`), the
+ * legacy `renewsAt` spelling, or `plans` nested under an account would be
+ * silently ignored and the corresponding series quietly omitted — the opposite
+ * of this loader's fail-loudly contract.
+ */
+function rejectUnknownKeys(entry: object, allowed: readonly string[], file: string, label: string): void {
+	const unknown = Object.keys(entry).filter(key => !allowed.includes(key));
+	if (unknown.length > 0) {
+		throw new Error(
+			`subscription config ${file}: ${label} has unknown key(s) ${unknown.map(k => `"${k}"`).join(", ")}; allowed: ${allowed.map(k => `"${k}"`).join(", ")}`,
+		);
+	}
+}
+
+/**
+ * Validate + normalize the `plan`/`startedAt` pair shared by an account-level
+ * entry and each nested `orgs` entry. `label` names the offending entry in the
+ * fail-loudly error (`account foo` or `account foo org bar`). Converts a
+ * `YYYY-MM-DD` `startedAt` to a UTC-midnight monthly billing anchor in unix
+ * seconds; throws on any malformed field.
+ */
+function parsePlanRenewal(
+	entry: { plan?: unknown; startedAt?: unknown },
+	file: string,
+	label: string,
+): { plan?: string; renewsAtSeconds?: number } {
+	if (entry.plan !== undefined) {
+		if (typeof entry.plan !== "string") {
+			throw new Error(`subscription config ${file}: ${label} "plan" must be a string`);
+		}
+		// The renderer canonicalizes an explicit plan and emits it as the
+		// `plan` label. An empty/whitespace-only plan canonicalizes to "" and
+		// would emit `plan=""` instead of falling back to the provider-reported
+		// plan, so reject it here — omitting the field entirely stays valid.
+		if (canonicalizePlan(entry.plan).length === 0) {
+			throw new Error(`subscription config ${file}: ${label} "plan" must not be empty`);
+		}
+	}
+	let renewsAtSeconds: number | undefined;
+	if (entry.startedAt !== undefined) {
+		if (typeof entry.startedAt !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(entry.startedAt)) {
+			throw new Error(`subscription config ${file}: ${label} "startedAt" must be a YYYY-MM-DD string`);
+		}
+		const ms = parseUtcDate(entry.startedAt);
+		if (ms === undefined) {
+			throw new Error(`subscription config ${file}: ${label} "startedAt" is not a valid date: ${entry.startedAt}`);
+		}
+		renewsAtSeconds = ms / 1000;
+	}
+	return { plan: entry.plan as string | undefined, renewsAtSeconds };
+}
+
+/**
+ * Insert one provider's scopes for an account label: the entry's own `org`
+ * scope — or the org-less fallback when it declares none — plus each additional
+ * scope from its nested `orgs` map.
+ *
+ * Shared by the account-level `provider` and by every key of the nested
+ * `providers` map, so a second provider that hands out the same account label
+ * validates and keys exactly like the first. `label` names the offending entry
+ * in the fail-loudly errors.
+ */
+function insertProviderScopes(
+	accounts: Map<string, { plan?: string; renewsAtSeconds?: number }>,
+	provider: string,
+	accountKey: string,
+	entry: { org?: unknown; plan?: unknown; startedAt?: unknown; orgs?: unknown },
+	file: string,
+	label: string,
+): void {
+	// A malformed `org` (e.g. a number) must fail loudly, not silently coerce
+	// to the empty scope — an empty-scope entry would then answer for EVERY
+	// org of the account, defeating org scoping.
+	if (entry.org !== undefined && typeof entry.org !== "string") {
+		throw new Error(`subscription config ${file}: ${label} "org" must be a string`);
+	}
+	// A whitespace-only `org` (e.g. "   ") canonicalizes to the empty scope,
+	// which the lookup treats as the all-orgs fallback — so a typo would silently
+	// apply this plan/renewal to every org of the account. An org-less entry (no
+	// `org` key, or a legitimately empty "") is the intended fallback; only a
+	// value that was non-empty as written but trims away is rejected.
+	if (typeof entry.org === "string" && entry.org.length > 0 && entry.org.trim().length === 0) {
+		throw new Error(`subscription config ${file}: ${label} "org" must not be whitespace-only`);
+	}
+	const org = typeof entry.org === "string" ? entry.org.trim().toLowerCase() : "";
+	// Two entries that normalize to the same identity (e.g. "acct-1" and
+	// " acct-1 ", or a nested provider restating the account's own provider and
+	// org) would collide on this key, and the surviving plan would depend on
+	// property order. Reject rather than resolve: the operator's intent is
+	// unknowable and silently picking one contradicts the fail-loudly contract
+	// the rest of this loader keeps.
+	const identity = `${provider}\x00${accountKey}\x00${org}`;
+	if (accounts.has(identity)) {
+		throw new Error(
+			`subscription config ${file}: ${label} duplicates an earlier entry after trimming (provider "${provider}", account "${accountKey}", org "${org}")`,
+		);
+	}
+	accounts.set(identity, parsePlanRenewal(entry, file, label));
+
+	// Additional org scopes for this provider + account label: keyed by org id,
+	// each with its own plan/renewal. A top-level `org` plus an `orgs` entry for
+	// the same canonical scope would collide, so reject the duplicate.
+	if (entry.orgs === undefined) return;
+	if (!isPlainObject(entry.orgs)) {
+		throw new Error(`subscription config ${file}: ${label} "orgs" must be a JSON object`);
+	}
+	for (const [orgKey, orgEntry] of Object.entries(entry.orgs)) {
+		if (!isPlainObject(orgEntry)) {
+			throw new Error(`subscription config ${file}: ${label} org ${orgKey} must be an object`);
+		}
+		rejectUnknownKeys(orgEntry, ["plan", "startedAt"], file, `${label} org ${orgKey}`);
+		// An `orgs` key whose canonical (trimmed) scope is empty — the literal
+		// empty string "" or whitespace-only like "   " — canonicalizes to the
+		// empty scope, which, absent a bare entry, the lookup treats as the
+		// all-orgs fallback, so it would apply this plan/renewal to unrelated
+		// orgs. An org key is meant to name a specific scope, so reject one that
+		// canonicalizes away entirely.
+		if (orgKey.trim().length === 0) {
+			throw new Error(
+				`subscription config ${file}: ${label} "orgs" key must name a scope, not be empty or whitespace-only`,
+			);
+		}
+		const orgScope = orgKey.trim().toLowerCase();
+		const key = `${provider}\x00${accountKey}\x00${orgScope}`;
+		if (accounts.has(key)) {
+			throw new Error(`subscription config ${file}: ${label} declares org scope "${orgScope}" more than once`);
+		}
+		accounts.set(key, parsePlanRenewal(orgEntry, file, `${label} org ${orgKey}`));
+	}
+}
+
+/**
+ * Parse raw subscription-config JSON into a {@link SubscriptionLookup}. Pure and
+ * synchronous (no I/O): `file` is used only in error messages. Fails loudly
+ * (throws) on a parse error or malformed shape so the broker never silently
+ * emits partial series. Converts each account's `startedAt` UTC date to the
+ * `renewsAtSeconds` monthly billing anchor consumed by the renderer.
+ */
+export function parseSubscriptionsConfig(raw: string, file: string): SubscriptionLookup {
+	let root: unknown;
+	try {
+		root = JSON.parse(raw);
+	} catch (error) {
+		throw new Error(
+			`subscription config ${file} is not valid JSON: ${error instanceof Error ? error.message : String(error)}`,
+		);
+	}
+	// Runs only after `JSON.parse` accepted the text, so a syntax error reports
+	// as a parse error above and never reaches this scan.
+	const duplicate = findDuplicateJsonKey(raw);
+	if (duplicate !== undefined) {
+		throw new Error(`subscription config ${file}: duplicate key ${JSON.stringify(duplicate)}`);
+	}
+	if (!isPlainObject(root)) {
+		throw new Error(`subscription config ${file} must be a JSON object`);
+	}
+	// `isPlainObject` proves a non-null, non-array object; the per-field shapes
+	// (all `unknown`) are validated below before any value is read.
+	rejectUnknownKeys(root, ["accounts", "plans"], file, "root");
+	const parsed = root as SubscriptionsConfigFile;
+
+	// Per-account map, keyed by "<provider>\x00<account>\x00<org>" for the lookup.
+	// `org` is the canonicalized organization scope (trim + lowercase, "" when the
+	// entry declares none) so an account label's several org-scoped subscriptions
+	// each carry their own plan/renewal instead of one config applying to both.
+	// The same account label can appear in several orgs via the nested `orgs` map,
+	// and under several providers via the nested `providers` map.
+	const accounts = new Map<string, { plan?: string; renewsAtSeconds?: number }>();
+	if (parsed.accounts !== undefined && !isPlainObject(parsed.accounts)) {
+		throw new Error(`subscription config ${file}: "accounts" must be a JSON object`);
+	}
+	for (const [account, entry] of Object.entries(parsed.accounts ?? {})) {
+		if (typeof entry !== "object" || entry === null) {
+			throw new Error(`subscription config ${file}: account ${account} must be an object`);
+		}
+		rejectUnknownKeys(
+			entry,
+			["provider", "org", "plan", "startedAt", "orgs", "providers"],
+			file,
+			`account ${account}`,
+		);
+		if (typeof entry.provider !== "string") {
+			throw new Error(`subscription config ${file}: account ${account} is missing a string "provider"`);
+		}
+		// Trimmed, not just length-checked: a whitespace-only `provider` or account
+		// key parses fine and is stored under a composite key no usage report can
+		// ever produce, so the account's plan and renewal series vanish while the
+		// broker reports a healthy start — the silent omission this loader exists
+		// to prevent.
+		if (entry.provider.trim().length === 0 || account.trim().length === 0) {
+			throw new Error(
+				`subscription config ${file}: account ${account} "provider" and account key must be non-empty and not whitespace-only`,
+			);
+		}
+		// Store the canonical identity: the lookup key is built from live credential
+		// fields, so a padded config value ("  anthropic  ") would never match.
+		// Case-folded for the same reason — see {@link canonicalizeProviderId}.
+		const accountKey = account.trim();
+		insertProviderScopes(
+			accounts,
+			canonicalizeProviderId(entry.provider),
+			accountKey,
+			entry,
+			file,
+			`account ${account}`,
+		);
+
+		// Two providers can hand out the same account label — a username-based
+		// subscription called "monalisa" on each. The lookup keys accounts by
+		// {provider, account, org}, so those are distinct identities, but one JSON
+		// property can name the label only once and repeating it is rejected as a
+		// duplicate key. Each `providers` key names another provider for this same
+		// label, carrying its own scopes.
+		if (entry.providers === undefined) continue;
+		if (!isPlainObject(entry.providers)) {
+			throw new Error(`subscription config ${file}: account ${account} "providers" must be a JSON object`);
+		}
+		for (const [providerKey, providerEntry] of Object.entries(entry.providers)) {
+			const label = `account ${account} provider ${providerKey}`;
+			if (!isPlainObject(providerEntry)) {
+				throw new Error(`subscription config ${file}: ${label} must be an object`);
+			}
+			// No `provider` and no further `providers`: the key already names the
+			// provider, and a nested map would give one account label two spellings
+			// of the same identity.
+			rejectUnknownKeys(providerEntry, ["org", "plan", "startedAt", "orgs"], file, label);
+			// The key IS the provider id, so one that canonicalizes away entirely
+			// would key every scope under the empty provider — a composite key no
+			// usage report can produce.
+			if (providerKey.trim().length === 0) {
+				throw new Error(
+					`subscription config ${file}: account ${account} "providers" key must name a provider, not be empty or whitespace-only`,
+				);
+			}
+			insertProviderScopes(accounts, canonicalizeProviderId(providerKey), accountKey, providerEntry, file, label);
+		}
+	}
+
+	// Per-plan table, keys are "<provider>:<plan>".
+	const plans: Array<{ provider: string; plan: string; capacityWeight: number; monthlyPriceUsd: number }> = [];
+	// Two plan keys whose {provider, canonicalized plan} collapse to one exported
+	// identity (e.g. "anthropic:Max Plan" and "anthropic:max-plan") would both be
+	// accepted here, but the renderer dedups by that identity and silently keeps
+	// only the first — so config order would decide the reported facts. Reject
+	// the collision loudly instead.
+	const seenPlanIdentities = new Set<string>();
+	if (parsed.plans !== undefined && !isPlainObject(parsed.plans)) {
+		throw new Error(`subscription config ${file}: "plans" must be a JSON object`);
+	}
+	for (const [key, entry] of Object.entries(parsed.plans ?? {})) {
+		if (typeof entry !== "object" || entry === null) {
+			throw new Error(`subscription config ${file}: plan ${key} must be an object`);
+		}
+		rejectUnknownKeys(entry, ["capacityWeight", "monthlyPriceUsd"], file, `plan ${key}`);
+		const sep = key.indexOf(":");
+		if (sep <= 0 || sep === key.length - 1) {
+			throw new Error(`subscription config ${file}: plan key ${key} must be "<provider>:<plan>"`);
+		}
+		if (typeof entry.capacityWeight !== "number" || typeof entry.monthlyPriceUsd !== "number") {
+			throw new Error(
+				`subscription config ${file}: plan ${key} needs numeric "capacityWeight" and "monthlyPriceUsd"`,
+			);
+		}
+		// A capacity multiplier and a list price are exported straight to
+		// `/metrics`; a negative or non-finite (NaN/Inf) value would publish a
+		// nonsense gauge, so reject it at parse the same way a bad type is. Zero
+		// price is a valid free plan; zero capacityWeight is degenerate but not
+		// invalid on its face, so only strictly-negative and non-finite are
+		// rejected here.
+		if (!Number.isFinite(entry.capacityWeight) || entry.capacityWeight < 0) {
+			throw new Error(
+				`subscription config ${file}: plan ${key} "capacityWeight" must be a non-negative finite number`,
+			);
+		}
+		if (!Number.isFinite(entry.monthlyPriceUsd) || entry.monthlyPriceUsd < 0) {
+			throw new Error(
+				`subscription config ${file}: plan ${key} "monthlyPriceUsd" must be a non-negative finite number`,
+			);
+		}
+		// Canonicalize the provider segment: account providers are canonicalized
+		// above and live usage reports arrive with the bare lowercase id, so a
+		// padded or mis-cased plan key like " Anthropic :max" would publish
+		// capacity/price series under a provider label that joins no account's
+		// subscription series.
+		const provider = canonicalizeProviderId(key.slice(0, sep));
+		const plan = key.slice(sep + 1);
+		if (provider.length === 0) {
+			throw new Error(`subscription config ${file}: plan ${key} has an empty provider segment`);
+		}
+		// A raw suffix that canonicalizes to empty (e.g. "anthropic:chatgpt_" or
+		// trailing whitespace) passes the separator check above but would export
+		// capacity/price samples with `plan=""` that join no valid account.
+		// Mirror the empty-plan rejection parsePlanRenewal applies to the
+		// account path.
+		if (canonicalizePlan(plan).length === 0) {
+			throw new Error(`subscription config ${file}: plan key ${key} "plan" must not be canonically empty`);
+		}
+		const identity = `${provider}:${canonicalizePlan(plan)}`;
+		if (seenPlanIdentities.has(identity)) {
+			throw new Error(
+				`subscription config ${file}: plan key ${key} duplicates canonical plan ${canonicalizePlan(plan)}`,
+			);
+		}
+		seenPlanIdentities.add(identity);
+		plans.push({
+			provider,
+			plan,
+			capacityWeight: entry.capacityWeight,
+			monthlyPriceUsd: entry.monthlyPriceUsd,
+		});
+	}
+
+	// Reject two account keys that fold to one identity under case — storage
+	// will silently merge them, so a config that keeps both is unreachable.
+	//
+	// `AuthStorage.#getUsageReportIdentifiers()` lowercases EVERY report
+	// identifier before grouping (both the anthropic/openai-codex path and the
+	// general path end in `.toLowerCase()`), and `#mergeUsageReportGroup()` then
+	// keeps only ONE report's metadata (the one with the most limits, ties broken
+	// by `fetchedAt`). So two same-provider, same-org reports whose account ids
+	// differ only in case ("Foo" and "foo") produce the SAME identifier and are
+	// merged before rendering — only one casing survives into lookup, and the
+	// other config entry can never be reached (its limits may already be combined
+	// with the survivor's). That is the silent omission the rest of this loader
+	// rejects loudly, so reject a case-only collision here too rather than letting
+	// property order decide which entry wins.
+	//
+	// This holds for opaque account ids exactly as it does for email-shaped keys:
+	// storage folds case on both, so the exact `accounts` lookup staying
+	// case-sensitive does NOT make "Foo"/"foo" distinct identities at the metrics
+	// layer. A single spelling still resolves case-sensitively; only a config
+	// carrying BOTH casings of the same {provider, account, org} is rejected.
+	//
+	// The email fallback index below is a separate concern: it is populated only
+	// from email-shaped ("@") keys, because the fallback only ever looks up a
+	// lowercased report email (`emailLabelOf`) — an opaque id is never an email,
+	// so folding it into that index would add an unreachable entry. Building the
+	// index here rather than at insert keeps the loader's exact-spelling duplicate
+	// check on the stored key intact.
+	const emailKeyed = new Map<string, { plan?: string; renewsAtSeconds?: number }>();
+	const foldedIdentities = new Set<string>();
+	for (const [key, value] of accounts) {
+		const [keyProvider = "", keyAccount = "", keyOrg = ""] = key.split("\x00");
+		const foldedKey = `${keyProvider}\x00${keyAccount.toLowerCase()}\x00${keyOrg}`;
+		if (foldedIdentities.has(foldedKey)) {
+			throw new Error(
+				`subscription config ${file}: account "${keyAccount}" duplicates an earlier entry after case-folding (provider "${keyProvider}", account "${keyAccount.toLowerCase()}", org "${keyOrg}")`,
+			);
+		}
+		foldedIdentities.add(foldedKey);
+		if (keyAccount.includes("@")) emailKeyed.set(foldedKey, value);
+	}
+
+	return {
+		// Prefer the exact org-scoped entry; fall back to an org-less config entry
+		// so a pre-org config (no `org` key) still resolves for every org of that
+		// account, matching the prior single-key behavior.
+		lookup: (provider, account, org, email, rawAccountId) => {
+			// The `{provider, account, org}` entry, org-scoped then org-less.
+			const byKey = (key: string) =>
+				accounts.get(`${provider}\x00${key}\x00${org}`) ??
+				(org.length > 0 ? accounts.get(`${provider}\x00${key}\x00`) : undefined);
+			// Config keys name raw provider ids, so a lifted `account:<id>` label
+			// resolves by its raw id first.
+			const byAccount = () => (rawAccountId !== undefined ? byKey(rawAccountId) : undefined) ?? byKey(account);
+			// The report's email arrives already trimmed and lowercased
+			// (`emailLabelOf`), while an account key is stored trim-only so real
+			// account IDS stay case-sensitive. So an email-only entry written with
+			// different casing ("Alice@Example.com") would never join its own
+			// report. Try the stored spelling first, then the case-folded index —
+			// email is case-insensitive in practice, account ids are not.
+			const byEmail = () =>
+				accounts.get(`${provider}\x00${email}\x00${org}`) ??
+				(org.length > 0 ? accounts.get(`${provider}\x00${email}\x00`) : undefined) ??
+				emailKeyed.get(`${provider}\x00${email}\x00${org}`) ??
+				(org.length > 0 ? emailKeyed.get(`${provider}\x00${email}\x00`) : undefined);
+			// An email-only identity (no account/project/org id recovered) labels
+			// `account="unidentified"`, which is the SAME key for every such report
+			// of a provider — so resolve those against the email that DID survive
+			// FIRST, or a config that also carries an `accounts.unidentified`
+			// fallback would answer every such report with the sentinel entry and
+			// one generic plan/renewal would apply to every email-only account.
+			// The email is the operator's own name for the account, so it is the
+			// specific match; the sentinel entry is the fallback. Reports that DID
+			// recover an account keep the existing precedence untouched.
+			if (account === UNIDENTIFIED_ACCOUNT && email) return byEmail() ?? byAccount();
+			return byAccount();
+		},
+		plans,
+	};
+}
+
+/**
+ * OAuth refresh handler for `omp auth-broker serve`'s {@link AuthStorage}.
+ *
+ * The vault holds provider OAuth rows AND OMP-managed `mcp_oauth:*` rows.
+ * Provider rows refresh through the per-provider registry. MCP rows are
+ * self-describing — the embedded token endpoint and client credentials are the
+ * only refresh material — so they refresh with a generic `refresh_token` grant.
+ * The serve process never loads the MCP manager, so this is the only place that
+ * teaches the broker to refresh MCP tokens; without it
+ * `POST /v1/credential/:id/refresh` fails with "Unknown OAuth provider" and the
+ * background refresher lets MCP access tokens expire (issue #8933).
+ */
+export function refreshBrokerOAuthCredential(
+	provider: string,
+	credential: OAuthCredential,
+	signal?: AbortSignal,
+): Promise<OAuthCredentials> {
+	if (isManagedMCPOAuthCredentialId(provider)) {
+		return refreshManagedMcpOAuthCredential(credential, {
+			serverUrl: mcpOAuthServerUrlFromCredentialId(provider),
+			signal,
+		});
+	}
+	// Non-MCP rows: same per-provider path AuthStorage would take by default
+	// (the serve process registers no custom OAuth providers).
+	return refreshOAuthToken(provider as OAuthProvider, credential, signal);
+}
+
+/** The `omp auth-broker serve` vault: tokens refresh in this process through {@link refreshBrokerOAuthCredential}. */
+export function createBrokerAuthStorage(store: SqliteAuthCredentialStore): AuthStorage {
+	return new AuthStorage(store, {
+		refreshOAuthCredential: (provider, _credentialId, credential, signal) =>
+			refreshBrokerOAuthCredential(provider, credential, signal),
+		refreshOAuthCredentialMints: true,
+	});
+}
+
+async function runServe(flags: AuthBrokerCommandArgs["flags"]): Promise<void> {
+	// The broker is a long-running headless service: route structured logs to
+	// stdout so a process supervisor (pm2, journald, k8s) captures them, and
+	// skip the rotating ~/.omp/logs/ file the TUI default would have used.
+	setLoggerTransports({ console: true, file: false });
+
+	const bind = flags.bind ?? DEFAULT_AUTH_BROKER_BIND;
+	const token = await ensureTokenFile(getTokenFilePath());
+	// Opt-in: resolved before anything touches the scrape token, so a deployment
+	// that never asked for `/metrics` performs no token I/O at all.
+	const metrics = await resolveServeMetrics(resolveEnableMetricsFlag(flags.enableMetrics, flags.noEnableMetrics));
+	const dbPath = getAgentDbPath();
+	const store = await SqliteAuthCredentialStore.open(dbPath);
+	const storage = createBrokerAuthStorage(store);
+	await storage.credentials.reload();
+	// Load the static subscription config if a path is set via the flag or
+	// `OMP_AUTH_BROKER_SUBSCRIPTIONS`; a parse/shape error throws so the broker
+	// never boots emitting partial series. Unset → omit, broker runs exactly as
+	// before. Skipped entirely while `/metrics` is off — the disabled route is
+	// its only consumer, so a bad file must not block startup.
+	const subscriptions = await loadSubscriptionsConfig(flags.subscriptionsConfig, metrics.enabled);
+	if (subscriptions) logger.info("auth-broker subscription config loaded", { plans: subscriptions.plans.length });
+	const apiKeyMetrics = await loadApiKeyMetricsConfig(flags.apiKeyMetricsConfig, metrics.enabled);
+	if (apiKeyMetrics) {
+		logger.info("auth-broker API-key metrics config loaded", {
+			maxRoster: apiKeyMetrics.maxRoster,
+			providers: apiKeyMetrics.providers.length,
+			modelClasses: apiKeyMetrics.modelClasses.length,
+		});
+	}
+	const handle = startAuthBroker({
+		storage,
+		bind,
+		bearerTokens: [token],
+		metricsEnabled: metrics.enabled,
+		...(metrics.enabled ? { metricsTokens: [metrics.token] } : {}),
+		...(subscriptions ? { subscriptions } : {}),
+		...(apiKeyMetrics ? { apiKeyMetrics } : {}),
+		trustProxyHeaders: flags.trustProxyHeaders,
+		version: VERSION,
+	});
+	logger.info("auth-broker listening", { url: handle.url });
+	logger.info("auth-broker bearer token loaded", { path: getTokenFilePath(), mode: "0600" });
+	if (metrics.enabled) logger.info("auth-broker metrics endpoint enabled", { tokenSource: metrics.source });
+
+	const shutdown = async (signal: NodeJS.Signals): Promise<void> => {
+		logger.info("auth-broker shutting down", { signal });
+		await handle.close();
+		storage.close();
+		process.exit(0);
+	};
+	process.once("SIGINT", () => void shutdown("SIGINT"));
+	process.once("SIGTERM", () => void shutdown("SIGTERM"));
+
+	// Block forever; lifecycle is signal-driven.
+	await new Promise<never>(() => {});
+}
+
+/**
+ * `omp auth-broker token` — read or rotate a broker credential.
+ *
+ * `--metrics` manages the scrape-scoped read-only token, and it resolves that
+ * token through the SAME precedence `serve` uses, so this reports the value the
+ * broker actually accepts rather than the mint file's. Reading the mint file
+ * unconditionally would print a token no scrape is authorized by whenever an
+ * injection var provisions one, and `--regenerate` would rewrite an unread file
+ * — printing a fresh unused credential while the injected one stayed accepted,
+ * silently defeating the rotation the operator just performed. So rotation is
+ * refused while the active token is externally managed: rotating it belongs to
+ * whatever provisioned it, and the broker must not overwrite a mounted secret.
+ *
+ * Without `--metrics` this manages the master bearer, which has no injection
+ * path, so its mint-and-rotate behavior is unchanged.
+ */
+async function runToken(flags: AuthBrokerCommandArgs["flags"]): Promise<void> {
+	if (flags.metrics) {
+		const active = await resolveMetricsToken();
+		if (flags.regenerate && active.managedBy !== undefined) {
+			throw new Error(
+				`Cannot rotate the /metrics token: it is provisioned through ${active.managedBy} (${active.source}), so rewriting omp's own token file would not change the value the broker accepts. Rotate it at its source, or unset ${active.managedBy} to let omp manage the token.`,
+			);
+		}
+		const token = flags.regenerate ? generateToken() : active.token;
+		if (flags.regenerate) {
+			// Not provisioned, so `active.file` is the mint path.
+			await writeTokenFile(active.file ?? getMetricsTokenFilePath(), token);
+		}
+		if (flags.json) {
+			// `path` only when a file's bytes ARE the token; an env-supplied value
+			// has none, and naming one would send an operator to a missing file.
+			// `source` always names the origin.
+			process.stdout.write(
+				`${JSON.stringify({ token, source: active.source, ...(active.file !== undefined ? { path: active.file } : {}) })}\n`,
+			);
+		} else {
+			process.stdout.write(`${token}\n`);
+		}
+		return;
+	}
+	const file = getTokenFilePath();
+	if (flags.regenerate) {
+		const next = generateToken();
+		await writeTokenFile(file, next);
+		if (flags.json) {
+			process.stdout.write(`${JSON.stringify({ token: next, path: file })}\n`);
+		} else {
+			process.stdout.write(`${next}\n`);
+		}
+		return;
+	}
+	const token = await ensureTokenFile(file);
+	if (flags.json) {
+		process.stdout.write(`${JSON.stringify({ token, path: file })}\n`);
+	} else {
+		process.stdout.write(`${token}\n`);
+	}
+}
+
+async function runLogin(flags: AuthBrokerCommandArgs["flags"]): Promise<void> {
+	if (flags.via && !flags.provider) {
+		throw new Error("Usage: omp auth-broker login <provider> --via=user@host (provider required for remote login)");
+	}
+	const providers = getOAuthProviders();
+	// One interface for picker + login prompts; closed before `--via` hands
+	// stdin to ssh.
+	const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+	let providerArg: string;
+	try {
+		providerArg = flags.provider ?? (await pickOAuthProvider(rl, providers));
+		if (!providers.some(p => p.id === providerArg)) {
+			throw new Error(
+				`Unknown OAuth provider '${providerArg}'. Known: ${providers
+					.map(p => p.id)
+					.sort()
+					.join(", ")}`,
+			);
+		}
+		if (!flags.via) {
+			await runLocalLogin(rl, providerArg);
+			return;
+		}
+	} finally {
+		rl.close();
+	}
+	await runRemoteLogin(providerArg, flags.via, flags.dryRun ?? false);
+}
+
+async function runLocalLogin(rl: readline.Interface, provider: string): Promise<void> {
+	// Drive the per-provider OAuth dance in-process. Persists into the same
+	// SQLite store the broker uses.
+	const store = await SqliteAuthCredentialStore.open(getAgentDbPath());
+	const storage = new AuthStorage(store);
+	await storage.credentials.reload();
+	try {
+		await runTerminalOAuthLogin(rl, storage, provider);
+		process.stdout.write(`\nCredentials saved to ${getAgentDbPath()}\n`);
+	} finally {
+		store.close();
+	}
+}
+
+async function runRemoteLogin(provider: string, via: string, dryRun: boolean): Promise<void> {
+	const port = CALLBACK_PORTS[provider];
+	if (port === undefined) {
+		throw new Error(
+			`No known OAuth callback port for '${provider}'. Use device-code flow on the broker host directly.`,
+		);
+	}
+	const sshArgs = [
+		"-L",
+		`${port}:127.0.0.1:${port}`,
+		"-o",
+		"ExitOnForwardFailure=yes",
+		via,
+		`${APP_NAME} auth-broker login ${provider}`,
+	];
+	if (dryRun) {
+		process.stdout.write(`ssh ${sshArgs.map(a => (a.includes(" ") ? `'${a}'` : a)).join(" ")}\n`);
+		return;
+	}
+	const sshBin = $which("ssh");
+	if (!sshBin) {
+		throw new Error("ssh binary not found in PATH");
+	}
+	const proc = Bun.spawn({
+		cmd: [sshBin, ...sshArgs],
+		stdin: "inherit",
+		stdout: "inherit",
+		stderr: "inherit",
+	});
+	const exitCode = await proc.exited;
+	if (exitCode !== 0) {
+		throw new Error(`ssh exited with code ${exitCode}`);
+	}
+}
+
+async function runLogout(flags: AuthBrokerCommandArgs["flags"]): Promise<void> {
+	let providerArg = flags.provider;
+	const store = await SqliteAuthCredentialStore.open(getAgentDbPath());
+	try {
+		if (!providerArg) {
+			const stored = store.listProviders();
+			if (stored.length === 0) {
+				process.stdout.write("No credentials stored.\n");
+				return;
+			}
+			const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+			try {
+				providerArg = stored[await pickIndex(rl, "Select a provider to logout:", stored)];
+			} finally {
+				rl.close();
+			}
+		}
+		await store.deleteAuthCredentials(providerArg, "logged out by user");
+		process.stdout.write(`Logged out of ${providerArg}\n`);
+	} finally {
+		store.close();
+	}
+}
+
+async function runList(flags: AuthBrokerCommandArgs["flags"]): Promise<void> {
+	const providers = getOAuthProviders();
+	if (flags.json) {
+		process.stdout.write(`${JSON.stringify(providers.map(p => ({ id: p.id, name: p.name })))}\n`);
+		return;
+	}
+	process.stdout.write("Available providers:\n\n");
+	for (const p of providers) {
+		process.stdout.write(`  ${p.id.padEnd(20)} ${p.name}\n`);
+	}
+}
+
+// ─── CLIProxyAPI import ─────────────────────────────────────────────────
+
+/**
+ * Maps the `type` field of a CLIProxyAPI credential JSON to the omp provider id.
+ * The filename also encodes the type (e.g. `claude-foo@bar.json`), but the
+ * in-file `type` is authoritative — we only fall back to filename if absent.
+ */
+const CLIPROXY_TYPE_TO_PROVIDER: Record<string, string> = {
+	claude: "anthropic",
+	codex: "openai-codex",
+	gemini: "google-gemini-cli",
+	antigravity: "google-antigravity",
+	"gemini-cli": "google-gemini-cli",
+};
+
+interface CliProxyCredentialJson {
+	type?: string;
+	access_token?: string;
+	refresh_token?: string;
+	id_token?: string;
+	expired?: string;
+	last_refresh?: string;
+	email?: string;
+	account_id?: string;
+	disabled?: boolean;
+}
+
+interface ImportPlanEntry {
+	sourceFile: string;
+	provider: string;
+	email: string | null;
+	accountId: string | null;
+	expiresAt: number;
+	disabled: boolean;
+	credential: OAuthCredential;
+}
+
+function resolveCliProxyProvider(json: CliProxyCredentialJson, filename: string, overrideId?: string): string | null {
+	if (overrideId && overrideId.length > 0) return overrideId;
+	const typeField = json.type?.trim().toLowerCase();
+	if (typeField && CLIPROXY_TYPE_TO_PROVIDER[typeField]) return CLIPROXY_TYPE_TO_PROVIDER[typeField];
+	// Fall back to filename prefix: `<type>-<email>.json`
+	const base = path.basename(filename, ".json").toLowerCase();
+	for (const prefix in CLIPROXY_TYPE_TO_PROVIDER) {
+		const providerId = CLIPROXY_TYPE_TO_PROVIDER[prefix];
+		if (base.startsWith(`${prefix}-`) || base === prefix) return providerId;
+	}
+	return null;
+}
+
+function parseCliProxyExpiry(raw: string | undefined): number | null {
+	if (!raw) return null;
+	// CLIProxyAPI writes RFC3339-ish dates. `Date.parse` handles both `Z` and offsets.
+	const ms = Date.parse(raw);
+	if (!Number.isFinite(ms)) return null;
+	return ms;
+}
+
+async function collectImportSources(target: string): Promise<string[]> {
+	const stat = await fs.stat(target);
+	if (stat.isFile()) return [target];
+	if (!stat.isDirectory()) {
+		throw new Error(`Import source is neither file nor directory: ${target}`);
+	}
+	const entries = await fs.readdir(target, { withFileTypes: true });
+	const files: string[] = [];
+	for (const entry of entries) {
+		if (!entry.isFile()) continue;
+		if (!entry.name.endsWith(".json")) continue;
+		files.push(path.join(target, entry.name));
+	}
+	files.sort();
+	return files;
+}
+
+async function loadImportPlan(
+	target: string,
+	overrideProvider: string | undefined,
+	includeDisabled: boolean,
+): Promise<{ entries: ImportPlanEntry[]; skipped: Array<{ file: string; reason: string }> }> {
+	const files = await collectImportSources(target);
+	const entries: ImportPlanEntry[] = [];
+	const skipped: Array<{ file: string; reason: string }> = [];
+	for (const file of files) {
+		let json: CliProxyCredentialJson;
+		try {
+			json = JSON.parse(await fs.readFile(file, "utf8")) as CliProxyCredentialJson;
+		} catch (err) {
+			skipped.push({ file, reason: `unreadable JSON: ${String(err)}` });
+			continue;
+		}
+		if (json.disabled === true && !includeDisabled) {
+			skipped.push({ file, reason: "credential marked disabled (use --include-disabled to import anyway)" });
+			continue;
+		}
+		const provider = resolveCliProxyProvider(json, file, overrideProvider);
+		if (!provider) {
+			skipped.push({
+				file,
+				reason: `cannot determine omp provider from type=${json.type ?? "?"} (pass --provider to override)`,
+			});
+			continue;
+		}
+		if (!json.access_token || !json.refresh_token) {
+			skipped.push({ file, reason: "missing access_token or refresh_token" });
+			continue;
+		}
+		const expiresAt = parseCliProxyExpiry(json.expired);
+		if (expiresAt === null) {
+			skipped.push({ file, reason: `cannot parse expired=${json.expired ?? "?"}` });
+			continue;
+		}
+		const email = typeof json.email === "string" && json.email.length > 0 ? json.email : null;
+		const accountId = typeof json.account_id === "string" && json.account_id.length > 0 ? json.account_id : null;
+		const credential: OAuthCredential = {
+			type: "oauth",
+			access: json.access_token,
+			refresh: json.refresh_token,
+			expires: expiresAt,
+			...(email !== null ? { email } : {}),
+			...(accountId !== null ? { accountId } : {}),
+		};
+		entries.push({
+			sourceFile: file,
+			provider,
+			email,
+			accountId,
+			expiresAt,
+			disabled: json.disabled === true,
+			credential,
+		});
+	}
+	return { entries, skipped };
+}
+
+function describeImportEntry(entry: ImportPlanEntry): string {
+	const ident = entry.email ?? entry.accountId ?? "(no identity)";
+	const stale = entry.expiresAt < Date.now() ? " [expired]" : "";
+	const disabled = entry.disabled ? " [disabled]" : "";
+	return `${entry.provider}: ${ident}${stale}${disabled} from ${entry.sourceFile}`;
+}
+
+async function runImport(flags: AuthBrokerCommandArgs["flags"]): Promise<void> {
+	const target = flags.source;
+	if (!target) {
+		throw new Error("Usage: omp auth-broker import <file|dir> [--provider=<id>] [--include-disabled] [--dry-run]");
+	}
+	const resolvedTarget = path.resolve(target.startsWith("~") ? target.replace(/^~/, os.homedir()) : target);
+	const { entries, skipped } = await loadImportPlan(resolvedTarget, flags.provider, flags.includeDisabled === true);
+
+	if (flags.json) {
+		process.stdout.write(
+			`${JSON.stringify({
+				dryRun: flags.dryRun === true,
+				imported: flags.dryRun
+					? []
+					: entries.map(e => ({ provider: e.provider, email: e.email, file: e.sourceFile })),
+				plan: entries.map(e => ({
+					provider: e.provider,
+					email: e.email,
+					accountId: e.accountId,
+					expiresAt: e.expiresAt,
+					disabled: e.disabled,
+					file: e.sourceFile,
+				})),
+				skipped,
+			})}\n`,
+		);
+	}
+
+	if (!flags.json) {
+		for (const skip of skipped) {
+			process.stdout.write(`${chalk.yellow("skip")} ${skip.file}: ${skip.reason}\n`);
+		}
+	}
+
+	if (entries.length === 0) {
+		if (!flags.json) process.stdout.write(`No importable credentials in ${resolvedTarget}.\n`);
+		return;
+	}
+
+	if (flags.dryRun === true) {
+		if (!flags.json) {
+			process.stdout.write(`Dry run — would import ${entries.length} credential(s):\n`);
+			for (const entry of entries) process.stdout.write(`  ${describeImportEntry(entry)}\n`);
+		}
+		return;
+	}
+
+	const brokerConfig = await resolveAuthBrokerConfig();
+	if (brokerConfig) {
+		const client = new AuthBrokerClient({ url: brokerConfig.url, token: brokerConfig.token });
+		for (const entry of entries) {
+			try {
+				await client.uploadCredential(entry.provider, entry.credential);
+				if (!flags.json) {
+					process.stdout.write(`${chalk.green("uploaded")} ${describeImportEntry(entry)} → ${brokerConfig.url}\n`);
+				}
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				if (flags.json) {
+					process.stdout.write(`${JSON.stringify({ error: message, file: entry.sourceFile })}\n`);
+				} else {
+					process.stdout.write(`${chalk.red("failed")} ${describeImportEntry(entry)}: ${message}\n`);
+				}
+				process.exitCode = 1;
+			}
+		}
+		return;
+	}
+
+	const store = await SqliteAuthCredentialStore.open(getAgentDbPath());
+	try {
+		for (const entry of entries) {
+			await store.upsertAuthCredential(entry.provider, entry.credential);
+			if (!flags.json) process.stdout.write(`${chalk.green("imported")} ${describeImportEntry(entry)}\n`);
+		}
+	} finally {
+		store.close();
+	}
+}
+
+// ─── Migrate: local SQLite + env → broker ──────────────────────────────
+
+interface MigratePlanEntry {
+	source: "local-sqlite" | "env";
+	provider: string;
+	credential: AuthCredential;
+	identity: string;
+}
+
+interface MigrateSkip {
+	source: "local-sqlite" | "env";
+	provider: string;
+	identity: string;
+	reason: string;
+}
+
+function credentialIdentity(provider: string, credential: AuthCredential): string {
+	if (credential.type === "api_key") {
+		const suffix = credential.key.length > 4 ? credential.key.slice(-4) : "****";
+		return `(api key …${suffix})`;
+	}
+	const base = credential.email ?? credential.accountId ?? credential.projectId ?? `<${provider} oauth>`;
+	return credential.orgId ? `${base} (${credential.orgName ?? credential.orgId})` : base;
+}
+
+/**
+ * Whether the broker already holds this credential, so re-runs are idempotent.
+ * OAuth uses replacement/account identity; API keys require exact key equality.
+ */
+function brokerAlreadyHas(
+	existing: readonly AuthCredentialSnapshotEntry[],
+	provider: string,
+	credential: AuthCredential,
+): boolean {
+	return existing.some(entry => {
+		if (entry.provider !== provider) return false;
+		if (credential.type === "api_key") {
+			return entry.credential.type === "api_key" && entry.credential.key === credential.key;
+		}
+		return (
+			entry.credential.type === "oauth" &&
+			(matchesReplacementCredential(provider, entry.credential, entry.identityKey, credential) ||
+				isSameOAuthAccount(entry.credential, credential))
+		);
+	});
+}
+
+async function runMigrate(flags: AuthBrokerCommandArgs["flags"]): Promise<void> {
+	const brokerConfig = await resolveAuthBrokerConfig();
+	if (!brokerConfig) {
+		throw new Error(
+			"OMP_AUTH_BROKER_URL must be set (or `auth.broker.url` in config.yml). `migrate` uploads local credentials to a configured broker.",
+		);
+	}
+	if (flags.fromLocal !== true) {
+		throw new Error(
+			"`omp auth-broker migrate` requires an explicit source. Pass `--from-local` to migrate from the local SQLite store and env vars.",
+		);
+	}
+
+	const client = new AuthBrokerClient({ url: brokerConfig.url, token: brokerConfig.token });
+	const snapshotResult = await client.fetchSnapshot();
+	if (snapshotResult.status !== 200) throw new Error("Auth broker returned no snapshot");
+	const existing = snapshotResult.snapshot.credentials;
+
+	const plan: MigratePlanEntry[] = [];
+	const skipped: MigrateSkip[] = [];
+
+	// 1. Local SQLite rows.
+	const localDbPath = getAgentDbPath();
+	const localStore = await SqliteAuthCredentialStore.open(localDbPath);
+	const plannedApiKeys = new Map<string, Set<string>>();
+	try {
+		for (const row of localStore.listAuthCredentials()) {
+			// Skip placeholder sentinels that pi-ai treats as "authenticated via
+			// out-of-band mechanism" (Bedrock/Vertex `<authenticated>`). They
+			// aren't real keys and uploading them would store garbage on the
+			// broker. Mirrors the env-var path's guard below.
+			if (row.credential.type === "api_key" && row.credential.key === "<authenticated>") {
+				skipped.push({
+					source: "local-sqlite",
+					provider: row.provider,
+					identity: credentialIdentity(row.provider, row.credential),
+					reason: "placeholder sentinel '<authenticated>' is not a real key",
+				});
+				continue;
+			}
+			const identity = credentialIdentity(row.provider, row.credential);
+			if (row.credential.type === "oauth" && flags.includeOauth !== true) {
+				skipped.push({
+					source: "local-sqlite",
+					provider: row.provider,
+					identity,
+					reason: "OAuth from local SQLite skipped by default (use --include-oauth)",
+				});
+				continue;
+			}
+			if (brokerAlreadyHas(existing, row.provider, row.credential)) {
+				skipped.push({
+					source: "local-sqlite",
+					provider: row.provider,
+					identity,
+					reason: "already on broker",
+				});
+				continue;
+			}
+			if (row.credential.type === "api_key") {
+				const keys = plannedApiKeys.get(row.provider);
+				if (keys?.has(row.credential.key)) {
+					skipped.push({
+						source: "local-sqlite",
+						provider: row.provider,
+						identity,
+						reason: "identical API key already planned",
+					});
+					continue;
+				}
+				if (keys) keys.add(row.credential.key);
+				else plannedApiKeys.set(row.provider, new Set([row.credential.key]));
+			}
+			plan.push({ source: "local-sqlite", provider: row.provider, credential: row.credential, identity });
+		}
+	} finally {
+		localStore.close();
+	}
+
+	// 2. Env-var API keys (opt-in).
+	if (flags.includeEnv === true) {
+		for (const provider of listProvidersWithEnvKey()) {
+			const envValue = getEnvApiKey(provider);
+			if (!envValue) continue;
+			if (envValue === "<authenticated>") continue; // Bedrock/Vertex sentinels — not literal keys.
+			const credential: AuthCredential = { type: "api_key", key: envValue };
+			if (brokerAlreadyHas(existing, provider, credential)) {
+				skipped.push({
+					source: "env",
+					provider,
+					identity: credentialIdentity(provider, credential),
+					reason: "already on broker",
+				});
+				continue;
+			}
+			const keys = plannedApiKeys.get(provider);
+			if (keys?.has(envValue)) {
+				skipped.push({
+					source: "env",
+					provider,
+					identity: credentialIdentity(provider, credential),
+					reason: "identical API key already planned",
+				});
+				continue;
+			}
+			if (keys) keys.add(envValue);
+			else plannedApiKeys.set(provider, new Set([envValue]));
+			plan.push({ source: "env", provider, credential, identity: credentialIdentity(provider, credential) });
+		}
+	}
+
+	if (flags.json) {
+		process.stdout.write(
+			`${JSON.stringify({
+				dryRun: flags.dryRun === true,
+				plan: plan.map(p => ({ source: p.source, provider: p.provider, identity: p.identity })),
+				skipped,
+			})}\n`,
+		);
+	} else {
+		for (const skip of skipped) {
+			process.stdout.write(
+				`${chalk.yellow("skip")} [${skip.source}] ${skip.provider} ${skip.identity}: ${skip.reason}\n`,
+			);
+		}
+	}
+
+	if (plan.length === 0) {
+		if (!flags.json) process.stdout.write("Nothing to migrate.\n");
+		return;
+	}
+
+	if (flags.dryRun === true) {
+		if (!flags.json) {
+			process.stdout.write(`Dry run — would upload ${plan.length} credential(s):\n`);
+			for (const entry of plan) {
+				process.stdout.write(`  [${entry.source}] ${entry.provider} ${entry.identity}\n`);
+			}
+		}
+		return;
+	}
+
+	for (const entry of plan) {
+		try {
+			await client.uploadCredential(entry.provider, entry.credential);
+			if (!flags.json) {
+				process.stdout.write(`${chalk.green("uploaded")} [${entry.source}] ${entry.provider} ${entry.identity}\n`);
+			}
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			if (flags.json) {
+				process.stdout.write(`${JSON.stringify({ error: message, provider: entry.provider })}\n`);
+			} else {
+				process.stdout.write(`${chalk.red("failed")} [${entry.source}] ${entry.provider}: ${message}\n`);
+			}
+			process.exitCode = 1;
+		}
+	}
+}
+
+async function runStatus(flags: AuthBrokerCommandArgs["flags"]): Promise<void> {
+	const cfg = await resolveAuthBrokerConfig();
+	if (!cfg) {
+		const message = "No auth-broker configured (set OMP_AUTH_BROKER_URL to enable).";
+		if (flags.json) process.stdout.write(`${JSON.stringify({ ok: false, reason: "not_configured" })}\n`);
+		else process.stdout.write(`${chalk.yellow(message)}\n`);
+		return;
+	}
+	const client = new AuthBrokerClient({ url: cfg.url, token: cfg.token });
+	try {
+		const health = await client.healthz();
+		if (flags.json) {
+			process.stdout.write(`${JSON.stringify({ url: cfg.url, ...health })}\n`);
+		} else {
+			process.stdout.write(`${chalk.green("OK")} ${cfg.url} (version=${health.version ?? "unknown"})\n`);
+		}
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		if (flags.json) {
+			process.stdout.write(`${JSON.stringify({ ok: false, url: cfg.url, error: message })}\n`);
+		} else {
+			process.stdout.write(`${chalk.red("FAILED")} ${cfg.url}: ${message}\n`);
+		}
+		process.exitCode = 1;
+	}
+}
+
+export async function runAuthBrokerCommand(cmd: AuthBrokerCommandArgs): Promise<void> {
+	switch (cmd.action) {
+		case "serve":
+			await runServe(cmd.flags);
+			return;
+		case "token":
+			await runToken(cmd.flags);
+			return;
+		case "login":
+			await runLogin(cmd.flags);
+			return;
+		case "logout":
+			await runLogout(cmd.flags);
+			return;
+		case "import":
+			await runImport(cmd.flags);
+			return;
+		case "migrate":
+			await runMigrate(cmd.flags);
+			return;
+		case "status":
+			await runStatus(cmd.flags);
+			return;
+		case "list":
+			await runList(cmd.flags);
+			return;
+		default: {
+			// Exhaustive check.
+			const _exhaustive: never = cmd.action;
+			throw new Error(`Unknown auth-broker action: ${String(_exhaustive)}`);
+		}
+	}
+}
+
+export { ACTIONS as AUTH_BROKER_ACTIONS };
+
+// Touch `$` so Bun's tree-shaker keeps the shell helper imported (used by future verbs).
+void $;

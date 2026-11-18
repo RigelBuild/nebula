@@ -1,0 +1,31 @@
+language: typescript
+tasks:
+  install:
+    command: bun install --frozen-lockfile
+    options:
+      # Fork pins bun 1.4.4; not in the nebula devshell (RIG-10145).
+      runInCI: false
+    inputs:
+      - package.json
+      - bun.lock
+      - bunfig.toml
+      - packages/*/package.json
+      - python/robomp/web/package.json
+  typecheck:
+    command: bun run check:ts
+    options:
+      # Typecheck spans 17 packages; not run in the nebula devshell (RIG-10145).
+      runInCI: false
+    deps:
+      - install
+    inputs:
+      - packages/**/*.ts
+      - packages/**/*.tsx
+      - packages/**/tsconfig*.json
+      - scripts/**/*.ts
+      - tsconfig*.json
+      - tsconfig.base.json
+      - .oxlintrc.json
+      - .oxfmtrc.json
+      - package.json
+      - bun.lock

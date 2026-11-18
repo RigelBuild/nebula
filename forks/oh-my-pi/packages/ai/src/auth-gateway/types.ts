@@ -1,0 +1,205 @@
+import type { Effort } from "@oh-my-pi/pi-catalog/effort";
+import type { AuthGatewayClient } from "./clients";
+import type {
+	AssistantMessage,
+	AssistantMessageEventStream,
+	CacheRetention,
+	Context,
+	OpenAIResponseInclude,
+	ServiceTier,
+	TokenTaskBudget,
+} from "../types";
+
+/**
+ * Wire types for the omp auth-gateway.
+ *
+ * The gateway sits between unauthenticated clients (containerized omp,
+ * llm-git, …) and the broker. It accepts provider-format HTTP requests
+ * (OpenAI chat-completions / Anthropic messages / OpenAI Responses),
+ * dispatches them through pi-ai's `streamSimple()`, and translates the
+ * canonical event stream back to the matching wire format. The gateway
+ * injects `Authorization` server-side so clients never see access tokens.
+ */
+
+/** Default bind. Loopback-only — front with reverse proxy for remote access. */
+export const DEFAULT_AUTH_GATEWAY_BIND = "127.0.0.1:4000";
+
+export type AuthGatewayToolChoice = "auto" | "none" | "required" | { name: string } | { type: "computer" };
+
+export interface AuthGatewayParsedRequestOptions {
+	// ── Sampling ──────────────────────────────────────────────────────────
+	maxOutputTokens?: number;
+	temperature?: number;
+	topP?: number;
+	topK?: number;
+	/** OpenAI nucleus-min sampling (`min_p`). */
+	minP?: number;
+	/** Anthropic `stop_sequences` / OpenAI `stop`. */
+	stopSequences?: string[];
+	/** OpenAI `presence_penalty`. */
+	presencePenalty?: number;
+	/** OpenAI `frequency_penalty`. */
+	frequencyPenalty?: number;
+	/** OpenRouter / vLLM `repetition_penalty`. */
+	repetitionPenalty?: number;
+	/** OpenAI deterministic-sampling `seed`. */
+	seed?: number;
+	/** OpenAI `logit_bias` map (token id → bias). */
+	logitBias?: Record<string, number>;
+	/** OpenAI `response_format` (text | json_object | json_schema). Opaque passthrough. */
+	responseFormat?: unknown;
+
+	// ── Tools ─────────────────────────────────────────────────────────────
+	toolChoice?: AuthGatewayToolChoice;
+	/** OpenAI `parallel_tool_calls`. */
+	parallelToolCalls?: boolean;
+	/** OpenAI Responses fields requested in the response payload. */
+	include?: OpenAIResponseInclude[];
+	// ── Reasoning ─────────────────────────────────────────────────────────
+	/** Effort-level reasoning request (OpenAI Responses / Chat `reasoning_effort`). */
+	reasoning?: Effort;
+	/** Force-disable reasoning (Anthropic `thinking: { type: "disabled" }`). */
+	disableReasoning?: boolean;
+	/**
+	 * Preserve an explicit wire-level reasoning-off request through providers
+	 * that distinguish it from the generic disable hint.
+	 */
+	forceReasoningOff?: boolean;
+	/**
+	 * Explicit Anthropic `thinking.budget_tokens`. Mirrors Rust's
+	 * `resolve_thinking_budget`: pins onto whichever effort the client
+	 * requested (defaulting to High when unspecified). Preferred over the
+	 * removed legacy single-number `thinkingBudget` for new code.
+	 */
+	explicitThinkingBudgetTokens?: number;
+	/** Per-effort thinking budget map. */
+	thinkingBudgets?: Partial<Record<Effort, number>>;
+	/** Suppress the provider's reasoning summary stream. */
+	hideThinkingSummary?: boolean;
+	/** Anthropic `output_config.task_budget` advisory loop budget. */
+	taskBudget?: TokenTaskBudget;
+	/** Anthropic preserved-thinking behavior for a changed conversation prefix. */
+	anthropicPrefixMismatchBehavior?: "drop_block" | "error";
+
+	// ── Service / routing ─────────────────────────────────────────────────
+	/** OpenAI service tier (auto|default|flex|scale|priority). */
+	serviceTier?: ServiceTier;
+	/** Cache retention hint derived from inbound `cache_control` markers. */
+	cacheRetention?: CacheRetention;
+	/** OpenAI Responses `prompt_cache_key`; also seeds provider routing when no separate session id exists. */
+	promptCacheKey?: string;
+	/** OpenAI Responses `previous_response_id` for response chaining. */
+	previousResponseId?: string;
+	/** OpenAI / abuse-tracking `user` field. */
+	user?: string;
+
+	// ── Passthrough ───────────────────────────────────────────────────────
+	/**
+	 * Provider-specific metadata. Anthropic uses `metadata.user_id`; OpenRouter
+	 * carries routing hints; xAI uses `search_parameters`; OpenAI accepts a
+	 * free-form bag. The gateway forwards as-is.
+	 */
+	metadata?: Record<string, unknown>;
+	/** Anthropic User Profile attribution from the inbound request header. */
+	userProfileId?: string;
+	/**
+	 * Captured allow-listed passthrough headers (anthropic-beta,
+	 * anthropic-version, openai-organization, openai-project, openai-beta,
+	 * x-stainless-*). Keys are lowercased.
+	 */
+	headers?: Record<string, string>;
+	/**
+	 * Escape hatch for provider-specific request controls that don't yet have a
+	 * first-class field. Prefer adding a typed field over widening this.
+	 */
+	extra?: Record<string, unknown>;
+}
+
+export interface AuthGatewayParsedRequest {
+	modelId: string;
+	context: Context;
+	stream: boolean;
+	options: AuthGatewayParsedRequestOptions;
+}
+
+export interface AuthGatewayStreamControl {
+	/** Gateway request signal. Encoders stop producing frames when it aborts. */
+	signal?: AbortSignal;
+	/** Called when the HTTP response body is cancelled by the client. */
+	onCancel?: (reason?: unknown) => void;
+}
+
+export interface AuthGatewayFormatModule {
+	parseRequest(body: unknown, headers?: Headers): AuthGatewayParsedRequest;
+	encodeResponse(message: AssistantMessage, requestedModelId: string): Record<string, unknown>;
+	encodeStream(
+		events: AssistantMessageEventStream,
+		requestedModelId: string,
+		options?: AuthGatewayParsedRequestOptions,
+		control?: AuthGatewayStreamControl,
+	): ReadableStream<Uint8Array>;
+	/**
+	 * Emit a protocol-specific error envelope. OpenAI returns
+	 * `{ error: { message, type } }`; Anthropic returns
+	 * `{ type: "error", error: { type, message } }`.
+	 */
+	formatError(status: number, type: string, message: string): Response;
+}
+
+/** An agent admitted on its own bearer. */
+export interface AgentCaller {
+	kind: "agent";
+	/** The agent the request belongs to; retained provider sessions are kept per agent. */
+	agentAccountId: string;
+	/**
+	 * The tenant that owns the agent. Agents of one owner share a credential pool,
+	 * so `resolveStorage` keys on this when it is set.
+	 */
+	ownerUserId?: string;
+}
+
+/** The server's enrollment caller: admitted on `/internal/enroll/*` only, and refused everywhere else. */
+export interface EnrollCaller {
+	kind: "enroll";
+}
+
+/** The caller a request was admitted as. */
+export type CallerIdentity = AgentCaller | EnrollCaller;
+
+/**
+ * Admits a request: the caller it belongs to, or `null` to answer 401. A throw
+ * answers 503, so a verifier outage never reads as a bad credential. Admit only
+ * on the `Authorization: Bearer` token: the gateway keeps that token out of the
+ * URL and logged headers, and answers 401 to an admission that carried none.
+ * Honor `req.signal` and bound any remote call; a timeout should throw.
+ */
+export type AuthGatewayAuthorizer = (req: Request) => CallerIdentity | null | Promise<CallerIdentity | null>;
+
+export interface AuthGatewayServerOptions {
+	/** Listen address. Default `127.0.0.1:4000`. */
+	bind?: string;
+	/** Inbound auth. Provide this or `bearerTokens`; an injected authorizer takes precedence. */
+	authorize?: AuthGatewayAuthorizer;
+	/** Static gateway bearer tokens used when `authorize` is omitted. */
+	bearerTokens?: readonly string[];
+	/** Scoped clients, each admitted by its own bearer and limited to its models and accounts. */
+	clients?: readonly AuthGatewayClient[];
+	/** Honor forwarded peer headers only when the connecting proxy is trusted. Default false. */
+	trustProxyHeaders?: boolean;
+	/** Version surfaced on `/healthz`. */
+	version?: string;
+}
+export interface AuthGatewayServerHandle {
+	url: string;
+	port: number;
+	hostname: string;
+	/** Drain active responses for at most this long; omitted means immediate close. */
+	close(drainMs?: number): Promise<void>;
+	/**
+	 * Replace the scoped clients. A removed or changed token is refused from
+	 * the next request on; a request already in flight keeps the models and
+	 * accounts it was admitted with, retries included, until it finishes.
+	 * Throws, changing nothing, when the table is invalid. Turns bearer auth on.
+	 */
+	setClients(clients: readonly AuthGatewayClient[]): void;
+}

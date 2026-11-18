@@ -1,0 +1,226 @@
+name: CD
+
+# The file name stays fixed: the release tag uses github.run_number, which
+# resets if this file is renamed.
+on:
+  push:
+    branches: [main]
+    paths-ignore: [release-manifest.json]
+
+# One CD run at a time; GitHub keeps one pending run, so the next run batches
+# every merge that landed meanwhile.
+concurrency:
+  group: nebula-cd
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  plan:
+    name: Plan
+    environment: main
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      projects: ${{ steps.plan.outputs.projects }}
+    steps:
+      - name: Check out tested source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version: '1.27.4'
+          cache: false
+      - name: Plan the batch
+        id: plan
+        env:
+          CGO_ENABLED: '0'
+        run: |
+          go -C tools/cd build -o "$RUNNER_TEMP/cd" .
+          "$RUNNER_TEMP/cd" plan -out "$RUNNER_TEMP/plan.json"
+          cat "$RUNNER_TEMP/plan.json"
+          echo "projects=$(jq -r '.projects | join(" ")' "$RUNNER_TEMP/plan.json")" >> "$GITHUB_OUTPUT"
+      - name: Upload plan
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: plan
+          path: ${{ runner.temp }}/plan.json
+
+  batch:
+    name: Batch (${{ matrix.system }})
+    needs: plan
+    environment: main
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - system: x86_64-linux
+            runner: ubuntu-latest
+            goos: linux
+            goarch: amd64
+          - system: aarch64-linux
+            runner: ubuntu-24.04-arm
+            goos: linux
+            goarch: arm64
+          - system: aarch64-darwin
+            runner: macos-latest
+            goos: darwin
+            goarch: arm64
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    env:
+      # Repository variables. An unset variable leaves its setting empty.
+      NIX_CACHE_SUBSTITUTER: ${{ vars.NIX_CACHE_SUBSTITUTER }}
+      NIX_CACHE_PUBLIC_KEY: ${{ vars.NIX_CACHE_PUBLIC_KEY }}
+    steps:
+      - name: Check out tested source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Install Nix
+        uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086
+        with:
+          extra_nix_config: |
+            extra-substituters = ${{ env.NIX_CACHE_SUBSTITUTER }}
+            extra-trusted-public-keys = cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY= ${{ env.NIX_CACHE_PUBLIC_KEY }}
+            connect-timeout = 5
+            fallback = true
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version: '1.27.4'
+          cache: true
+      - name: Download plan
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: plan
+          path: ${{ runner.temp }}
+      - name: Test planned projects
+        # A red project is held: it keeps its previous asset and joins the held list.
+        env:
+          PROJECTS: ${{ needs.plan.outputs.projects }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/held"
+          : > "$RUNNER_TEMP/held/${{ matrix.system }}"
+          for project in $PROJECTS; do
+            if ! nix develop --command moon run "$(basename "$project"):test" --affected=false; then
+              echo "::warning::$project is red on ${{ matrix.system }}; holding it"
+              jq -r --arg p "$project" '.binaries[] | select(.project == $p) | .package' \
+                "$RUNNER_TEMP/plan.json" >> "$RUNNER_TEMP/held/${{ matrix.system }}"
+            fi
+          done
+      - name: Build and check binaries
+        env:
+          CGO_ENABLED: '0'
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          SYSTEM: ${{ matrix.system }}
+        run: |
+          GOOS= GOARCH= go -C tools/cd build -o "$RUNNER_TEMP/cd" .
+          mkdir -p "$RUNNER_TEMP/assets"
+          jq -c '.binaries[] as $b | select(.build | index($b.package)) | $b' "$RUNNER_TEMP/plan.json" |
+          while read -r b; do
+            pkg=$(jq -r .package <<<"$b")
+            if grep -qx "$pkg" "$RUNNER_TEMP/held/$SYSTEM"; then continue; fi
+            project=$(jq -r .project <<<"$b")
+            version=$(jq -r .version <<<"$b")
+            stage="$RUNNER_TEMP/stage/$pkg"
+            mkdir -p "$stage/bin"
+            for name in $(jq -r '.binaries[]' <<<"$b"); do
+              go -C "$project" build -trimpath -o "$stage/bin/$name" .
+              "$RUNNER_TEMP/cd" check-asset -system "$SYSTEM" "$stage/bin/$name"
+            done
+            tar -C "$stage" -cf - bin | zstd -19 -q -o "$RUNNER_TEMP/assets/$pkg-$version-$SYSTEM.tar.zst"
+          done
+      - name: Attest build provenance
+        if: hashFiles(format('{0}/assets/*', runner.temp)) != ''
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
+        with:
+          subject-path: ${{ runner.temp }}/assets/*.tar.zst
+      - name: Upload assets
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: assets-${{ matrix.system }}
+          path: |
+            ${{ runner.temp }}/assets
+            ${{ runner.temp }}/held
+          if-no-files-found: ignore
+
+  release:
+    name: Release
+    needs: batch
+    environment: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Mint release App token
+        id: app
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510
+        with:
+          app-id: ${{ vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          permission-contents: write
+      - name: Check out tested source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          token: ${{ steps.app.outputs.token }}
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version: '1.27.4'
+          cache: false
+      - name: Download plan and assets
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          path: ${{ runner.temp }}/in
+      - name: Publish release-manifest.json on main
+        id: publish
+        env:
+          CGO_ENABLED: '0'
+          RUN_NUMBER: ${{ github.run_number }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          tag="nebula-$(date -u +%Y%m%d)-$RUN_NUMBER"
+          mkdir -p "$RUNNER_TEMP/assets"
+          find "$RUNNER_TEMP/in" -name '*.tar.zst' -exec mv {} "$RUNNER_TEMP/assets/" \;
+          held=$(find "$RUNNER_TEMP/in" -path '*/held/*' -type f -exec cat {} + | sort -u | paste -sd, -)
+          git config user.name 'rigelbuild-nebula-release[bot]'
+          git config user.email 'rigelbuild-nebula-release[bot]@users.noreply.github.com'
+          go -C tools/cd build -o "$RUNNER_TEMP/cd" .
+          commit=$("$RUNNER_TEMP/cd" publish -plan "$RUNNER_TEMP/in/plan/plan.json" -tag "$tag" \
+            -assets "$RUNNER_TEMP/assets" -held "$held" \
+            -base-url "https://github.com/$REPOSITORY/releases/download/" \
+            -system x86_64-linux -system aarch64-linux -system aarch64-darwin)
+          "$RUNNER_TEMP/cd" guard "$commit"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+      - name: Tag the release commit
+        env:
+          TAG: ${{ steps.publish.outputs.tag }}
+          COMMIT: ${{ steps.publish.outputs.commit }}
+        run: git push origin "$COMMIT:refs/tags/$TAG"
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          TAG: ${{ steps.publish.outputs.tag }}
+        run: |
+          git show "$TAG:release-manifest.json" > "$RUNNER_TEMP/release-manifest.json"
+          held=$(jq -r '.held | join(", ")' "$RUNNER_TEMP/release-manifest.json")
+          notes="Source: $(jq -r .source "$RUNNER_TEMP/release-manifest.json")"
+          if [ -n "$held" ]; then notes="$notes"$'\n\n'"Held (previous asset kept): $held"; fi
+          shopt -s nullglob
+          gh release create "$TAG" --verify-tag --title "$TAG" --notes "$notes" \
+            "$RUNNER_TEMP/release-manifest.json" "$RUNNER_TEMP"/assets/*.tar.zst

@@ -83,10 +83,10 @@ jobs:
         run: |
           set -euo pipefail
           system="$(nix eval --impure --raw --expr builtins.currentSystem)"
-          nix eval --raw ".#packages.${system}" --apply 'ps: builtins.concatStringsSep "\n" (builtins.attrNames ps)' \
-            | while read -r attr; do
-              nix build ".#packages.${system}.${attr}" --no-link
-            done
+          # One build over every package attr, so none is skipped. mapfile keeps
+          # the last name (the read loop dropped it: no trailing newline).
+          mapfile -t attrs < <(nix eval --raw ".#packages.${system}" --apply 'ps: builtins.concatStringsSep "\n" (builtins.attrNames ps)'; echo)
+          nix build --no-link "${attrs[@]/#/.#packages.${system}.}"
       - name: Set up Moon
         run: nix develop --command moon --version
       - name: Run affected projects
@@ -214,6 +214,15 @@ jobs:
           oauth-client-id: ${{ vars.TS_OIDC_CLIENT_ID }}
           audience: api.tailscale.com/${{ vars.TS_OIDC_CLIENT_ID }}
           tags: tag:gha-nebula
+      # Same step as the ci job: every package output, one build, RIG-10818.
+      - name: Build packages
+        run: |
+          set -euo pipefail
+          system="$(nix eval --impure --raw --expr builtins.currentSystem)"
+          # One build over every package attr, so none is skipped. mapfile keeps
+          # the last name (the read loop dropped it: no trailing newline).
+          mapfile -t attrs < <(nix eval --raw ".#packages.${system}" --apply 'ps: builtins.concatStringsSep "\n" (builtins.attrNames ps)'; echo)
+          nix build --no-link "${attrs[@]/#/.#packages.${system}.}"
       - name: Set up Moon
         run: nix develop --command moon --version
       - name: Run affected projects

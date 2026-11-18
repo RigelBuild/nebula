@@ -346,6 +346,7 @@ jobs:
       # by the release job, which this step does not touch.
       - name: Mint tap token
         id: tap
+        if: vars.AUTOMATION_APP_CLIENT_ID != ''
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510
         with:
           client-id: ${{ vars.AUTOMATION_APP_CLIENT_ID }}
@@ -354,6 +355,7 @@ jobs:
           repositories: homebrew-tap
           permission-contents: write
       - name: Commit Homebrew formulae to homebrew-tap
+        if: vars.AUTOMATION_APP_CLIENT_ID != ''
         env:
           CGO_ENABLED: '0'
           COMMIT: ${{ needs.release.outputs.commit }}
@@ -385,3 +387,7 @@ jobs:
           git -C "$tap" config user.email 'rigelbuild-automation[bot]@users.noreply.github.com'
           git -C "$tap" commit -q -m "chore(formula): sync nebula ${RUN_NUMBER} formulae"
           git -C "$tap" push -q origin HEAD:refs/heads/main
+      - name: Warn that homebrew-tap sync is skipped
+        if: vars.AUTOMATION_APP_CLIENT_ID == ''
+        run: |
+          echo "::warning::homebrew-tap sync skipped: automation App credentials not configured (RIG-10833)"

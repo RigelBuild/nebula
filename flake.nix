@@ -178,11 +178,6 @@
           };
         in
         { "docs-bundle" = docsBundle; };
-
-      # nix2container builds images with Nix. Its default.nix takes pkgs and
-      # returns the attrset upstream's flake exposes as
-      # packages.<system>.nix2container. Consumers pass their own pkgs, so
-      # nix2container-bin is built with the caller's nixpkgs.
     in
     {
       # Later attrs win. Source builds come first, docs-bundle next, and
@@ -254,7 +249,7 @@
         });
 
       # Nix libraries. lib.nix2container takes the caller's pkgs and returns the
-      # nix2container attrset, so consumers can switch to this output. It has no
+      # attrset upstream exposes as packages.<system>.nix2container. It has no
       # per-system form: the caller's pkgs picks the system.
       lib.nix2container = { pkgs }:
         (import ./forks/nix2container { inherit pkgs; }).nix2container;

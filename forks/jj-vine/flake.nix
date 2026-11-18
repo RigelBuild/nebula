@@ -70,7 +70,8 @@
         let
           target = if pkgs.stdenv.hostPlatform.isLinux then pkgs.pkgsStatic else pkgs;
         in
-        target.rustPlatform.buildRustPackage {
+        target.rustPlatform.buildRustPackage (
+          {
           pname = "jj-vine-static";
           inherit version;
           src = lib.fileset.toSource {
@@ -84,7 +85,7 @@
           };
           cargoLock.lockFile = ./Cargo.lock;
           # aws-lc-sys builds its C sources with cmake.
-          nativeBuildInputs = [ pkgs.cmake ];
+          nativeBuildInputs = [ pkgs.cmake ] ++ lib.optional pkgs.stdenv.hostPlatform.isDarwin pkgs.darwin.autoSignDarwinBinariesHook;
           # The suite needs jj and forge fixtures; this build only smoke-tests.
           doCheck = false;
           doInstallCheck = true;
@@ -108,7 +109,17 @@
             license = lib.licenses.mit;
             mainProgram = "jj-vine";
           };
-        };
+        }
+        // lib.optionalAttrs pkgs.stdenv.hostPlatform.isDarwin {
+          # Darwin only: the stdenv's libiconv (propagated by apple-sdk) has a
+          # /nix/store install name that libc's #[link(name = "iconv")] pulls in.
+          # Repoint it at the system dylib (dyld shared cache, same ABI). The
+          # auto-sign hook re-signs in postFixupHooks; installCheck only checks.
+          postFixup = ''
+            install_name_tool -change "${pkgs.darwin.libiconv}/lib/libiconv.2.dylib" \
+              /usr/lib/libiconv.2.dylib "$out/bin/jj-vine"
+          '';
+        });
 
       packages = forAllSystems (system: {
         jj-vine = mkJjVine nixpkgs.legacyPackages.${system} artifacts.${system};

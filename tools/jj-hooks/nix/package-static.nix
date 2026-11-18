@@ -13,7 +13,8 @@ let
   cargoToml = lib.importTOML ../Cargo.toml;
   target = if pkgs.stdenv.hostPlatform.isLinux then pkgs.pkgsStatic else pkgs;
 in
-target.rustPlatform.buildRustPackage {
+target.rustPlatform.buildRustPackage (
+{
   pname = "jj-hooks-static";
   version = cargoToml.package.version;
   src = lib.fileset.toSource {
@@ -52,6 +53,21 @@ target.rustPlatform.buildRustPackage {
     runHook postInstallCheck
   '';
 
+}
+// lib.optionalAttrs pkgs.stdenv.hostPlatform.isDarwin {
+  nativeBuildInputs = [ pkgs.darwin.autoSignDarwinBinariesHook ];
+  # Darwin only: the stdenv's libiconv (propagated by apple-sdk) has a
+  # /nix/store install name that libc's #[link(name = "iconv")] pulls in.
+  # Repoint both binaries at the system dylib (dyld shared cache, same ABI).
+  # The auto-sign hook re-signs in postFixupHooks; installCheck only checks.
+  postFixup = ''
+    for binary in jj-hooks jj-hp; do
+      install_name_tool -change "${pkgs.darwin.libiconv}/lib/libiconv.2.dylib" \
+        /usr/lib/libiconv.2.dylib "$out/bin/$binary"
+    done
+  '';
+}
+// {
   meta = {
     description = "Portable jj-hooks release binaries (jj-hp pre-push gate)";
     homepage = "https://github.com/mattwilkinsonn/jj-hooks";
@@ -61,4 +77,4 @@ target.rustPlatform.buildRustPackage {
     ];
     mainProgram = "jj-hp";
   };
-}
+})

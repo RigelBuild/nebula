@@ -48,6 +48,12 @@ type goFunction struct {
 func GoMetrics(ctx context.Context, root string, cfg codeshape.Config) (
 	map[codeshape.Metric]map[string][]codeshape.Entry, []codeshape.Skip, error,
 ) {
+	// golangci-lint reports each file by its resolved path (for example /private/tmp when /tmp is a
+	// symlink), so resolve the root the same way before relativizing reported paths against it.
+	root, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return nil, nil, fmt.Errorf("resolve Go repository root: %w", err)
+	}
 	paths, err := codeshape.TrackedPaths(ctx, root)
 	if err != nil {
 		return nil, nil, fmt.Errorf("collect Go paths: %w", err)
@@ -130,9 +136,9 @@ func applyGoIssues(root, module string, files map[string]goSourceFile, cfg codes
 		path := issue.Pos.Filename
 		if filepath.IsAbs(path) {
 			var err error
-			path, err = filepath.Rel(root, path)
+			path, err = repositoryRelative(root, path)
 			if err != nil {
-				return fmt.Errorf("relativize Go diagnostic path: %w", err)
+				return err
 			}
 		} else {
 			path = filepath.Join(module, path)
@@ -345,14 +351,29 @@ func assignGoFunctionIDs(functions []goFunction, parent []int) {
 	}
 }
 
+// repositoryRelative makes a golangci-lint reported absolute path relative to the resolved root. golangci-lint
+// reports the process working directory, which can be the symlinked or the resolved form of the same file, so
+// resolve the reported path before comparing it with the resolved root.
+func repositoryRelative(root, reported string) (string, error) {
+	resolved, err := filepath.EvalSymlinks(reported)
+	if err != nil {
+		resolved = reported
+	}
+	relative, err := filepath.Rel(root, resolved)
+	if err != nil {
+		return "", fmt.Errorf("relativize Go diagnostic path: %w", err)
+	}
+	return relative, nil
+}
+
 func findGoFunction(
 	root, module string, files map[string]goSourceFile, reportedPath string, line, column int,
 ) (string, string, error) {
 	path := filepath.ToSlash(reportedPath)
 	if filepath.IsAbs(reportedPath) {
-		relative, err := filepath.Rel(root, reportedPath)
+		relative, err := repositoryRelative(root, reportedPath)
 		if err != nil {
-			return "", "", fmt.Errorf("relativize Go diagnostic path: %w", err)
+			return "", "", err
 		}
 		path = filepath.ToSlash(relative)
 	} else if module != "." {

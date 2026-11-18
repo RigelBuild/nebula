@@ -381,6 +381,17 @@ func createTrackedRepository(t *testing.T, files map[string]string) string {
 	return repository
 }
 
+// requireInvalidUTF8Filenames skips the test when the filesystem cannot store a filename with invalid UTF-8.
+// APFS (macOS) rejects such names with EILSEQ; Linux filesystems accept them.
+func requireInvalidUTF8Filenames(t *testing.T) {
+	t.Helper()
+	probe := filepath.Join(t.TempDir(), "probe\xff.txt")
+	err := os.WriteFile(probe, []byte("probe\n"), 0o600)
+	if err != nil {
+		t.Skipf("filesystem cannot store non-UTF-8 filenames: %v", err)
+	}
+}
+
 func TestDecodeGitGrepOutput(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -538,6 +549,7 @@ func TestGitGrep(t *testing.T) {
 		}
 	})
 	t.Run("replaces invalid UTF-8 in tracked paths", func(t *testing.T) {
+		requireInvalidUTF8Filenames(t)
 		repository := createTrackedRepository(t, map[string]string{
 			"fixture\xff.txt": "prefix\n",
 		})
@@ -641,19 +653,22 @@ func TestMainEndToEnd(t *testing.T) {
 			t.Fatalf("malformed content run = %d, %q", code, stderr)
 		}
 
-		if err := os.WriteFile(fixture, []byte("clean content\n"), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		git("add", "fixture.txt")
-		invalidPath := filepath.Join(repository, "fixture\xff.txt")
-		if err := os.WriteFile(invalidPath, []byte("reference to acme\n"), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		git("add", "fixture\xff.txt")
-		code, _, stderr = run()
-		if code != 1 || stderr != "fixture\uFFFD.txt:1: reference to acme\n" {
-			t.Fatalf("malformed filename run = %d, %q", code, stderr)
-		}
+		t.Run("malformed filename", func(t *testing.T) {
+			requireInvalidUTF8Filenames(t)
+			if err := os.WriteFile(fixture, []byte("clean content\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			git("add", "fixture.txt")
+			invalidPath := filepath.Join(repository, "fixture\xff.txt")
+			if err := os.WriteFile(invalidPath, []byte("reference to acme\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			git("add", "fixture\xff.txt")
+			code, _, stderr = run()
+			if code != 1 || stderr != "fixture\uFFFD.txt:1: reference to acme\n" {
+				t.Fatalf("malformed filename run = %d, %q", code, stderr)
+			}
+		})
 	})
 }
 

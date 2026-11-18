@@ -48,8 +48,8 @@ type goFunction struct {
 func GoMetrics(ctx context.Context, root string, cfg codeshape.Config) (
 	map[codeshape.Metric]map[string][]codeshape.Entry, []codeshape.Skip, error,
 ) {
-	// golangci-lint reports each file by its resolved path (for example /private/tmp when /tmp is a
-	// symlink), so resolve the root the same way before relativizing reported paths against it.
+	// golangci-lint may report the symlinked or the resolved form of the repository root, so resolve the root
+	// once here; repositoryRelative resolves each reported path against it.
 	root, err := filepath.EvalSymlinks(root)
 	if err != nil {
 		return nil, nil, fmt.Errorf("resolve Go repository root: %w", err)
@@ -352,14 +352,14 @@ func assignGoFunctionIDs(functions []goFunction, parent []int) {
 }
 
 // repositoryRelative makes a golangci-lint reported absolute path relative to the resolved root. golangci-lint
-// reports the process working directory, which can be the symlinked or the resolved form of the same file, so
-// resolve the reported path before comparing it with the resolved root.
+// may report the symlinked or the resolved form of a file's directory, so resolve the directory and keep the
+// base name: a symlinked .go file must keep its own name, not take its target's name.
 func repositoryRelative(root, reported string) (string, error) {
-	resolved, err := filepath.EvalSymlinks(reported)
+	dir, err := filepath.EvalSymlinks(filepath.Dir(reported))
 	if err != nil {
-		resolved = reported
+		dir = filepath.Dir(reported)
 	}
-	relative, err := filepath.Rel(root, resolved)
+	relative, err := filepath.Rel(root, filepath.Join(dir, filepath.Base(reported)))
 	if err != nil {
 		return "", fmt.Errorf("relativize Go diagnostic path: %w", err)
 	}

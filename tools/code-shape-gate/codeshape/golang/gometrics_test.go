@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"go/parser"
 	"go/token"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -53,6 +55,53 @@ func TestGoCollectorFixture(t *testing.T) {
 	}
 	if len(report.Issues) != 25 {
 		t.Fatalf("one funlen run reported %d issues for 25 functions exceeding both limits", len(report.Issues))
+	}
+}
+
+// TestGoMetricsThroughSymlinkedRoot opens the repository through a symlink. golangci-lint reports the resolved
+// path for the directory it runs in, so the gate must resolve the root too. Without that, every diagnostic fails
+// with errGoSourceUnknown. The test runs on any platform with symlinks, not only darwin.
+func TestGoMetricsThroughSymlinkedRoot(t *testing.T) {
+	root := goTestRepo(t, "package p\nfunc Large() {\n"+strings.Repeat("println(1)\n", 41)+"}\n")
+	link := filepath.Join(t.TempDir(), "repo-link")
+	err := os.Symlink(root, link)
+	if err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	values, _, err := GoMetrics(t.Context(), link, testConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(values[codeshape.MetricGoStatements]["x.go"]) != 1 {
+		t.Fatalf("symlinked root: %#v", values[codeshape.MetricGoStatements])
+	}
+}
+
+// TestRepositoryRelativeKeepsBaseName checks that repositoryRelative resolves only the directory. A reported path
+// whose parent directory is a symlink must map to the resolved directory with its own base name kept. Resolving the
+// whole path would replace the base name with the target's name. The gate never measures a symlinked .go file, so
+// this is a direct unit check of the helper, not a GoMetrics run.
+func TestRepositoryRelativeKeepsBaseName(t *testing.T) {
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	realDir := filepath.Join(root, "real")
+	err = os.Mkdir(realDir, 0o755)
+	if err != nil {
+		t.Fatal(err)
+	}
+	linkDir := filepath.Join(root, "linked")
+	err = os.Symlink(realDir, linkDir)
+	if err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	got, err := repositoryRelative(root, filepath.Join(linkDir, "x.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != filepath.Join("real", "x.go") {
+		t.Fatalf("repositoryRelative = %q; want %q", got, filepath.Join("real", "x.go"))
 	}
 }
 

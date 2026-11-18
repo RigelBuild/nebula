@@ -15,6 +15,7 @@ import (
 	"reflect"
 	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -381,14 +382,17 @@ func createTrackedRepository(t *testing.T, files map[string]string) string {
 	return repository
 }
 
-// requireInvalidUTF8Filenames skips the test when the filesystem cannot store a filename with invalid UTF-8.
-// APFS (macOS) rejects such names with EILSEQ; Linux filesystems accept them.
+// requireInvalidUTF8Filenames skips the test only when the filesystem rejects a filename with invalid UTF-8.
+// APFS (macOS) returns EILSEQ for such names; Linux filesystems accept them. Any other error fails the test.
 func requireInvalidUTF8Filenames(t *testing.T) {
 	t.Helper()
 	probe := filepath.Join(t.TempDir(), "probe\xff.txt")
 	err := os.WriteFile(probe, []byte("probe\n"), 0o600)
-	if err != nil {
+	if errors.Is(err, syscall.EILSEQ) {
 		t.Skipf("filesystem cannot store non-UTF-8 filenames: %v", err)
+	}
+	if err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -606,16 +610,16 @@ func TestMainEndToEnd(t *testing.T) {
 			t.Fatal(err)
 		}
 		configPath := writeConfig(t, configJSON(testConfig()))
-		git := func(args ...string) {
+		git := func(t *testing.T, args ...string) {
 			t.Helper()
 			command := exec.CommandContext(t.Context(), "git", append([]string{"-C", repository}, args...)...)
 			if output, err := command.CombinedOutput(); err != nil {
 				t.Fatalf("git %v: %v\n%s", args, err, output)
 			}
 		}
-		git("init", "-q")
+		git(t, "init", "-q")
 		fixture := filepath.Join(repository, "fixture.txt")
-		run := func() (int, string, string) {
+		run := func(t *testing.T) (int, string, string) {
 			t.Helper()
 			var stdout, stderr bytes.Buffer
 			code := Main(t.Context(), []string{"--config", configPath}, func(key string) string {
@@ -630,8 +634,8 @@ func TestMainEndToEnd(t *testing.T) {
 		if err := os.WriteFile(fixture, []byte("reference to acme\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		git("add", "fixture.txt")
-		code, _, stderr := run()
+		git(t, "add", "fixture.txt")
+		code, _, stderr := run(t)
 		if code != 1 || !strings.Contains(stderr, "fixture.txt:1: reference to acme") {
 			t.Fatalf("violating run = %d, %q", code, stderr)
 		}
@@ -639,16 +643,16 @@ func TestMainEndToEnd(t *testing.T) {
 		if err := os.WriteFile(fixture, []byte("clean content\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		git("add", "fixture.txt")
-		code, stdout, stderr := run()
+		git(t, "add", "fixture.txt")
+		code, stdout, stderr := run(t)
 		if code != 0 || stdout != "ref-gate: clean\n" || stderr != "" {
 			t.Fatalf("clean run = %d, stdout %q, stderr %q", code, stdout, stderr)
 		}
 		if err := os.WriteFile(fixture, []byte("reference \xff to acme\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		git("add", "fixture.txt")
-		code, _, stderr = run()
+		git(t, "add", "fixture.txt")
+		code, _, stderr = run(t)
 		if code != 1 || stderr != "fixture.txt:1: reference \uFFFD to acme\n" {
 			t.Fatalf("malformed content run = %d, %q", code, stderr)
 		}
@@ -658,13 +662,13 @@ func TestMainEndToEnd(t *testing.T) {
 			if err := os.WriteFile(fixture, []byte("clean content\n"), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			git("add", "fixture.txt")
+			git(t, "add", "fixture.txt")
 			invalidPath := filepath.Join(repository, "fixture\xff.txt")
 			if err := os.WriteFile(invalidPath, []byte("reference to acme\n"), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			git("add", "fixture\xff.txt")
-			code, _, stderr = run()
+			git(t, "add", "fixture\xff.txt")
+			code, _, stderr := run(t)
 			if code != 1 || stderr != "fixture\uFFFD.txt:1: reference to acme\n" {
 				t.Fatalf("malformed filename run = %d, %q", code, stderr)
 			}

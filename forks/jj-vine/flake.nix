@@ -70,45 +70,60 @@
         let
           target = if pkgs.stdenv.hostPlatform.isLinux then pkgs.pkgsStatic else pkgs;
         in
-        target.rustPlatform.buildRustPackage {
-          pname = "jj-vine-static";
-          inherit version;
-          src = lib.fileset.toSource {
-            root = ./.;
-            fileset = lib.fileset.unions [
-              ./Cargo.toml
-              ./Cargo.lock
-              ./README.md
-              ./src
-            ];
-          };
-          cargoLock.lockFile = ./Cargo.lock;
-          # aws-lc-sys builds its C sources with cmake.
-          nativeBuildInputs = [ pkgs.cmake ];
-          # The suite needs jj and forge fixtures; this build only smoke-tests.
-          doCheck = false;
-          doInstallCheck = true;
-          installCheckPhase = ''
-            runHook preInstallCheck
-            "$out/bin/jj-vine" --version >/dev/null
-          ''
-          + lib.optionalString pkgs.stdenv.hostPlatform.isDarwin ''
-            # Fail here, not at check-asset, if a dylib comes from the store.
-            if otool -L "$out/bin/jj-vine" | grep -q /nix/store; then
-              otool -L "$out/bin/jj-vine"
-              exit 1
-            fi
-          ''
-          + ''
-            runHook postInstallCheck
-          '';
-          meta = {
-            description = "Portable jj-vine release binary";
-            homepage = "https://codeberg.org/abrenneke/jj-vine";
-            license = lib.licenses.mit;
-            mainProgram = "jj-vine";
-          };
-        };
+        target.rustPlatform.buildRustPackage (
+          {
+            pname = "jj-vine-static";
+            inherit version;
+            src = lib.fileset.toSource {
+              root = ./.;
+              fileset = lib.fileset.unions [
+                ./Cargo.toml
+                ./Cargo.lock
+                ./README.md
+                ./src
+              ];
+            };
+            cargoLock.lockFile = ./Cargo.lock;
+            # aws-lc-sys builds its C sources with cmake.
+            nativeBuildInputs = [
+              pkgs.cmake
+            ]
+            ++ lib.optional pkgs.stdenv.hostPlatform.isDarwin pkgs.darwin.autoSignDarwinBinariesHook;
+            # The suite needs jj and forge fixtures; this build only smoke-tests.
+            doCheck = false;
+            doInstallCheck = true;
+            installCheckPhase = ''
+              runHook preInstallCheck
+              "$out/bin/jj-vine" --version >/dev/null
+            ''
+            + lib.optionalString pkgs.stdenv.hostPlatform.isDarwin ''
+              # Fail here, not at check-asset, if a dylib comes from the store.
+              if otool -L "$out/bin/jj-vine" | grep -q /nix/store; then
+                otool -L "$out/bin/jj-vine"
+                exit 1
+              fi
+            ''
+            + ''
+              runHook postInstallCheck
+            '';
+            meta = {
+              description = "Portable jj-vine release binary";
+              homepage = "https://codeberg.org/abrenneke/jj-vine";
+              license = lib.licenses.mit;
+              mainProgram = "jj-vine";
+            };
+          }
+          // lib.optionalAttrs pkgs.stdenv.hostPlatform.isDarwin {
+            # Darwin only: the stdenv's libiconv (propagated by apple-sdk) has a
+            # /nix/store install name that libc's #[link(name = "iconv")] pulls in.
+            # Repoint it at the system dylib (dyld shared cache, same ABI). The
+            # auto-sign hook re-signs in postFixupHooks; installCheck only checks.
+            postFixup = ''
+              install_name_tool -change "${pkgs.darwin.libiconv}/lib/libiconv.2.dylib" \
+                /usr/lib/libiconv.2.dylib "$out/bin/jj-vine"
+            '';
+          }
+        );
 
       packages = forAllSystems (system: {
         jj-vine = mkJjVine nixpkgs.legacyPackages.${system} artifacts.${system};

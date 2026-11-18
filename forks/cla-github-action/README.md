@@ -45,8 +45,9 @@ jobs:
     steps:
       - name: "CLA Assistant"
         if: (github.event.comment.body == 'recheck' || github.event.comment.body == 'I have read the CLA Document and I hereby sign the CLA') || github.event_name == 'pull_request_target'
-        # Pin to a specific commit on this fork's main branch.
-        uses: RigelBuild/cla-github-action@<PIN_A_COMMIT_SHA>
+        # The standalone RigelBuild/cla-github-action repo is archived; this
+        # action now lives in RigelBuild/nebula. Pin a commit SHA.
+        uses: RigelBuild/nebula/forks/cla-github-action@<PIN_A_COMMIT_SHA>
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Only required when storing signatures in a remote repository/organization.

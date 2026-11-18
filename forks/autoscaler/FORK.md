@@ -31,7 +31,7 @@ This fork makes the scaler count only **label-satisfiable** demand per pool:
   clamps and the entire create/drain/cleanup lifecycle are inherited unchanged.
 
 No Woodpecker **server** change is needed — the per-task labels are already in
-`/api/queue/info`. The design record is kept privately.
+`/api/queue/info`.
 
 - `providers/kubernetes/` — adds a Kubernetes pod provider for scaling agent
   workloads from queue demand. Agent pods use a supplied Pod template and a

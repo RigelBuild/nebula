@@ -129,7 +129,7 @@ record: ../../agent/compass-agent-spawn-despawn/design.md#identity-and-authz--ow
 -- docs/016/DL-076.md --
 ---
 id: DL-076
-decision: "Spawn/despawn rides a sibling `LifecycleCall*` family on the existing `AgentGateway` socket relayed by `RelayLifecycleCall` (mirroring DL-049), orchestrated server-side via a `LifecycleCaller` seam while the runnerhub resolves caller identity only; there is no public agent-callable spawn RPC (the egress-sealed agent holds no server token)"
+decision: "Spawn/despawn rides a sibling `LifecycleCall*` family on the existing `AgentGateway` socket relayed by `RelayLifecycleCall` (mirroring DL-049), orchestrated server-side via a `LifecycleCaller` seam while the runnerhub resolves caller identity only; there is no public agent-callable spawn RPC (the egress-isolated agent holds no server token)"
 status: "Active (Matt, 2026-07-29)"
 record: ../../agent/compass-agent-spawn-despawn/design.md#seam-a--spawn-a-lifecyclecall-family-on-the-agent-gateway-orchestrated-server-side
 ---
@@ -1217,7 +1217,7 @@ record: ../../infra/release/compass-distribution/design.md#s4--postgres-as-conta
 -- docs/152/DL-261.md --
 ---
 id: DL-261
-decision: "macOS signing identity provisioning waits for the company rename (Sealed Security Inc → Rigel AI Software Inc, same DE entity so its D-U-N-S carries over as an update, not a new request); enroll the Apple Developer Program org clean as Rigel AI Software Inc post-rename. Nothing pre-GA needs public signing, so dev/internal builds self-sign meanwhile (ad-hoc `codesign --sign -`, mandatory on Apple Silicon, or a local self-signed cert — no Apple account); the Developer ID cert + notarization (the distribute-to-other-Macs leg) is GA-gated on the enrollment. Resolves distribution OQ-2"
+decision: "macOS signing identity provisioning waits for the company rename (Example Old Co Inc → Rigel AI Software Inc, same DE entity so its D-U-N-S carries over as an update, not a new request); enroll the Apple Developer Program org clean as Rigel AI Software Inc post-rename. Nothing pre-GA needs public signing, so dev/internal builds self-sign meanwhile (ad-hoc `codesign --sign -`, mandatory on Apple Silicon, or a local self-signed cert — no Apple account); the Developer ID cert + notarization (the distribute-to-other-Macs leg) is GA-gated on the enrollment. Resolves distribution OQ-2"
 status: "Active (Matt, 2026-08-25)"
 record: ../../infra/release/compass-distribution/design.md#global-constraints
 ---

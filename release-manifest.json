@@ -1,0 +1,83 @@
+{
+  "design-ledger-gate": {
+    "aarch64-darwin": {
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261118-7/design-ledger-gate-0.4.0-aarch64-darwin.tar.zst",
+      "sha256": "333ad33413833e56ba382ef7fbb57e42722a5c9e7cf40c496591293c386d5662"
+    },
+    "aarch64-linux": {
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261118-7/design-ledger-gate-0.4.0-aarch64-linux.tar.zst",
+      "sha256": "feb2f7dfec749928d2f689a1429aff482f4d0391e18f41d9aa94559896d9681e"
+    },
+    "version": "0.4.0",
+    "x86_64-linux": {
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261118-7/design-ledger-gate-0.4.0-x86_64-linux.tar.zst",
+      "sha256": "c9defe5439c0f03d4d55078d67cd41e91443e6c75194bb56da0a76f22c7b6448"
+    }
+  },
+  "dl-claim": {
+    "aarch64-darwin": {
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261118-7/dl-claim-0.4.0-aarch64-darwin.tar.zst",
+      "sha256": "448f19c6c6d596111a7072e25b9d12863cd90553d371fad59ab3a99c552b61fa"
+    },
+    "aarch64-linux": {
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261118-7/dl-claim-0.4.0-aarch64-linux.tar.zst",
+      "sha256": "c693c0b947b64e46de657a882f60749cd274d9bbec8bcf8a177223a014978692"
+    },
+    "version": "0.4.0",
+    "x86_64-linux": {
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261118-7/dl-claim-0.4.0-x86_64-linux.tar.zst",
+      "sha256": "f2d39234238588b92ea5524920bd738ee27322277c2f8ddf4ac0b23e3659f77b"
+    }
+  },
+  "dl-list": {
+    "aarch64-darwin": {
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261118-7/dl-list-0.4.0-aarch64-darwin.tar.zst",
+      "sha256": "0cb1a42bba31d8eb05fcfdef2288bae4c519649dbf695bc1f13573e56aecdfe2"
+    },
+    "aarch64-linux": {
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261118-7/dl-list-0.4.0-aarch64-linux.tar.zst",
+      "sha256": "9ac6a126e45525c788a9940514de9a2bd4f0a72022067e655e03076e1632016f"
+    },
+    "version": "0.4.0",
+    "x86_64-linux": {
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261118-7/dl-list-0.4.0-x86_64-linux.tar.zst",
+      "sha256": "8a88bdf63a60803a953d96b0170ec57107d6aa95f3d25b80d2ec18ab32c08574"
+    }
+  },
+  "dl-reconcile": {
+    "aarch64-darwin": {
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261118-7/dl-reconcile-0.4.0-aarch64-darwin.tar.zst",
+      "sha256": "74838d1879ebdd03d1a9f115536a202ba51fd49a459c42de9bf2e6844387a9ab"
+    },
+    "aarch64-linux": {
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261118-7/dl-reconcile-0.4.0-aarch64-linux.tar.zst",
+      "sha256": "bf905c028be6717f985eb39137882c9384c9d3ce5b33405c6023be62c0654e18"
+    },
+    "version": "0.4.0",
+    "x86_64-linux": {
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261118-7/dl-reconcile-0.4.0-x86_64-linux.tar.zst",
+      "sha256": "72cdc3c8ec422c1dbfe8fa8dfcf12b20a044ccd9ca4652f43ba4e14c6927c874"
+    }
+  },
+  "held": [
+    "code-shape-gate",
+    "ref-gate"
+  ],
+  "length-gate": {
+    "aarch64-darwin": {
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261118-7/length-gate-0.4.0-aarch64-darwin.tar.zst",
+      "sha256": "47a6a7960414afa5dae4bc56c3a6abaf996afba2bab1c62cb3bc5b2baea37377"
+    },
+    "aarch64-linux": {
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261118-7/length-gate-0.4.0-aarch64-linux.tar.zst",
+      "sha256": "8dc93b9d5b7bae247edbbd5e76ef6e8bd65f3970c951325ba4641cb5cb15b5d4"
+    },
+    "version": "0.4.0",
+    "x86_64-linux": {
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261118-7/length-gate-0.4.0-x86_64-linux.tar.zst",
+      "sha256": "e4d2dcce900ef10a2965251fbc75174d8208c7af676aa9e0de82a8f8167da9fc"
+    }
+  },
+  "source": "ca6154abd9045d395fa9185c78e57f8727a9f724",
+  "tag": "nebula-20261118-7"
+}

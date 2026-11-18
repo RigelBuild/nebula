@@ -22,10 +22,6 @@
 	"carveOutPaths": ["tools/ref-gate/ref-gate.config.json"],
 	"carveOutPrefixes": [],
 	"allowlist": {
-		"forks/autoscaler/SEALED.md": "Pending #44: excluded fork hit. Remove this entry after #44 merges.",
-		"forks/autoscaler/engine/labelfilter/labelfilter_test.go": "Pending #44: excluded fork hit. Remove this entry after #44 merges.",
-		"forks/jj-vine/rust-toolchain.toml": "Pending #44: excluded fork hit. Remove this entry after #44 merges.",
-		"forks/virtual/.github/workflows/publish-rigelbuild.yml": "Pending #44: excluded fork hit. Remove this entry after #44 merges.",
 		"forks/oh-my-pi/packages/catalog/src/models.json": "oh-my-pi fixture: model ids, not a private-repo reference.",
 		"forks/oh-my-pi/packages/mnemopi/test/beam-recall-unit.test.ts": "oh-my-pi fixture: recall test text, not a private-repo reference.",
 		"forks/oh-my-pi/packages/mnemopi/test/recall-precision-regressions.test.ts": "oh-my-pi fixture: recall test text, not a private-repo reference.",

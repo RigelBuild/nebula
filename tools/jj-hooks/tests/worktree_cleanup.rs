@@ -74,13 +74,17 @@ fn assert_only_primary_worktree(repo: &TestRepo) {
         .lines()
         .filter_map(|line| line.strip_prefix("worktree "))
         .collect();
-    assert_eq!(paths, [repo.primary().to_str().unwrap()], "{listing}");
+    // git lists the resolved primary path; on darwin /tmp is a symlink to /private/tmp.
+    let resolved_primary = std::fs::canonicalize(repo.primary()).unwrap();
+    assert_eq!(paths, [resolved_primary.to_str().unwrap()], "{listing}");
 }
 
 fn assert_worktree_was_cleaned(repo: &TestRepo, root: &Path, cwd_out: &Path) {
     let cwd = std::fs::read_to_string(cwd_out).unwrap();
+    // The hook's cwd is the resolved path; on darwin /tmp is a symlink to /private/tmp.
+    let resolved_root = std::fs::canonicalize(root).unwrap();
     assert!(
-        cwd.starts_with(root.to_str().unwrap()),
+        cwd.starts_with(resolved_root.to_str().unwrap()),
         "hook cwd was {cwd:?}"
     );
     assert!(
@@ -179,8 +183,10 @@ fn next_push_sweeps_worktree_after_owner_is_killed() {
     );
     let cwd = std::fs::read_to_string(&cwd_out).unwrap();
     let pgrp = std::fs::read_to_string(&pgrp_out).unwrap();
+    // The hook's cwd is the resolved path; on darwin /tmp is a symlink to /private/tmp.
+    let resolved_root = std::fs::canonicalize(&root).unwrap();
     assert!(
-        cwd.starts_with(root.to_str().unwrap()),
+        cwd.starts_with(resolved_root.to_str().unwrap()),
         "sleeper cwd was {cwd:?}"
     );
     let jj_hp_stat = std::fs::read_to_string(format!("/proc/{}/stat", child.id())).unwrap();

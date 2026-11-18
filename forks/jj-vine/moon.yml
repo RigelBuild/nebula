@@ -9,26 +9,24 @@ tasks:
     args: ['build', '--locked']
     options:
       cache: false
-      # Blocker: aws-lc-sys may need cmake on Linux. Not verified. The devshell has no cmake.
-      runInCI: false
+      runInCI: true
   test:
     command: 'cargo'
     args: ['test', '--locked', '--features', 'no-e2e-tests']
     options:
       cache: false
-      # Blocker: the tests run the jj binary, and the devshell has no jj. TestRepo::with_local_remote() runs jj even with no-e2e-tests.
-      runInCI: false
+      runInCI: true
   fmt:
     command: 'cargo'
     args: ['fmt', '--check']
     options:
       cache: false
-      # Blocker: CI runs fmt on nightly (rust-toolchain.toml pins nightly-2026-08-21). The devshell has stable 1.99 only.
+      # Deliberately off: rust-toolchain.toml pins nightly-2026-08-21 for rustfmt, and the nebula devshell has stable 1.99 only.
       runInCI: false
   clippy:
     command: 'cargo'
     args: ['clippy', '--tests']
     options:
       cache: false
-      # Blocker: clippy is pinned to nightly by rust-toolchain.toml. The devshell has stable 1.99 only.
+      # Deliberately off: rust-toolchain.toml pins nightly-2026-08-21 for clippy, and the nebula devshell has stable 1.99 only.
       runInCI: false

@@ -1,0 +1,28 @@
+# yaml-language-server: $schema=https://moonrepo.dev/schemas/project.json
+layer: "tool"
+language: "typescript"
+tags: ["bun"]
+tasks:
+  install:
+    command: bun install --frozen-lockfile
+    inputs:
+      - package.json
+      - bun.lock
+  typecheck:
+    command: bun run typecheck
+    deps:
+      - install
+    inputs:
+      - "*.ts"
+      - package.json
+      - bun.lock
+      - tsconfig.json
+  test:
+    command: bun run test
+    deps:
+      - install
+    inputs:
+      - "*.ts"
+      - package.json
+      - bun.lock
+      - tsconfig.json

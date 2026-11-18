@@ -2,3 +2,11 @@
 layer: "tool"
 language: "go"
 tags: ["go"]
+
+tasks:
+  test:
+    command: "go"
+    args: ["test", "./..."]
+    env:
+      CGO_ENABLED: "0"
+    inputs: ["**/*.go", "go.mod", "go.sum", "**/testdata/**/*"]

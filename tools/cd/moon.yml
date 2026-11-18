@@ -1,0 +1,16 @@
+# yaml-language-server: $schema=https://moonrepo.dev/schemas/project.json
+#
+# cd: plans, records and publishes nebula Releases from cd.yaml.
+layer: "tool"
+language: "go"
+tags: ["go"]
+
+tasks:
+  test:
+    command: "go"
+    args: ["test", "./..."]
+    inputs: ["*.go", "go.mod", "go.sum"]
+  vet:
+    command: "go"
+    args: ["vet", "./..."]
+    inputs: ["*.go", "go.mod", "go.sum"]

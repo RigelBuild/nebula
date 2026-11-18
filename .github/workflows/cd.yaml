@@ -110,11 +110,16 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/held"
           : > "$RUNNER_TEMP/held/${{ matrix.system }}"
+          # One eval per job: the devShell names for this system.
+          shells=$(nix eval --json ".#devShells.${{ matrix.system }}" --apply builtins.attrNames | jq -r '.[]')
           for project in $PROJECTS; do
             id=$(basename "$project")
+            # A project with its own devShell (named after the project) enters it; others use default.
+            shell=default
+            if grep -Fqx "$id" <<<"$shells"; then shell=$id; fi
             # Only moon's unknown_task means "no tests". Any other moon or devshell
             # error fails the job rather than releasing an untested project.
-            if ! out=$(nix develop --command moon task "$id:test" 2>&1); then
+            if ! out=$(nix develop ".#$shell" --command moon task "$id:test" 2>&1); then
               if grep -q 'unknown_task' <<<"$out"; then
                 echo "$project has no test task"
                 continue
@@ -122,7 +127,7 @@ jobs:
               echo "$out"
               exit 1
             fi
-            if ! nix develop --command moon run "$id:test" --affected=false; then
+            if ! nix develop ".#$shell" --command moon run "$id:test" --affected=false; then
               echo "::warning::$project is red on ${{ matrix.system }}; holding it"
               jq -r --arg p "$project" '.binaries[] | select(.project == $p) | .package' \
                 "$RUNNER_TEMP/plan.json" >> "$RUNNER_TEMP/held/${{ matrix.system }}"

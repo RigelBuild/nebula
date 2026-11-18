@@ -51,10 +51,16 @@
       devShells = forAllSystems (system:
         let
           pkgs = import nixpkgs { inherit system; };
+          basePackages = with pkgs; [ go bun moon rumdl biome cargo rustc clippy rustfmt cargo-nextest golangci-lint jujutsu ];
+          hookPackages = with pkgs; [ pre-commit prek lefthook pkl hk ];
         in
         {
           default = pkgs.mkShell {
-            packages = with pkgs; [ go bun moon rumdl biome cargo rustc clippy rustfmt cargo-nextest golangci-lint jujutsu pre-commit prek lefthook pkl hk ];
+            packages = basePackages;
+          };
+          # The jj-hooks test drives the hook runners; the default shell stays lean.
+          jj-hooks = pkgs.mkShell {
+            packages = basePackages ++ hookPackages;
           };
         });
     };

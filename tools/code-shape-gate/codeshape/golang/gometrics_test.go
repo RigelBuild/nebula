@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"go/parser"
 	"go/token"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -53,6 +55,51 @@ func TestGoCollectorFixture(t *testing.T) {
 	}
 	if len(report.Issues) != 25 {
 		t.Fatalf("one funlen run reported %d issues for 25 functions exceeding both limits", len(report.Issues))
+	}
+}
+
+// TestGoMetricsThroughSymlinkedRoot opens the repository through a symlink. golangci-lint reports the resolved
+// path for the directory it runs in, so the gate must resolve the root too. Without that, every diagnostic fails
+// with errGoSourceUnknown. The test runs on any platform with symlinks, not only darwin.
+func TestGoMetricsThroughSymlinkedRoot(t *testing.T) {
+	root := goTestRepo(t, "package p\nfunc Large() {\n"+strings.Repeat("println(1)\n", 41)+"}\n")
+	link := filepath.Join(t.TempDir(), "repo-link")
+	err := os.Symlink(root, link)
+	if err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	values, _, err := GoMetrics(t.Context(), link, testConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(values[codeshape.MetricGoStatements]["x.go"]) != 1 {
+		t.Fatalf("symlinked root: %#v", values[codeshape.MetricGoStatements])
+	}
+}
+
+// TestGoMetricsMeasuresSymlinkedFile measures a Go file that is a relative symlink inside the repository. The
+// reported path must keep the symlink's own name (pkg/link.go), not the target's name. Resolving the whole path
+// would report it under the target's name and lose the measurement, so the value would be 0 instead of 41.
+func TestGoMetricsMeasuresSymlinkedFile(t *testing.T) {
+	root := goTestRepo(t, "package p\nfunc Parent() {}\n")
+	trackedFile(t, root, "shared/target.go", "package p\nfunc Large() {\n"+strings.Repeat("println(1)\n", 41)+"}\n")
+	err := os.MkdirAll(filepath.Join(root, "pkg"), 0o755)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = os.Symlink(filepath.Join("..", "shared", "target.go"), filepath.Join(root, "pkg", "link.go"))
+	if err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	commitFiles(t, root)
+	values, _, err := GoMetrics(t.Context(), root, testConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries := values[codeshape.MetricGoStatements]["pkg/link.go"]
+	if len(entries) != 1 || entries[0].Value != 41 {
+		t.Fatalf("pkg/link.go entries = %#v; want one entry with value 41 (all: %#v)",
+			entries, values[codeshape.MetricGoStatements])
 	}
 }
 

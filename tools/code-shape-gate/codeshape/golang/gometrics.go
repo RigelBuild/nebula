@@ -48,6 +48,12 @@ type goFunction struct {
 func GoMetrics(ctx context.Context, root string, cfg codeshape.Config) (
 	map[codeshape.Metric]map[string][]codeshape.Entry, []codeshape.Skip, error,
 ) {
+	// golangci-lint may report the symlinked or the resolved form of the repository root, so resolve the root
+	// once here; repositoryRelative resolves each reported path against it.
+	root, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return nil, nil, fmt.Errorf("resolve Go repository root: %w", err)
+	}
 	paths, err := codeshape.TrackedPaths(ctx, root)
 	if err != nil {
 		return nil, nil, fmt.Errorf("collect Go paths: %w", err)
@@ -130,9 +136,9 @@ func applyGoIssues(root, module string, files map[string]goSourceFile, cfg codes
 		path := issue.Pos.Filename
 		if filepath.IsAbs(path) {
 			var err error
-			path, err = filepath.Rel(root, path)
+			path, err = repositoryRelative(root, path)
 			if err != nil {
-				return fmt.Errorf("relativize Go diagnostic path: %w", err)
+				return err
 			}
 		} else {
 			path = filepath.Join(module, path)
@@ -345,14 +351,29 @@ func assignGoFunctionIDs(functions []goFunction, parent []int) {
 	}
 }
 
+// repositoryRelative makes a golangci-lint reported absolute path relative to the resolved root. golangci-lint
+// may report the symlinked or the resolved form of a file's directory, so resolve the directory and keep the
+// base name: a symlinked .go file must keep its own name, not take its target's name.
+func repositoryRelative(root, reported string) (string, error) {
+	dir, err := filepath.EvalSymlinks(filepath.Dir(reported))
+	if err != nil {
+		dir = filepath.Dir(reported)
+	}
+	relative, err := filepath.Rel(root, filepath.Join(dir, filepath.Base(reported)))
+	if err != nil {
+		return "", fmt.Errorf("relativize Go diagnostic path: %w", err)
+	}
+	return relative, nil
+}
+
 func findGoFunction(
 	root, module string, files map[string]goSourceFile, reportedPath string, line, column int,
 ) (string, string, error) {
 	path := filepath.ToSlash(reportedPath)
 	if filepath.IsAbs(reportedPath) {
-		relative, err := filepath.Rel(root, reportedPath)
+		relative, err := repositoryRelative(root, reportedPath)
 		if err != nil {
-			return "", "", fmt.Errorf("relativize Go diagnostic path: %w", err)
+			return "", "", err
 		}
 		path = filepath.ToSlash(relative)
 	} else if module != "." {

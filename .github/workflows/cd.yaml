@@ -110,8 +110,10 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/held"
           : > "$RUNNER_TEMP/held/${{ matrix.system }}"
-          # One eval per job: the devShell names for this system.
-          shells=$(nix eval --json ".#devShells.${{ matrix.system }}" --apply builtins.attrNames | jq -r '.[]')
+          # One eval per job: the devShell names for this system. Kept apart from jq
+          # so a failed eval exits under bash -e (the step has no pipefail).
+          shells_json=$(nix eval --json ".#devShells.${{ matrix.system }}" --apply builtins.attrNames)
+          shells=$(jq -r '.[]' <<<"$shells_json")
           for project in $PROJECTS; do
             id=$(basename "$project")
             # A project with its own devShell (named after the project) enters it; others use default.

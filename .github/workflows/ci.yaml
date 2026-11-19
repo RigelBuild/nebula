@@ -76,6 +76,16 @@ jobs:
           oauth-client-id: ${{ vars.TS_OIDC_CLIENT_ID }}
           audience: api.tailscale.com/${{ vars.TS_OIDC_CLIENT_ID }}
           tags: tag:gha-nebula
+      # Builds every package so a stale vendorHash or FOD hash fails CI.
+      - name: Build packages
+        run: |
+          set -euo pipefail
+          system="$(nix eval --impure --raw --expr builtins.currentSystem)"
+          # Assign first, so set -e fails the step when nix eval fails.
+          names="$(nix eval --raw ".#packages.${system}" --apply 'ps: builtins.concatStringsSep "\n" (builtins.attrNames ps)')"
+          if [ -z "$names" ]; then echo "no packages found for ${system}" >&2; exit 1; fi
+          mapfile -t attrs <<<"$names"
+          nix build --no-link "${attrs[@]/#/.#packages.${system}.}"
       - name: Set up Moon
         run: nix develop --command moon --version
       - name: Run affected projects
@@ -203,6 +213,16 @@ jobs:
           oauth-client-id: ${{ vars.TS_OIDC_CLIENT_ID }}
           audience: api.tailscale.com/${{ vars.TS_OIDC_CLIENT_ID }}
           tags: tag:gha-nebula
+      # Builds every package so a stale vendorHash or FOD hash fails CI.
+      - name: Build packages
+        run: |
+          set -euo pipefail
+          system="$(nix eval --impure --raw --expr builtins.currentSystem)"
+          # Assign first, so set -e fails the step when nix eval fails.
+          names="$(nix eval --raw ".#packages.${system}" --apply 'ps: builtins.concatStringsSep "\n" (builtins.attrNames ps)')"
+          if [ -z "$names" ]; then echo "no packages found for ${system}" >&2; exit 1; fi
+          mapfile -t attrs <<<"$names"
+          nix build --no-link "${attrs[@]/#/.#packages.${system}.}"
       - name: Set up Moon
         run: nix develop --command moon --version
       - name: Run affected projects

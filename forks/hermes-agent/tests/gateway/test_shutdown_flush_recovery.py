@@ -11,7 +11,7 @@ import sqlite3
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -462,7 +462,7 @@ def test_boot_recovery_runs_before_resume_turns_and_queued_inbound(monkeypatch):
 
     runner = SimpleNamespace(
         _start_post_connect_services=noop, _await_startup_boot_sends=noop,
-        _schedule_resume_pending_sessions=lambda: order.append("resume"),
+        _schedule_resume_pending_sessions_async=AsyncMock(side_effect=lambda: order.append("resume")),
         _finish_startup_restore=finish_startup_restore,
         _send_session_db_warning_notifications=noop, _spawn_supervised=lambda *a, **k: None,
     )

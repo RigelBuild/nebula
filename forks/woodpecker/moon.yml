@@ -1,0 +1,39 @@
+# yaml-language-server: $schema=https://moonrepo.dev/schemas/project.json
+#
+# Tasks run from this project's directory, which is the fork tree root.
+# The server build embeds web/dist with //go:embed all:dist/*. This tree tracks
+# only web/dist/.gitkeep, and that still compiles.
+layer: 'application'
+language: 'go'
+tasks:
+  build:
+    command: go
+    args: ['build', '-o', '/dev/null', './cmd/cli']
+    options:
+      cache: false
+  test:
+    command: go
+    args: ['test', './cli/...', './shared/...']
+    options:
+      cache: false
+  build-server:
+    command: go
+    args: ['build', '-o', '/dev/null', './cmd/server']
+    env:
+      CGO_ENABLED: '0'
+    options:
+      cache: false
+  # Not run in CI (RIG-10145). Two needs keep it out of the CI graph:
+  #   1. cgo: the sqlite test store needs CGO_ENABLED=1 (go-sqlite3 is a stub
+  #      without it).
+  #   2. a populated web/dist: the tree tracks only web/dist/.gitkeep, and
+  #      server/web panics without an index.html. Create that stub first, as
+  #      .woodpecker/test.yaml does. Tests also need -tags test.
+  test-server:
+    command: go
+    args: ['test', '-tags', 'test', './server/...']
+    env:
+      CGO_ENABLED: '1'
+    options:
+      cache: false
+      runInCI: false

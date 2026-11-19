@@ -1,5 +1,5 @@
 {
-  description = "Cotal runtime: the prebuilt rigel-release tarball, pinned by hash";
+  description = "Cotal runtime: the prebuilt nebula Release tarball, pinned by hash";
 
   inputs.nixpkgs.url = "github:nixos/nixpkgs/nixos-26.05";
 

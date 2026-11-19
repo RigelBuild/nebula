@@ -45,8 +45,8 @@ jobs:
         uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086
         with:
           extra_nix_config: |
-            extra-substituters = ${{ env.NIX_CACHE_SUBSTITUTER }}
-            extra-trusted-public-keys = cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY= ${{ env.NIX_CACHE_PUBLIC_KEY }}
+            extra-substituters = ${{ env.NIX_CACHE_SUBSTITUTER }} https://devenv.cachix.org
+            extra-trusted-public-keys = cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY= ${{ env.NIX_CACHE_PUBLIC_KEY }} devenv.cachix.org-1:w1cLUi8dv3hnoSPGAuibQv+f9TZLr6cv/Hm9XgU50cw=
             connect-timeout = 5
             fallback = true
       - name: Set up Go
@@ -65,6 +65,7 @@ jobs:
           workspaces: |
             . -> target
             tools/jj-hooks -> target
+            forks/devenv -> target
       - name: Cache Bun downloads
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
@@ -185,8 +186,8 @@ jobs:
         uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086
         with:
           extra_nix_config: |
-            extra-substituters = ${{ env.NIX_CACHE_SUBSTITUTER }}
-            extra-trusted-public-keys = cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY= ${{ env.NIX_CACHE_PUBLIC_KEY }}
+            extra-substituters = ${{ env.NIX_CACHE_SUBSTITUTER }} https://devenv.cachix.org
+            extra-trusted-public-keys = cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY= ${{ env.NIX_CACHE_PUBLIC_KEY }} devenv.cachix.org-1:w1cLUi8dv3hnoSPGAuibQv+f9TZLr6cv/Hm9XgU50cw=
             connect-timeout = 5
             fallback = true
       - name: Set up Go
@@ -205,6 +206,7 @@ jobs:
           workspaces: |
             . -> target
             tools/jj-hooks -> target
+            forks/devenv -> target
       - name: Cache Bun downloads
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:

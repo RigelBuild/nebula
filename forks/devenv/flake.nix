@@ -413,7 +413,8 @@
               nixPkgs.nix-fetchers-c
               nixPkgs.nix-main-c
               nixPkgs.nix.dev
-            ];
+            ]
+            ++ pkgs.lib.optional pkgs.stdenv.hostPlatform.isDarwin pkgs.libiconv;
             env = {
               LIBSQLITE3_SYS_USE_PKG_CONFIG = "1";
               OPENSSL_NO_VENDOR = "1";

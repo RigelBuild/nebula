@@ -1012,13 +1012,11 @@ mod tests {
         status_line
             .state_mut()
             .set_building(vec![PathBuf::from("devenv.nix")]);
-        // The building row prints elapsed time from the real clock, and `expected`
-        // and `draw` read it at different instants. Start 2.12 s back: that sits
-        // 20 ms past the 2.10 s bucket edge, 30 ms before the 2.15 s edge, and
-        // keeps the building state's elapsed field in the output.
+        // Start 62.5 s back, mid-way through the `1m 2s` text, which changes only
+        // at 63 s, so the two clock reads in `expected` and `draw` print the same text.
         status_line.state_mut().build_start = Some(
             Instant::now()
-                .checked_sub(std::time::Duration::from_millis(2_120))
+                .checked_sub(std::time::Duration::from_millis(62_500))
                 .unwrap(),
         );
         // `draw` advances the spinner once 80 ms pass since the last tick. A

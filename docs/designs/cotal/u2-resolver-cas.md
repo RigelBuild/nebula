@@ -14,11 +14,11 @@ full. What moved:
 | **§8 — exported torn-write vocabulary**, each term anchored to a real site | cross-lane citation target | §8 (new) |
 | `extraAccounts` slot ownership, bucket names, `rotate-sys` fencing scope | §3.2 amendment + FILED-2 | §3.2, §6 residual 4 |
 | Claim-to-render re-key digest gap; `generation` is not a mutation count | FILED-3, FILED-4 | §3.3, §5 |
-| Citation hygiene (`endpoint.ts:2804`, `acls.ts` range, U1 smoke name, unresolvable `rehearse-multispace.mts` path) | FILED-5 | throughout |
+| Citation hygiene (`endpoint.ts:2804`, `acls.ts` range, U1 smoke name, unresolvable multi-space rehearsal path) | FILED-5 | throughout |
 
 §3.4's nine-step walk is **restructured**, not merely amended — see the callout there.
 
-**Plan node (verbatim, `docs/CLOUD-PLAN.md` in the platform lane):**
+**Plan node (verbatim, the platform plan):**
 
 > **U2 — resolver-inventory-CAS** · F4 · Broker-authoritative space inventory with
 > generation/CAS + atomic promotion above `serverConfig` (upstream names this gap). v1
@@ -26,15 +26,11 @@ full. What moved:
 > concurrent space adds cannot lose one.
 
 Depends on F4 (`spike-live-space-add`, DONE): live add/remove by re-render + `SIGHUP` with the
-broker never restarting is proven, including the negative arm, at
-`apps/backend/scripts/rehearse-multispace.mts:127-137` (live add) and `:199-201` (live remove)
-**on the platform lane** — that path does not exist in this repo (there is no `apps/` directory
-here), so a reader of the U2 lane alone cannot resolve it; read it in the platform-runbook tree.
-U2 does not re-prove that. U2 makes the re-render *safe to race*.
+broker never restarting is proven, including the negative arm, by a multi-space rehearsal script
+in the private platform tooling (live add and live remove arms). U2 does not re-prove that. U2
+makes the re-render *safe to race*.
 
-**Citations.** Every `file:line` below was read at the commit named beside it: this lane at
-`0aba73ba`, U1 at `6e634f1855dd`, `origin/main` at `ae9f6164`, and the platform lane for
-`rehearse-multispace.mts` / `CLOUD-PLAN.md`. Where a citation crosses a lane it says so.
+**Citations.** Every `file:line` below is a path in the public `forks/cotal` tree, read at the commit it names beside it. Citations that point into the private platform tooling are omitted; each is named by role only.
 
 ---
 
@@ -72,12 +68,11 @@ exist* (`auth-paths.ts:848-850`). `listSpaceAccounts` is the thin wrapper (`auth
 
 ### 1.3 U1 already fixed the *read* side — build on it, do not redo it
 
-On `lane/u1-per-space-lifecycle` @ `6e634f1855dd`, `preloadSpaceAccounts(dir, current)`
+On U1's lane, `preloadSpaceAccounts(dir, current)`
 (`packages/workspace/src/auth-paths.ts:915`) is the render input: every tenant on the root, with
 the caller's copy of the booting space first because it can be fresher than disk, refusing on a
 corrupt record and refusing on a record that *disappeared between the two reads*. `up` calls it
-at `implementations/cli/src/commands/up.ts:2717` (on `origin/main` that site is still
-`serverConfig(auth, [auth], …)` at `up.ts:2704`).
+at `implementations/cli/src/commands/up.ts:2717` (the pre-U1 site is `serverConfig(auth, [auth], …)` at `up.ts:2704`).
 
 U1 closed *silent under-count*: rendering from one space when the root holds several. It did not
 close *concurrency*: `preloadSpaceAccounts` is a read-modify-write over a directory with no fence.
@@ -147,7 +142,7 @@ because the sibling load returns nothing and the function refuses. Widen the win
 removal lands after the sibling load and before the `SIGHUP` — and the render is a
 **resurrection**: the removed space is preloaded back into a running broker, and its
 supposedly-revoked creds connect again. Live removal was proven to work in F4
-(`rehearse-multispace.mts:199-201`); nothing today prevents a concurrent add from undoing it.
+(a multi-space rehearsal script in the private platform tooling); nothing today prevents a concurrent add from undoing it.
 
 **R3 is a security regression, not just a lost update.** It is the reason the failure semantics
 below cannot be "retry silently until it sticks".
@@ -487,7 +482,7 @@ correction above is precisely the point where the previous revision had *departe
 ## 5. Live-test plan
 
 Against a **real `nats-server`**, driving real processes — the F4 bar
-(`rehearse-multispace.mts`, 9/9 cells against nats-server 2.14.5), not mocks. Each cell carries its
+(a multi-space rehearsal script in the private platform tooling, 9/9 cells against nats-server 2.14.5), not mocks. Each cell carries its
 positive control, so a green cell cannot be green because nothing happened.
 
 **The gate cell — R1.** Boot with `alpha`. Fire two concurrent adds, `beta` and `gamma`, from two
@@ -546,9 +541,8 @@ resolution flag refuses and prints both lists; `--adopt-disk --yes` converges an
 connects; a corrupt record makes reconcile itself refuse *before* offering any resolution.
 
 Landing shape: one live smoke in the CLI package, registered in `bin/smoke/ci-suites.txt` — the
-same place the multi-space suites are registered (`ci-suites.txt:188` is `smoke:multi-space` in
-this lane; U1's entry is `smoke:up-multi-space-render:live`, which is the registered *suite name*
-— the previous revision cited it as the filename `up-multi-space-render-live.smoke.ts`).
+same place the multi-space suites are registered (`ci-suites.txt:190` is `smoke:multi-space`; U1's
+entry is `smoke:up-multi-space-render:live`, which is the registered *suite name*, not a filename).
 
 ---
 
@@ -578,7 +572,7 @@ Stated, not silently absorbed.
    named from both sides rather than only U3's. Concretely, both lanes edit:
    (a) `provision.ts`'s `extraAccounts` plumbing and its callers, and
    (b) the operator-account provisioning path in `up.ts` — U2's step-5 render call
-   (`up.ts:2704` on `origin/main`, U1's `:2717`) against U3's provision window (`up.ts:2825-2842`).
+   (the pre-U1 render call at `up.ts:2704`, U1's `:2717`) against U3's provision window (`up.ts:2825-2842`).
    And the functional collision: **U3's `--rotate-sys`-driven config rewrite invalidates a
    `configDigest` U2 proved, and U2 does not fence it** (§3.2, FILED-2). U2 *detects* it at step 8
    and refuses; it cannot prevent it. Coordinate on (a) and (b) before implementing.

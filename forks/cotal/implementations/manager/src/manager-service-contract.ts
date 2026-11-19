@@ -1264,9 +1264,13 @@ export const MANAGER_STATUS_CONTRACT: { input: CompiledContract; output: Compile
  *  48 adds retained-custody and deferred-seat reconciliation status; 49 adds `release-seat`;
  *  50 adds `attest-gone`; 51 adds `allowlist-set` and the fork's blank continuation refusal;
  *  52 adds `roster` for static agent presence reads.
+ *
+ *  53 = the `ps`/`inspect` row adds `background`, the seat's `meta.background` (`running` while it has
+ *  background jobs or subagents). A changed output contract is a changed described surface even though
+ *  the command names are unchanged.
  */
 export function managerClusterDocument(): ClusterDocument {
-  return buildClusterDocument(MANAGER_CLUSTER_URN, 52, ROWS);
+  return buildClusterDocument(MANAGER_CLUSTER_URN, 53, ROWS);
 }
 
 /** Revision, count, and names from the shipped cluster document. Reached smokes derive surface pins from this. */

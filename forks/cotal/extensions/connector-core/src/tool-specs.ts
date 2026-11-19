@@ -1004,6 +1004,9 @@ export function cotalToolSpecs(
           // LOCALLY-MUTED channels so you know to DM rather than @-mention. Wording per the privacy
           // model — "locally muted", never "blocked"/"unreachable" (the broker still delivers).
           const attn = !isMe && p.attention && p.attention !== "open" ? ` [${p.attention}]` : "";
+          // The peer's reported background work (`meta.background`, SPEC §6): shown so a peer knows the
+          // seat is busy with a subagent or background job even while its status reads idle.
+          const busy = p.card.meta?.background === "running" ? " · busy" : "";
           const muted = !isMe
             ? Object.entries(p.channelModes ?? {})
                 .filter(([, m]) => m === "muted")
@@ -1022,7 +1025,7 @@ export function cotalToolSpecs(
           const progress = p.status === "working" ? `working${condition} · progress unknown` : `${p.status}${condition}`;
           const activity = p.activity ? `: ${presenceText(p.activity)}${age.activitySince === undefined ? "" : ` (set ${formatAge(age.activitySince)} ago)`}` : "";
           const endpointHint = !readsDirectMessages(p) ? " (endpoint; does not take DMs)" : "";
-          return `${statusGlyph(p.status)} ${who} — ${progress}${activity}${attn}${me}${mutedHint}${endpointHint}${id}`;
+          return `${statusGlyph(p.status)} ${who} — ${progress}${activity}${busy}${attn}${me}${mutedHint}${endpointHint}${id}`;
         });
         return ok(`${preface}Present in "${config.space}" (${roster.length}):\n${lines.join("\n")}`);
       },

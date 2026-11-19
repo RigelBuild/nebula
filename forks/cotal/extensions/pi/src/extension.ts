@@ -51,6 +51,37 @@ function asContext(context: ExtensionContext): PiContextLike {
   return context;
 }
 
+/** The host's background work count: jobs plus subagents still running for this session. */
+interface BackgroundWork { jobs: number; agents: number }
+
+/** A host that exposes its background count. Not every Pi version does, so the read is guarded. */
+interface BackgroundWorkHost { getBackgroundWork: () => BackgroundWork }
+
+function isBackgroundWorkHost(value: unknown): value is BackgroundWorkHost {
+  return typeof value === "object" && value !== null && "getBackgroundWork" in value && typeof value.getBackgroundWork === "function";
+}
+
+/** Subscribe to the host's `background_work_changed` event. Its payload is a hint: the Pi host's extension docs
+ *  say a late delivery can carry a count already superseded, so the handler re-reads `ctx.getBackgroundWork()`
+ *  and never trusts the payload. The installed Pi types do not declare this event name, so the one
+ *  registration site below takes the single narrow cast; a host without the event never fires it. */
+function subscribeBackgroundWork(pi: ExtensionAPI, handler: (context: ExtensionContext) => void): void {
+  // SAFETY: the installed Pi `ExtensionAPI.on` overloads omit `background_work_changed`. The runtime loader
+  // stores any event name, and the listener forwards only the context the host passes it, which the handler
+  // reads. The cast names the event, nothing else.
+  // TODO(RIG-11257): drop this cast once the installed Pi types declare `background_work_changed`.
+  const onHostEvent = pi.on as unknown as (event: string, listener: (payload: unknown, context: ExtensionContext) => void) => void;
+  onHostEvent.call(pi, "background_work_changed", (_payload, context) => handler(context));
+}
+
+/** Read the host's background count when it exposes one. A host without `getBackgroundWork` reports
+ *  nothing, and the presence key then follows only the `background_work_changed` event. */
+function reportBackgroundWork(runtime: PiRuntime, context: ExtensionContext): void {
+  if (!isBackgroundWorkHost(context)) return;
+  const { jobs, agents } = context.getBackgroundWork();
+  runtime.driver.onBackgroundWork(jobs, agents);
+}
+
 function sessionStatePath(): string | undefined {
   const explicit = process.env.COTAL_PI_SESSION_STATE?.trim();
   if (explicit) return explicit;
@@ -232,14 +263,19 @@ export default async function cotalMesh(pi: ExtensionAPI): Promise<void> {
       _event.reason === "new" || _event.reason === "fork" ||
       (_event.reason === "startup" && (freshManagedSession || !startupSessionId && !expectedSessionId)));
     runtime.driver.onSessionStart(asContext(context));
+    reportBackgroundWork(runtime, context);
     await nameSession();
   });
   pi.on("agent_start", async (_event, context) => {
     await runtime.events?.start(context.sessionManager.getSessionId(), context.sessionManager.getSessionFile(),
       freshManagedSession || !startupSessionId && !expectedSessionId);
     runtime.driver.onAgentStart(asContext(context));
+    reportBackgroundWork(runtime, context);
     await nameSession();
   });
+  // A host that emits `background_work_changed` makes this seat re-read the count. A host without the event
+  // never fires it; the reads at session start, agent start, tool end and agent end carry the same count.
+  subscribeBackgroundWork(pi, (context) => reportBackgroundWork(runtime, context));
   pi.on("message_start", (event) => runtime.driver.onMessageStart(event.message));
   pi.on("context", (event) => {
     const messages = runtime.driver.onContext(event.messages);
@@ -247,9 +283,15 @@ export default async function cotalMesh(pi: ExtensionAPI): Promise<void> {
   });
   pi.on("after_provider_response", (event) => runtime.driver.onProviderResponse(event.status));
   pi.on("tool_execution_start", (event) => runtime.driver.onToolStart(event.toolName));
-  pi.on("tool_execution_end", () => runtime.driver.onToolEnd());
+  pi.on("tool_execution_end", (_event, context) => {
+    runtime.driver.onToolEnd();
+    reportBackgroundWork(runtime, context);
+  });
   pi.on("session_before_compact", (event) => runtime.driver.onBeforeCompact(event.reason, event.willRetry));
-  pi.on("agent_end", (event, context) => runtime.driver.onAgentEnd(event.messages, asContext(context)));
+  pi.on("agent_end", (event, context) => {
+    runtime.driver.onAgentEnd(event.messages, asContext(context));
+    reportBackgroundWork(runtime, context);
+  });
   pi.on("turn_end", (_event, context) => {
     runtime.events?.start(context.sessionManager.getSessionId(), context.sessionManager.getSessionFile());
     runtime.events?.flush(context.sessionManager.getSessionId(), context.sessionManager.getSessionFile());

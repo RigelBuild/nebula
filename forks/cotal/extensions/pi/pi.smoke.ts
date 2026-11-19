@@ -204,6 +204,12 @@ class FakeMesh {
     await new Promise((resolve) => setTimeout(resolve, status === "working" && activity === "thinking" ? 3 : 0));
     this.statuses.push({ status, activity });
   }
+
+  backgroundWork: boolean[] = [];
+
+  async setBackgroundWork(running: boolean): Promise<void> {
+    this.backgroundWork.push(running);
+  }
 }
 
 class FakeHost implements PiHost {
@@ -346,6 +352,23 @@ const tick = (): Promise<void> => new Promise((resolve) => setImmediate(resolve)
     mesh.items.map((value) => value.id).join() === "quiet,dm" && mesh.peekInbox("automatic")[0]?.id === "dm",
     "exact tombstone cleanup preserves quiet traffic and leaves later automatic work deliverable",
   );
+}
+
+// Background work mirrors to presence as running while jobs or agents run, clears at zero, and stops at shutdown.
+{
+  const mesh = new FakeMesh();
+  const driver = new PiDriver(mesh as unknown as MeshAgent, 20);
+  driver.bind(new FakeHost());
+  driver.onSessionStart(context());
+  driver.onBackgroundWork(1, 0);
+  driver.onBackgroundWork(0, 2);
+  driver.onBackgroundWork(0, 0);
+  await driver.flushPresence();
+  ok(mesh.backgroundWork.join() === "true,true,false", "a job or subagent count mirrors as running, and zero clears it");
+  driver.requestShutdown();
+  driver.onBackgroundWork(3, 1);
+  await driver.flushPresence();
+  ok(mesh.backgroundWork.join() === "true,true,false", "a background update after shutdown is not published");
 }
 
 // Queue/start/provider confirmation is not acknowledgement; terminal completion is.

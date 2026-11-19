@@ -1144,6 +1144,7 @@
     "smoke:pi-tool-closed": "tsx extensions/pi/smoke/tool-input-closed.smoke.ts",
     "smoke:pi-send-refusal": "tsx extensions/pi/smoke/send-refusal.smoke.ts",
     "smoke:pi-role-hold": "tsx extensions/pi/smoke/role-hold.smoke.ts",
+    "smoke:pi-background-wiring": "tsx extensions/pi/smoke/background-wiring.smoke.ts",
     "smoke:pi-events-reestablish": "pnpm --filter @cotal-ai/connector-core build && tsx extensions/pi/smoke/events-reestablish.smoke.ts",
     "smoke:hermes-tool-closed": "tsx extensions/connector-hermes/smoke/tool-input-closed.smoke.ts",
     "smoke:hermes-hooks-control": "tsx extensions/connector-hermes/smoke/hooks-control.smoke.ts",

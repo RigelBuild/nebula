@@ -1289,7 +1289,9 @@ export function cotalToolSpecs(
             ? ` ${recipient.name} has no roster row: it messaged you from a connection that never joined the roster or has left it, so the space's DM history keeps this DM under its id and it may never reach an inbox.`
             : recipientStatusAtSend === "unchecked"
               ? ` Presence was not checked: this manager does not serve the roster command, so the DM was stored under ${recipient.name}'s id without knowing whether it is online.`
-              : "";
+              : recipientStatusAtSend === "last-known"
+                ? ` ${recipient.name} came from the last-known roster: presence could not be read, so it is unconfirmed whether ${recipient.name} is online.`
+                : "";
           // The DM durable belongs to the recipient's lifecycle (SPEC §8): the same session gets it on
           // reconnect, and a new spawn under that name starts after it.
           const offline = recipientStatusAtSend === "offline"

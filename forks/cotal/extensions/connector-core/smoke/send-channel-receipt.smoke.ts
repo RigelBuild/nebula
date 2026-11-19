@@ -412,6 +412,59 @@ const proto = MeshAgent.prototype as unknown as {
     }
     check("1229:k a grant refusal still refuses the dm without sending", threw.includes("presence read failed") && unicast.length === 0, { threw, unicast });
   }
+
+  // (l) a name DM with no `roster` command: the name resolves from the retained last-known roster,
+  //     reaches unicast by that row's id, and the result says the name came from the last-known roster.
+  {
+    const unicast: { to: string; text: string }[] = [];
+    const FOREMAN = { card: { id: "FOREMANID000000000000000000000000000000000000", name: "foreman", role: "worker" }, status: "idle" as const };
+    const missingCommand = new EpEnvelopeError("not-found", `command "roster" is not in manager's visible surface; describe lists spawn`);
+    const agent = agentOverEp({
+      card: { id: "ALICEID0000000000000000000000000000000000000", name: "alice" },
+      getRoster: () => [FOREMAN],
+      readPresence: () => Promise.reject(missingCommand),
+      multicast: async () => mkMsg(),
+      unicast: async () => mkMsg("dm"),
+      unicastAttributed: async (to: string, text: string) => {
+        unicast.push({ to, text });
+        return { msg: mkMsg("dm"), ack: { seq: 11, duplicate: false } };
+      },
+    });
+    const sent = await agent.dm("foreman", "x").then(
+      (r) => ({ ok: true as const, r }),
+      (e: Error) => ({ ok: false as const, message: e.message }),
+    );
+    check("1229:l name DM reaches unicast by the last-known row's id", sent.ok && unicast.length === 1 && unicast[0]!.to === FOREMAN.card.id, sent.ok ? unicast : sent.message);
+    check("1229:l name DM result says the name came from the last-known roster", sent.ok && sent.r.recipientStatusAtSend === "last-known" && sent.r.recipient.name === "foreman", sent.ok ? sent.r : sent.message);
+  }
+
+  // (m) a name DM with no `roster` command and no retained row for the name: nothing else proves the
+  //     name, so it still refuses with the read's reason. An address is never invented.
+  {
+    const unicast: unknown[] = [];
+    const missingCommand = new EpEnvelopeError("not-found", `command "roster" is not in manager's visible surface; describe lists spawn`);
+    const agent = agentOverEp({
+      card: { id: "ALICEID0000000000000000000000000000000000000", name: "alice" },
+      getRoster: () => [],
+      readPresence: () => Promise.reject(missingCommand),
+      multicast: async () => mkMsg(),
+      unicast: async () => {
+        unicast.push("called");
+        return mkMsg("dm");
+      },
+      unicastAttributed: async () => {
+        unicast.push("called");
+        return { msg: mkMsg("dm"), ack: { seq: 11, duplicate: false } };
+      },
+    });
+    let threw = "";
+    try {
+      await agent.dm("foreman", "x");
+    } catch (e) {
+      threw = e instanceof Error ? e.message : String(e);
+    }
+    check("1229:m name DM with no source refuses with the read's reason and sends nothing", threw.includes("presence read failed") && threw.includes("foreman") && unicast.length === 0, { threw, unicast });
+   }
 }
 
 // The default for a send with no channel. On a mesh that enforces ACLs it is the first channel the

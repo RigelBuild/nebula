@@ -25,7 +25,6 @@ jobs:
       projects: ${{ steps.plan.outputs.projects }}
       tag: ${{ steps.plan.outputs.tag }}
       runtime: ${{ steps.plan.outputs.runtime }}
-      previous_tag: ${{ steps.plan.outputs.previous_tag }}
     steps:
       - name: Check out tested source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -38,6 +37,7 @@ jobs:
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
         with:
           go-version: '1.27.4'
+          cache: false
       - name: Plan the batch
         id: plan
         env:
@@ -50,19 +50,16 @@ jobs:
           cat "$RUNNER_TEMP/plan.json"
           echo "projects=$(jq -r '.projects | join(" ")' "$RUNNER_TEMP/plan.json")" >> "$GITHUB_OUTPUT"
           # The runtime builds when forks/cotal changed, or when the previous Release has no runtime asset.
-          previous=$(jq -r '.previousTag // empty' "$RUNNER_TEMP/plan.json")
           runtime=false
           if jq -e '.projects | index("forks/cotal")' "$RUNNER_TEMP/plan.json" > /dev/null; then
             runtime=true
-          elif [ -z "$previous" ]; then
+          elif [ -z "$(jq -r '.previousTag // empty' "$RUNNER_TEMP/plan.json")" ]; then
             runtime=true
-          elif [ "$(gh release view "$previous" --json assets --jq '[.assets[].name | select(startswith("cotal-runtime-"))] | length')" = 0 ]; then
-            runtime=true
+          else
+            runtime_assets=$(gh release view "$(jq -r .previousTag "$RUNNER_TEMP/plan.json")" --json assets --jq '[.assets[].name | select(startswith("cotal-runtime-"))] | length')
+            if [ "$runtime_assets" = 0 ]; then runtime=true; fi
           fi
-          {
-            echo "runtime=$runtime"
-            echo "previous_tag=$previous"
-          } >> "$GITHUB_OUTPUT"
+          echo "runtime=$runtime" >> "$GITHUB_OUTPUT"
           # The release tag is fixed here so the images job and the release job share it.
           echo "tag=nebula-$(date -u +%Y%m%d)-$GITHUB_RUN_NUMBER" >> "$GITHUB_OUTPUT"
           # An image whose project has no moon.yml is never planned after the first
@@ -427,6 +424,7 @@ jobs:
   tag-images:
     name: Tag images
     needs: [plan, release]
+    if: ${{ !cancelled() && needs.release.result == 'success' }}
     environment: release
     runs-on: ubuntu-latest
     permissions:
@@ -463,7 +461,7 @@ jobs:
     needs: [plan, batch, images, runtime]
     # A skipped runtime job is not a failure: the previous runtime assets carry forward.
     # A failed runtime job still skips this job, so a broken runtime build publishes nothing.
-    if: ${{ always() && needs.plan.result == 'success' && needs.batch.result == 'success' && needs.images.result == 'success' && (needs.runtime.result == 'success' || needs.runtime.result == 'skipped') }}
+    if: ${{ !cancelled() && needs.plan.result == 'success' && needs.batch.result == 'success' && needs.images.result == 'success' && (needs.runtime.result == 'success' || needs.runtime.result == 'skipped') }}
     environment: release
     runs-on: ubuntu-latest
     permissions:
@@ -507,6 +505,12 @@ jobs:
               gh release download "$previous" --dir "$RUNNER_TEMP/previous" --pattern '*.tar.zst'
             fi
           fi
+          # The Cotal runtime carries forward when this batch does not build it. Downloading here, before
+          # the release commit and tag, means a failed download stops the run with nothing published.
+          if [ -n "$previous" ] && ! compgen -G "$RUNNER_TEMP/in/cotal-runtime-*/cotal-runtime-*.tar.gz" > /dev/null; then
+            mkdir -p "$RUNNER_TEMP/runtime-previous"
+            gh release download "$previous" --repo "$GITHUB_REPOSITORY" --pattern 'cotal-runtime-*' --dir "$RUNNER_TEMP/runtime-previous"
+          fi
       - name: Publish release-manifest.json on main
         id: publish
         env:
@@ -548,7 +552,6 @@ jobs:
           GH_TOKEN: ${{ steps.app.outputs.token }}
           TAG: ${{ steps.publish.outputs.tag }}
           COMMIT: ${{ steps.publish.outputs.commit }}
-          PREVIOUS_TAG: ${{ needs.plan.outputs.previous_tag }}
         run: |
           git show "$COMMIT:release-manifest.json" > "$RUNNER_TEMP/release-manifest.json"
           # Only assets the manifest references are released, so held packages are not uploaded.
@@ -562,9 +565,11 @@ jobs:
           mkdir -p "$RUNNER_TEMP/runtime"
           if compgen -G "$RUNNER_TEMP/in/cotal-runtime-*/cotal-runtime-*.tar.gz" > /dev/null; then
             cp "$RUNNER_TEMP"/in/cotal-runtime-*/cotal-runtime-*.tar.gz "$RUNNER_TEMP/runtime/"
+          elif compgen -G "$RUNNER_TEMP/runtime-previous/cotal-runtime-*.tar.gz" > /dev/null; then
+            cp "$RUNNER_TEMP"/runtime-previous/cotal-runtime-*.tar.gz "$RUNNER_TEMP/runtime/"
+          fi
+          if compgen -G "$RUNNER_TEMP/runtime/cotal-runtime-*.tar.gz" > /dev/null; then
             (cd "$RUNNER_TEMP/runtime" && sha256sum cotal-runtime-*.tar.gz > cotal-runtime-SHA256SUMS)
-          elif [ -n "$PREVIOUS_TAG" ]; then
-            gh release download "$PREVIOUS_TAG" --repo "$GITHUB_REPOSITORY" --pattern 'cotal-runtime-*' --dir "$RUNNER_TEMP/runtime"
           fi
           runtime_files=()
           if compgen -G "$RUNNER_TEMP/runtime/cotal-runtime-*.tar.gz" > /dev/null; then
@@ -576,6 +581,7 @@ jobs:
   sync-out:
     name: Sync out (jj-hooks, homebrew-tap)
     needs: release
+    if: ${{ !cancelled() && needs.release.result == 'success' }}
     environment: main
     runs-on: ubuntu-latest
     permissions:

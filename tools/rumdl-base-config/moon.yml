@@ -1,0 +1,12 @@
+# yaml-language-server: $schema=https://moonrepo.dev/schemas/project.json
+layer: "library"
+language: "typescript"
+tags: ["bun"]
+
+tasks:
+  test:
+    command: bun run test
+    inputs:
+      - "test/**/*.ts"
+      - base.toml
+      - package.json

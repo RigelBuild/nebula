@@ -1,6 +1,6 @@
 /**
  * The shared foundation for segmenting root-scoped material per space (P7, then P1) —
- * RigelBuild/nebula `docs/designs/cotal/space-segmentation-p7-p1.md` §2 and §3.
+ * the cotal space-segmentation-p7-p1 design record §2 and §3.
  *
  * Material that is per-tenant in MEANING sits at a root-scoped path today, so a root holds exactly
  * one tenant's copy of it and a sibling tenant silently inherits it. Ending that means writing the
@@ -87,7 +87,7 @@ export const WEB_CREDS_KIND = "web.creds";
  *  NOT in `REMINTABLE_DAEMON_CREDS` and never will be: this is `rotation-renewed`, so no persisted
  *  seed can re-sign it (the `$SYS` signing seed is discarded at provision). The key exists so a
  *  HOSTED composition can inject the cred a system-account rotation minted; it does not make the
- *  cred renewable. See RigelBuild/nebula `docs/designs/cotal/u3-membership-sys-injection.md` §2. */
+ *  cred renewable. See the cotal u3-membership-sys-injection design record §2. */
 export const MEMBERSHIP_OBSERVER_CREDS_KIND = "membership-observer.creds";
 
 /** The `$SYS` KICK-only evictor's kind — the write half of live eviction, paired with

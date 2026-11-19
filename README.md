@@ -1,8 +1,7 @@
 # Nebula
 
-Nebula is the public monorepo for Rigel forks, tools, and design records.
-Forks live under `forks/`, first-party tools under `tools/`, and public
-records under `docs/`.
+Nebula is the public monorepo for Rigel forks and tools.
+Forks live under `forks/` and first-party tools under `tools/`.
 
 ## Development
 
@@ -34,4 +33,3 @@ a hit. Its allowlist is `tools/ref-gate/ref-gate.config.json`.
   and release component inside each fork tree; `fork-sync export` leaves them
   out of upstream patches.
 - `tools/<name>/` — first-party public tools, each with its own `moon.yml`.
-- `docs/designs/<project>/` — public design records.

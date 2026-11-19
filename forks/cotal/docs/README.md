@@ -200,12 +200,12 @@ Task dispatch:
 
 #### Design notes
 
-The fork's design notes live in the RigelBuild nebula repository, under `docs/designs/cotal/`.
+The cotal design records (private) cover the topics below. They are not linked from this repository.
 
-| Page | Covers |
+| Record | Covers |
 |---|---|
-| [Signer isolation](../../../docs/designs/cotal/signer-isolation.md) | How the account signing seed moves off the manager uid. |
-| [Tasks endpoint](../../../docs/designs/cotal/tasks-endpoint.md) | How a tasks provider joins a space as an ordinary endpoint. |
+| Signer isolation | How the account signing seed moves off the manager uid. |
+| Tasks endpoint | How a tasks provider joins a space as an ordinary endpoint. |
 
 ## API reference
 

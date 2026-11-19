@@ -35,7 +35,14 @@
           nix2container-static =
             (import ./. {
               pkgs = if pkgs.stdenv.hostPlatform.isLinux then pkgs.pkgsStatic else pkgs;
-            }).nix2container-bin;
+            }).nix2container-bin.overrideAttrs
+              (old: {
+                # cgo off, so the asset has no cgo link dependencies.
+                env = (old.env or { }) // {
+                  CGO_ENABLED = "0";
+                };
+                version = "1.1.0-rigel.1";
+              });
           inherit examples tests;
           default = nix2container.nix2container-bin;
         }

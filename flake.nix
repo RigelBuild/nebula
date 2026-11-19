@@ -191,6 +191,11 @@
         in
         {
           nix2container = bin.overrideAttrs (old: {
+            # cgo off, as the Go commands above: the asset links no cgo libraries.
+            env = (old.env or { }) // {
+              CGO_ENABLED = "0";
+            };
+            version = "1.1.0-rigel.1";
             passthru = (old.passthru or { }) // { upstreamRev = upstream.commit; };
           });
         };
@@ -222,14 +227,30 @@
                 sha256 = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
               };
             };
+            nix2container = {
+              version = "9.9.9";
+              upstreamRev = null;
+              "${system}" = {
+                url = "https://example.invalid/nix2container.tar.zst";
+                sha256 = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+              };
+            };
           };
-          merged = commandPackagesFor system // docsBundleFor system // packagesFor fixture system;
+          merged =
+            commandPackagesFor system
+            // docsBundleFor system
+            // nix2containerFor system
+            // packagesFor fixture system;
           expected = "9.9.9";
         in
         {
           manifest-wins = pkgs.runCommand "nebula-manifest-wins" { } ''
             test "${merged.docs-bundle.version}" = "${expected}" || {
               echo "source build won over the release manifest" >&2
+              exit 1
+            }
+            test "${merged.nix2container.version}" = "${expected}" || {
+              echo "nix2container source build won over the release manifest" >&2
               exit 1
             }
             touch $out

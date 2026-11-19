@@ -17,6 +17,7 @@ tasks:
       - package.json
       - bun.lock
       - tsconfig.json
+      - "/tools/tsconfig/base.json"
   test:
     command: bun run test
     deps:
@@ -37,3 +38,4 @@ tasks:
       - package.json
       - tsconfig.json
       - .gitignore
+      - "/tools/biome-config/biome.json"

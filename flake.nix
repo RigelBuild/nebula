@@ -144,15 +144,27 @@
       docsBundleFor = system:
         let
           pkgs = import nixpkgs { inherit system; };
+          # The build reads ../tsconfig/base.json through tools/docs-bundle/tsconfig.json,
+          # so the source carries both trees and the build runs in tools/docs-bundle.
+          # The packaged tsconfig.json's extends does not resolve; harmless, since nothing runs tsc on the package.
+          docsBundleSource = lib.fileset.toSource {
+            root = ./.;
+            fileset = lib.fileset.unions [
+              ./tools/docs-bundle
+              ./tools/tsconfig
+            ];
+          };
           docsBundleDeps = pkgs.stdenvNoCC.mkDerivation {
             pname = "docs-bundle-deps";
             version = "1.2.2";
-            src = ./tools/docs-bundle;
+            src = docsBundleSource;
+            # Unpacks to ./tools/{docs-bundle,tsconfig}; the build runs in tools/docs-bundle.
             nativeBuildInputs = [ pkgs.bun ];
             outputHashMode = "recursive";
             outputHashAlgo = "sha256";
             outputHash = "sha256-unItFE38ueLWvI/ZbHpNbjm9rqCGyYI0ScQTqXfa9/k=";
             buildPhase = ''
+              cd tools/docs-bundle
               export HOME="$TMPDIR"
               bun install --frozen-lockfile --ignore-scripts --production
             '';
@@ -164,10 +176,12 @@
           docsBundle = pkgs.stdenvNoCC.mkDerivation {
             pname = "docs-bundle";
             version = "1.2.2";
-            src = ./tools/docs-bundle;
+            src = docsBundleSource;
+            # Unpacks to ./tools/{docs-bundle,tsconfig}; the build runs in tools/docs-bundle.
             nativeBuildInputs = [ pkgs.makeWrapper ];
             installPhase = ''
               runHook preInstall
+              cd tools/docs-bundle
               mkdir -p "$out/lib/docs-bundle" "$out/bin"
               cp -R . "$out/lib/docs-bundle"
               cp -R ${docsBundleDeps}/node_modules "$out/lib/docs-bundle/"

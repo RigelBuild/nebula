@@ -187,6 +187,33 @@ func TestSyncSecondRunAdvancesSyncBranch(t *testing.T) {
 	}
 }
 
+// TestSyncRepeatAtSameTipIsNoop syncs once, then syncs again at the same upstream tip while the sync PR
+// is still open. The second run must succeed without a new commit or a PR write.
+func TestSyncRepeatAtSameTipIsNoop(t *testing.T) {
+	fixture := newSyncFixture(t, false)
+	server := fixture.github(t)
+	defer server.Close()
+	fixture.config.Client = newGitHubClient(t, server.URL)
+	if err := syncFork(context.Background(), fixture.config, false); err != nil {
+		t.Fatalf("first sync: %v", err)
+	}
+	// The hourly job starts from a fresh checkout of main, whose upstream.json still records the
+	// old commit. Reset the worktree so the second run reads that record, not the one the first run
+	// left on sync/<name>.
+	gitTest(t, fixture.root, "switch", "main")
+	first := outboxBranch(t, fixture.outbox, "sync/widget")
+	fixture.existingPR = true
+	if err := syncFork(context.Background(), fixture.config, false); err != nil {
+		t.Fatalf("second sync at the same tip: %v", err)
+	}
+	if second := outboxBranch(t, fixture.outbox, "sync/widget"); second != first {
+		t.Fatalf("second sync moved sync/widget from %s to %s", short(first), short(second))
+	}
+	if fixture.createdPRs != 1 || fixture.updatedPRs != 0 {
+		t.Fatalf("PR operations = create %d, update %d; want create 1, update 0", fixture.createdPRs, fixture.updatedPRs)
+	}
+}
+
 // TestSyncRefusesOptionRecordRepo: a record repo that git would read as an option is refused before any fetch.
 func TestSyncRefusesOptionRecordRepo(t *testing.T) {
 	fixture := newSyncFixture(t, false)

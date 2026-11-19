@@ -136,6 +136,12 @@ func syncFork(ctx context.Context, config forkConfig, dryRun bool) error {
 		if _, err := git(ctx, config.Root, nil, "switch", "-C", branch, "refs/remotes/fork-sync/"+branch); err != nil {
 			return fmt.Errorf("checkout existing sync branch: %w", err)
 		}
+		// A sync PR from an earlier run already records this tip. Applying the diff again would
+		// produce no change, so the run stops here and leaves the PR as it is.
+		if onBranch, readErr := readUpstreamRecord(recordPath); readErr == nil && onBranch.Commit == tip {
+			fmt.Fprintf(syncOutput(config), "%s: sync branch already at %s\n", config.Name, short(tip))
+			return nil
+		}
 	} else if gitExitCode(err) == 128 {
 		if _, err := git(ctx, config.Root, nil, "switch", "-C", branch, "refs/remotes/fork-sync/main"); err != nil {
 			return fmt.Errorf("create sync branch: %w", err)

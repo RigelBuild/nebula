@@ -63,8 +63,10 @@ jobs:
     permissions:
       contents: read
     steps:
+      # The App is not configured in main yet (RIG-10145). Without it sync is skipped, and the job stays green.
       - name: Mint automation App token
         id: app
+        if: vars.AUTOMATION_APP_CLIENT_ID != ''
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510
         with:
           client-id: ${{ vars.AUTOMATION_APP_CLIENT_ID }}
@@ -73,26 +75,38 @@ jobs:
           repositories: nebula
           permission-contents: write
           permission-pull-requests: write
+      # Only the mint step's outputs feed the rest. Each later step needs the same guard.
       - name: Check out source
+        if: vars.AUTOMATION_APP_CLIENT_ID != ''
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
       - name: Set up Go
+        if: vars.AUTOMATION_APP_CLIENT_ID != ''
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
         with:
           go-version: '1.27.4'
           cache: false
       - name: Configure git credential helper
+        if: vars.AUTOMATION_APP_CLIENT_ID != ''
         run: |
-          # Scoped to github.com so the App token is never offered to another host
-          # (jj-vine syncs from Codeberg). The helper reads GITHUB_TOKEN when git
-          # asks, so the token is not written to disk.
-          git config --global credential.https://github.com.helper '!f() { echo username=x-access-token; echo "password=$GITHUB_TOKEN"; }; f'
+          # Scoped to the nebula repository, not all of github.com: jj-vine syncs from
+          # Codeberg, and other GitHub repos must never get the App token. useHttpPath makes
+          # git send the repo path, so the helper matches both the plain and the .git URL.
+          # The helper reads GITHUB_TOKEN when git asks, so the token is not written to disk.
+          base=https://github.com/RigelBuild/nebula
+          git config --global "credential.$base.useHttpPath" true
+          git config --global "credential.$base.helper" '!f() { echo username=x-access-token; echo "password=$GITHUB_TOKEN"; }; f'
       - name: Sync fork
+        if: vars.AUTOMATION_APP_CLIENT_ID != ''
         env:
           CGO_ENABLED: '0'
           FORK: ${{ matrix.fork }}
           GITHUB_TOKEN: ${{ steps.app.outputs.token }}
         run: go -C tools/fork-sync run . sync --name "$FORK" --root "$GITHUB_WORKSPACE"
+      - name: Warn that fork sync is skipped
+        if: vars.AUTOMATION_APP_CLIENT_ID == ''
+        run: |
+          echo "::warning::fork sync skipped: automation App credentials not configured (RIG-10145)"

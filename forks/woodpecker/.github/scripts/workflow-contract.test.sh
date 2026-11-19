@@ -1,0 +1,119 @@
+#!/usr/bin/env bash
+# Static acceptance checks for publisher hygiene and release-tag requirement 1.
+set -euo pipefail
+root="$(cd "$(dirname "$0")/../.." && pwd)"
+publisher="$root/.github/workflows/publish-images.yaml"
+release="$root/.github/workflows/release-tag.yaml"
+
+fail() {
+  echo "FAIL $1" >&2
+  exit 1
+}
+pass() { echo "ok   $1"; }
+
+[ -f "$publisher" ] || fail 'publish-images.yaml exists'
+[ -f "$release" ] || fail 'release-tag.yaml exists'
+[ ! -e "$root/.github/workflows/publish-agent-image.yml" ] || fail 'old agent publisher removed'
+[ ! -e "$root/.github/workflows/publish-server-image.yaml" ] || fail 'old server publisher removed'
+if grep -Eq '^[[:space:]]*on:' "$publisher" "$release"; then fail 'workflow on key is quoted'; fi
+[ "$(yq -r '.on.push.tags[0]' "$publisher")" = 'v*.*.*-rigel.*' ] || fail 'publisher tag trigger'
+[ "$(yq -r '.on.workflow_dispatch.inputs.version.required' "$publisher")" = true ] || fail 'publisher dispatch version required'
+[ "$(yq -r '.concurrency.group' "$publisher")" = '${{ github.workflow }}-${{ github.ref }}' ] || fail 'publisher concurrency group'
+[ "$(yq -r '.concurrency["cancel-in-progress"]' "$publisher")" = false ] || fail 'publisher concurrency does not cancel'
+[ "$(yq -r '.jobs.resolve.steps | map(select(.name == "Require release ancestry")) | length' "$publisher")" = 1 ] || fail 'publisher ancestry guard exists'
+[ "$(yq -r '.on | keys | length' "$publisher")" = 2 ] || fail 'publisher has only push and workflow_dispatch triggers'
+[ "$(yq -r '.jobs.resolve.steps | map(select(.name == "Resolve and validate version")) | .[0].env.REF' "$publisher")" = '${{ github.ref }}' ] || fail 'publisher passes full event ref'
+for job in agent-publish server-publish; do
+  [ "$(yq -r ".jobs.${job}.permissions.packages" "$publisher")" = write ] || fail "$job alone publishes with package permission"
+done
+[ "$(yq -r '.jobs.finalize.permissions.contents' "$publisher")" = write ] || fail 'finalize can create GitHub Release'
+[ "$(yq -r '.jobs.agent-rehearsal.permissions.packages // "read"' "$publisher")" = read ] || fail 'agent rehearsal cannot write packages'
+[ "$(yq -r '.jobs.server-rehearsal.permissions.packages // "read"' "$publisher")" = read ] || fail 'server rehearsal cannot write packages'
+[ "$(yq -r '.jobs.agent-rehearsal.steps | map(select(.uses | test("docker/login-action")) ) | length' "$publisher")" = 0 ] || fail 'agent rehearsal has no registry login'
+[ "$(yq -r '.jobs.server-rehearsal.steps | map(select(.uses | test("docker/login-action")) ) | length' "$publisher")" = 0 ] || fail 'server rehearsal has no registry login'
+for job in agent-publish agent-rehearsal server-publish server-rehearsal; do
+  platforms="$(yq -r ".jobs.${job}.steps | map(select(.uses | test(\"docker/build-push-action\"))) | .[0].with.platforms" "$publisher")"
+  [ "$platforms" = 'linux/amd64,linux/arm64' ] || fail "$job builds both required platforms"
+done
+[ "$(yq -r '.jobs.agent-publish.steps | map(select(.uses | test("docker/build-push-action"))) | .[0].with.file' "$publisher")" = docker/Dockerfile.agent.multiarch ] || fail 'agent tag build uses upstream Dockerfile'
+[ "$(yq -r '.jobs.agent-rehearsal.steps | map(select(.uses | test("docker/build-push-action"))) | .[0].with.file' "$publisher")" = docker/Dockerfile.agent.multiarch ] || fail 'agent rehearsal uses upstream Dockerfile'
+[ "$(yq -r '.jobs.server-publish.steps | map(select(.uses | test("docker/build-push-action"))) | .[0].with.file' "$publisher")" = docker/Dockerfile.server.multiarch.rootless ] || fail 'server tag build uses upstream Dockerfile'
+[ "$(yq -r '.jobs.server-rehearsal.steps | map(select(.uses | test("docker/build-push-action"))) | .[0].with.file' "$publisher")" = docker/Dockerfile.server.multiarch.rootless ] || fail 'server rehearsal uses upstream Dockerfile'
+[ "$(yq -r '.jobs.agent-rehearsal.steps | map(select(.uses | test("docker/build-push-action"))) | .[0].with.push' "$publisher")" = false ] || fail 'agent rehearsal does not push'
+[ "$(yq -r '.jobs.server-rehearsal.steps | map(select(.uses | test("docker/build-push-action"))) | .[0].with.push' "$publisher")" = false ] || fail 'server rehearsal does not push'
+[ "$(yq -r '.jobs.agent-rehearsal.if' "$publisher")" = "github.event_name == 'workflow_dispatch'" ] || fail 'agent rehearsal is dispatch-only'
+[ "$(yq -r '.jobs.server-rehearsal.if' "$publisher")" = "github.event_name == 'workflow_dispatch'" ] || fail 'server rehearsal is dispatch-only'
+[ "$(yq -r '.jobs.finalize.if' "$publisher")" = "github.event_name == 'push'" ] || fail 'finalize is tag-push-only'
+[ "$(yq -r '.jobs.finalize.needs | sort | join(",")' "$publisher")" = 'agent-publish,release-binaries,resolve,server-publish' ] || fail 'finalize needs both image digests, binaries, and resolve'
+[ "$(yq -r '.jobs.release-binaries.if' "$publisher")" = "github.event_name == 'push'" ] || fail 'release binaries are tag-push-only'
+[ "$(yq -r '.jobs.release-binaries.steps | map(select((.run // "") | test("build-release-binaries.sh"))) | length' "$publisher")" = 1 ] || fail 'release binaries built by the script'
+[ "$(yq -r '.jobs.release-binaries.permissions.contents // "read"' "$publisher")" = read ] || fail 'release binaries use contents read permission'
+grep -Fq 'targets=(linux/amd64 linux/arm64 darwin/amd64 darwin/arm64)' "$root/.github/scripts/build-release-binaries.sh" || fail 'release binaries cover all flake systems'
+grep -Fq 'version.Version' "$root/.github/scripts/build-release-binaries.sh" || fail 'release binaries set version ldflag'
+grep -Fq 'tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner' "$root/.github/scripts/build-release-binaries.sh" || fail 'release archives are deterministic'
+grep -Fq 'gzip -n' "$root/.github/scripts/build-release-binaries.sh" || fail 'release gzip header is deterministic'
+[ "$(yq -r '.jobs.release-binaries.steps | map(select(.uses | test("actions/setup-go"))) | .[0].with["go-version"]' "$publisher")" = '1.27.x' ] || fail 'release binaries use Go 1.27'
+[ "$(yq -r '.jobs.release-binaries.steps | map(select(.uses | test("actions/setup-go"))) | .[0].with["check-latest"]' "$publisher")" = true ] || fail 'release binaries check latest Go patch'
+[ "$(yq -r '.jobs.release-binaries.steps | map(select(.uses | test("actions/setup-go"))) | .[0].with.cache' "$publisher")" = false ] || fail 'release binaries disable Go cache'
+[ "$(yq -r '.jobs.release-binaries.steps | map(select(.uses | test("actions/checkout"))) | .[0].with["persist-credentials"]' "$publisher")" = false ] || fail 'release binaries checkout has no persisted credentials'
+[ "$(yq -r '.jobs.release-binaries.steps | map(select(.id == "build")) | .[0].run | contains("go version")' "$publisher")" = true ] || fail 'release binary build reports its Go toolchain'
+download_index="$(yq -r '.jobs.finalize.steps | map(.name) | to_entries | map(select(.value == "Download release binaries")) | .[0].key' "$publisher")"
+release_index="$(yq -r '.jobs.finalize.steps | map(.name) | to_entries | map(select(.value == "Create or update GitHub Release")) | .[0].key' "$publisher")"
+[ "$download_index" != null ] && [ "$release_index" != null ] && [ "$download_index" -lt "$release_index" ] || fail 'finalize downloads binaries before release creation'
+grep -Fq 'gh release create "$tag" --verify-tag --generate-notes dist/assets/*' "$publisher" || fail 'new release includes release binaries'
+grep -Fq 'gh release download "$tag" --pattern "$name"' "$publisher" || fail 'existing release asset is downloaded for comparison'
+grep -Fq 'Release asset $name exists with a different sha256 (built with $GO_VERSION)' "$publisher" || fail 'existing release assets must match checksums with toolchain context'
+grep -Fq 'gh release upload "$tag" "${new_assets[@]}"' "$publisher" || fail 'existing release uploads only missing release binaries'
+! grep -Fq 'gh release upload "$tag" dist/assets/*' "$publisher" || fail 'existing release does not upload all assets'
+grep -Fq 'if gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${tag}"' "$publisher" || fail 'existing release upload is guarded by release existence'
+for job in agent-publish server-publish; do
+  [ "$(yq -r ".jobs.${job}.steps | map(select(.uses | test(\"docker/build-push-action\"))) | .[0].with.push" "$publisher")" = true ] || fail "$job pushes its manifest"
+  [ "$(yq -r ".jobs.${job}.steps | map(select(.uses | test(\"docker/build-push-action\"))) | .[0].with.outputs" "$publisher" | grep -c 'push-by-digest=true')" = 1 ] || fail "$job pushes by digest"
+done
+# A job that runs a repo script must check out before it; a bare runner has no tree.
+for wf in "$publisher" "$release"; do
+  for job in $(yq -r '.jobs | keys | .[]' "$wf"); do
+    first_script="$(yq -r ".jobs.\"$job\".steps | to_entries | map(select(.value.run // \"\" | test(\"\\.github/scripts/\"))) | .[0].key // \"\"" "$wf")"
+    [ -n "$first_script" ] || continue
+    first_checkout="$(yq -r ".jobs.\"$job\".steps | to_entries | map(select(.value.uses // \"\" | test(\"^actions/checkout@\"))) | .[0].key // \"\"" "$wf")"
+    [ -n "$first_checkout" ] && [ "$first_checkout" -lt "$first_script" ] || fail "$job checks out before running repo scripts"
+  done
+done
+pass 'publisher build, rehearsal, and finalize contracts'
+while IFS= read -r line; do
+  if [[ ! "$line" =~ uses:[[:space:]]+[^[:space:]#]+@[0-9a-f]{40}[[:space:]]+#\ v[^[:space:]]+[[:space:]]*$ ]]; then
+    fail "third-party action is not SHA-pinned with a version trailer: $line"
+  fi
+done < <(grep -h 'uses:' "$publisher" "$release")
+if grep -Eq 'docker/setup-qemu-action|docker/setup-qemu' "$publisher"; then fail 'publisher omits QEMU'; fi
+pass 'publisher hygiene and rehearsal permissions'
+
+[ "$(yq -r '.on.push.branches[0]' "$release")" = rigel-release ] || fail 'release mint triggers on rigel-release push'
+[ "$(yq -r '.on | has("workflow_dispatch")' "$release")" = true ] || fail 'release mint supports workflow dispatch'
+[ "$(yq -r '.jobs.mint.steps | map(select(.name == "Checkout")) | .[0].with.fetch-depth' "$release")" = 0 ] || fail 'mint checkout fetches full history and tags'
+[ "$(yq -r '.jobs.check.steps | map(select(.name == "Validate a changed release version")) | length' "$release")" = 1 ] || fail 'PR check validates changed flake versions'
+ [ "$(yq -r '.jobs.check.permissions.contents' "$release")" = read ] || fail 'release check has contents read only'
+[ "$(yq -r '.permissions.contents' "$release")" = read ] || fail 'release GITHUB_TOKEN has contents read only'
+[ "$(yq -r '.jobs.mint.steps | map(select(.uses | test("actions/create-github-app-token"))) | length' "$release")" = 1 ] || fail 'mint takes App token on every run'
+[ "$(yq -r '.jobs.mint.steps | map(select(.name == "Require release-branch dispatch")) | length' "$release")" = 1 ] || fail 'mint rejects arbitrary dispatch refs'
+[ "$(yq -r '.jobs.mint.steps | map(select(.name == "Create scoped release App token")) | .[0].with.client-id' "$release")" = '${{ vars.AUTOMATION_APP_CLIENT_ID }}' ] || fail 'mint uses T3 App client ID'
+[ "$(yq -r '.jobs.mint.steps | map(select(.name == "Create scoped release App token")) | .[0].with.private-key' "$release")" = '${{ secrets.AUTOMATION_APP_PRIVATE_KEY }}' ] || fail 'mint uses T3 App private key'
+[ "$(yq -r '.jobs.mint.steps | map(select(.name == "Create scoped release App token")) | .[0].with.permission-contents' "$release")" = write ] || fail 'mint token is contents write'
+# workflows: write lets GitHub create a tag at a commit whose workflow tree matches no branch tip.
+[ "$(yq -r '.jobs.mint.steps | map(select(.name == "Create scoped release App token")) | .[0].with.permission-workflows' "$release")" = write ] || fail 'mint token is workflows write'
+[ "$(yq -r '.jobs.mint.steps | map(select(.name == "Create scoped release App token")) | .[0].with | keys | map(select(test("^permission-"))) | sort | join(",")' "$release")" = permission-contents,permission-workflows ] || fail 'mint token has contents and workflows only'
+[ "$(yq -r '.jobs.mint.steps | map(select(.name == "Create scoped release App token")) | .[0].with.repositories' "$release")" = woodpecker ] || fail 'mint token is scoped to woodpecker'
+[ "$(yq -r '.jobs.mint.concurrency // "none"' "$release")" = none ] || fail 'mint has no concurrency group'
+pass 'release-tag Requirement 1 workflow shape'
+grep -Fq '.github/scripts/check-release-hashes.sh flake.nix "$RUNNER_TEMP/release-check"' "$publisher" || fail 'finalize checks flake hashes with the release script'
+grep -Fq '.github/scripts/check-release-hashes.sh flake.nix "$RUNNER_TEMP/release-check"' "$release" || fail 'PR check runs the release hash script'
+[ "$(yq -r '.jobs.check.steps | map(select(.name == "Check flake release hashes against checksums.txt")) | length' "$release")" = 1 ] || fail 'PR check has one release hash step'
+pass 'release hash check wiring'
+pr_hash_step='.jobs.check.steps | map(select(.name == "Check flake release hashes against checksums.txt")) | .[0]'
+[ "$(yq -r "$pr_hash_step.env.BASE_SHA" "$release")" = '${{ github.event.pull_request.base.sha }}' ] || fail 'PR hash step compares against the PR base sha'
+[ "$(yq -r "$pr_hash_step.env.HEAD_SHA" "$release")" = '${{ github.event.pull_request.head.sha }}' ] || fail 'PR hash step compares the PR head sha'
+[ "$(yq -r "$pr_hash_step.env.GH_TOKEN" "$release")" != null ] || fail 'PR hash step passes GH_TOKEN'
+[ "$(yq -r '.jobs.check.steps | map(select(.["continue-on-error"] == true)) | length' "$release")" = 0 ] || fail 'release-tag check steps do not set continue-on-error'
+[ "$(yq -r '.jobs.finalize.steps | map(select(.["continue-on-error"] == true)) | length' "$publisher")" = 0 ] || fail 'finalize steps do not set continue-on-error'
+[ "$(yq -r '.jobs.check.if' "$release")" = "github.event_name == 'pull_request'" ] || fail 'release-tag check job is not disabled'
+pass 'release hash check env, continue-on-error, and job gate'

@@ -70,9 +70,10 @@ import { sendsImageInputOnWire } from "@oh-my-pi/pi-ai/providers/vision-guard";
 import { resolvePromptCacheLookback } from "@oh-my-pi/pi-catalog/compat/prompt-cache-lookback";
 import { modelsAreEqual } from "@oh-my-pi/pi-catalog/models";
 import type { CatalogPolicyInputs } from "@oh-my-pi/pi-catalog/types";
-import { isRecord, logger, prompt, Snowflake, toError } from "@oh-my-pi/pi-utils";
+import { isRecord, logger, prompt, Snowflake, toError, withLoopPhase } from "@oh-my-pi/pi-utils";
 import * as snapcompact from "@oh-my-pi/snapcompact";
 import { writeArtifact } from "./artifacts";
+import { cfgOffline } from "../config/auxiliary-model-policy";
 import type { ModelRegistry } from "../config/model-registry";
 import { CHAT_MODEL_ROLE_IDS } from "../config/model-roles";
 import type { Settings } from "../config/settings";
@@ -158,6 +159,11 @@ const COMPACTION_CHECK_BLOCK_AUTOMATIC_CONTINUATION: CompactionCheckResult = {
 	continuationScheduled: false,
 	automaticContinuationBlocked: true,
 };
+
+const FIXED_CONTEXT_DEAD_END_WARNING =
+	"Compaction cannot create headroom — pausing automatic maintenance. " +
+	"The system prompt and always-sent tool schemas alone exceed the recovery band; " +
+	"reduce fixed context or adjust compaction.modelThresholds.";
 
 /**
  * Consecutive `response.incomplete` (length-stop) recoveries that deliver no
@@ -374,6 +380,8 @@ interface SpeculationRun {
 	controller: AbortController;
 	promise: Promise<void>;
 	contextTokensAtStart: number;
+	/** `compaction.models` when the run started; a run from another policy is never armed or applied. */
+	compactionModels: readonly string[];
 	armed?: ArmedSpeculation;
 }
 
@@ -519,7 +527,8 @@ export interface SessionMaintenanceHost {
 		message: AssistantMessage,
 		options: { autoContinue: boolean; triggerContextTokens?: number; excludeMediaMethods?: boolean },
 	): Promise<CompactionCheckResult>;
-	parseRetryAfterMsFromError(errorMessage: string): number | undefined;
+	/** Retry hint for a failed summary attempt, parsed with the attempted candidate's provider and endpoint. */
+	parseRetryAfterMsFromError(errorMessage: string, provider: string, baseUrl: string | undefined): number | undefined;
 	setModelTemporary(
 		model: Model,
 		thinkingLevel?: ConfiguredThinkingLevel,
@@ -632,6 +641,14 @@ export class SessionMaintenance {
 		{ key: string; length: number; first: AgentMessage | undefined }
 	>();
 	readonly #host: SessionMaintenanceHost;
+	/** True when `run` started under the current `compaction.models` policy. */
+	#speculationPolicyCurrent(run: SpeculationRun): boolean {
+		const current = cfgCompactionModels.get(this.#host.settings);
+		return (
+			current.length === run.compactionModels.length &&
+			current.every((selector, i) => selector === run.compactionModels[i])
+		);
+	}
 
 	get #model(): Model | undefined {
 		return this.#host.model();
@@ -1474,22 +1491,24 @@ export class SessionMaintenance {
 					: `${this.#model.id} is text-only`;
 				throw snapcompactFailure(`snapcompact needs a vision-capable model (${reason})`);
 			} else if (snapcompactReady) {
-				const text = snapcompact.serializeConversation(
-					convertToLlm(preparation.messagesToSummarize.concat(preparation.turnPrefixMessages)),
-					{ includeThinking: snapcompactIncludeThinking },
+				const renderScan = this.#snapcompactPreflight(
+					preparation,
+					snapcompactIncludeThinking,
+					snapcompactShapeSetting,
 				);
-				const probeText = snapcompact.renderabilityProbeText(
-					text,
-					preparation.previousPreserveData,
-					preparation.previousSummary,
-				);
-				snapcompactShape = snapcompact.resolveShapeForText(probeText, this.#model, snapcompactShapeSetting);
-				const renderScan = snapcompact.scanRenderability(probeText, { shape: snapcompactShape });
+				snapcompactShape = renderScan.shape;
 				if (!renderScan.isSafe) {
 					const percent = (renderScan.unrenderableRatio * 100).toFixed(1);
 					throw snapcompactFailure(
 						`snapcompact cannot render this conversation: unsupported characters for selected snapcompact font (${percent}%)`,
 					);
+				}
+				// The preflight and the render each block the loop for a long history; let it breathe between them.
+				// The yield lets a model switch land, and the scanned shape belongs to the model it was resolved for.
+				const scannedModel = this.#model;
+				await Bun.sleep(0);
+				if (this.#model !== scannedModel) {
+					throw snapcompactFailure("snapcompact stopped: the active model changed while it was preparing");
 				}
 			}
 
@@ -1522,7 +1541,7 @@ export class SessionMaintenance {
 						{
 							convertToLlm,
 							model: this.#model,
-							...(snapcompactShapeSetting === "auto" ? {} : { shape }),
+							shape,
 							maxFrames,
 							includeThinking: snapcompactIncludeThinking,
 						},
@@ -1891,22 +1910,6 @@ export class SessionMaintenance {
 		const model = this.#model;
 		if (!model || this.isCompacting) return COMPACTION_CHECK_NONE;
 		const settings = this.#compactionSettings;
-		if (reason === "threshold" && !options.explicitNewContextRequest) {
-			const fixedContextExceedsBand = this.#fixedContextExceedsRecoveryBand();
-			if (fixedContextExceedsBand) {
-				const sessionId = this.#host.sessionManager.getSessionId();
-				if (this.#fixedContextDeadEndNotifiedSessionId !== sessionId) {
-					this.#host.emitNotice(
-						"warning",
-						this.#compactionDeadEndWarning("clear large tool output"),
-						"compaction",
-					);
-					this.#fixedContextDeadEndNotifiedSessionId = sessionId;
-				}
-				return COMPACTION_CHECK_BLOCK_AUTOMATIC_CONTINUATION;
-			}
-			this.#fixedContextDeadEndNotifiedSessionId = undefined;
-		}
 		const branch = this.#host.sessionManager.getBranch();
 		const preparation = prepareCompaction(branch, settings, model, this.#tokenizer);
 		if (!preparation) return COMPACTION_CHECK_BLOCK_AUTOMATIC_CONTINUATION;
@@ -2328,7 +2331,8 @@ export class SessionMaintenance {
 		if (contextTokens >= thresholdTokens) return; // real maintenance owns it now
 		if (thresholdTokens - contextTokens > resolveSpeculationLeadTokens(thresholdTokens)) return;
 		const current = this.#speculation;
-		if (current) {
+		if (current && !this.#speculationPolicyCurrent(current)) this.cancelSpeculation();
+		else if (current) {
 			if (!current.armed) return; // one run at a time
 			// Refresh-on-growth: the armed summary's kept tail grows with every
 			// turn; once the growth exceeds the keep-recent budget, a fresh cut
@@ -2354,7 +2358,12 @@ export class SessionMaintenance {
 	/** Install and launch one background speculation run for `method`. */
 	#startSpeculationRun(contextTokens: number, method: "remote" | "handoff" | "soft"): void {
 		const controller = new AbortController();
-		const run: SpeculationRun = { controller, promise: Promise.resolve(), contextTokensAtStart: contextTokens };
+		const run: SpeculationRun = {
+			controller,
+			promise: Promise.resolve(),
+			contextTokensAtStart: contextTokens,
+			compactionModels: cfgCompactionModels.get(this.#host.settings),
+		};
 		const model = this.#model;
 		// Keyed now: the session can switch before the run settles.
 		const nativeKey = model && this.#nativeSpeculationKey(model);
@@ -2429,7 +2438,11 @@ export class SessionMaintenance {
 			contextWindow - SPECULATION_LEAD_MIN_TOKENS,
 		);
 		if (contextTokens >= graceCapTokens) return false;
-		const run = this.#speculation;
+		let run = this.#speculation;
+		if (run && !this.#speculationPolicyCurrent(run)) {
+			this.cancelSpeculation();
+			run = undefined;
+		}
 		if (run) {
 			if (run.armed) {
 				if (!this.#armedSpeculationValid(run.armed, contextTokens)) {
@@ -2541,6 +2554,10 @@ export class SessionMaintenance {
 			};
 		}
 		if (signal.aborted || this.#speculation !== run) return;
+		if (!this.#speculationPolicyCurrent(run)) {
+			this.cancelSpeculation();
+			return;
+		}
 		run.armed = armed;
 		logger.debug("Speculative compaction armed", {
 			method,
@@ -2655,7 +2672,7 @@ export class SessionMaintenance {
 		const run = this.#speculation;
 		if (!run) return undefined;
 		this.#speculation = undefined;
-		if (!run.armed) {
+		if (!run.armed || !this.#speculationPolicyCurrent(run)) {
 			run.controller.abort();
 			return undefined;
 		}
@@ -3743,9 +3760,14 @@ export class SessionMaintenance {
 		availableModels = availableModels.map(model => registry.fitContextWindow(model, settings));
 		const candidates: Model[] = [];
 		const seen = new Set<string>();
+		const activeProvider = this.#model?.provider;
+		const offline = cfgOffline.get(settings);
+		// Offline mode keeps auxiliary requests on the active provider.
+		const offlineBlocked = (model: Model): boolean =>
+			offline && (!activeProvider || model.provider !== activeProvider);
 
 		const addCandidate = (model: Model | undefined): void => {
-			if (!model) return;
+			if (!model || offlineBlocked(model)) return;
 			const key = `${model.provider}/${model.id}`;
 			if (seen.has(key)) return;
 			seen.add(key);
@@ -3789,6 +3811,9 @@ export class SessionMaintenance {
 		if (cfgCompactionLargestContextFallback.get(settings)) {
 			const sortedByContext = [...availableModels].sort((a, b) => (b.contextWindow ?? 0) - (a.contextWindow ?? 0));
 			for (const model of sortedByContext) {
+				// Offline skips other providers' models without consuming the single
+				// largest-context slot; a caller-filter rejection still consumes it.
+				if (offlineBlocked(model)) continue;
 				if (!seen.has(`${model.provider}/${model.id}`)) {
 					addCandidate(model);
 					break;
@@ -3892,8 +3917,13 @@ export class SessionMaintenance {
 					}
 					if (autoRetry) {
 						const message = error instanceof Error ? error.message : String(error);
-						const retryAfterMs = this.#host.parseRetryAfterMsFromError(message);
+						const retryAfterMs = this.#host.parseRetryAfterMsFromError(
+							message,
+							candidate.provider,
+							candidate.baseUrl,
+						);
 						const shouldRetry =
+							!AIError.is(id, AIError.Flag.Timeout) &&
 							autoRetry.enabled &&
 							attempt < autoRetry.maxRetries &&
 							!AIError.is(id, AIError.Flag.ContextOverflow) &&
@@ -4144,6 +4174,31 @@ export class SessionMaintenance {
 			snapcompact.maxFramesForDataBudget(shape, snapcompact.frameDataBytesBudget(this.#model)),
 			snapcompact.providerFrameBudget(this.#model),
 		);
+	}
+
+	/**
+	 * Pick the snapcompact shape for `preparation`'s history and check the font can render it.
+	 * The resolved shape is what {@link snapcompact.compact} would pick from the same probe text,
+	 * so callers pass it through instead of letting compact resolve it again.
+	 * Runs as the `compaction.snapcompact` loop phase: serializing and scanning a long history blocks the loop.
+	 */
+	#snapcompactPreflight(
+		preparation: CompactionPreparation,
+		includeThinking: boolean,
+		shapeSetting: snapcompact.ShapeVariantName | "auto",
+	): snapcompact.ShapeScan {
+		return withLoopPhase("compaction.snapcompact", () => {
+			const text = snapcompact.serializeConversation(
+				convertToLlm(preparation.messagesToSummarize.concat(preparation.turnPrefixMessages)),
+				{ includeThinking },
+			);
+			const probeText = snapcompact.renderabilityProbeText(
+				text,
+				preparation.previousPreserveData,
+				preparation.previousSummary,
+			);
+			return snapcompact.resolveShapeAndScan(probeText, this.#model, shapeSetting);
+		});
 	}
 
 	#snapcompactFramePayloadBytes(result: snapcompact.CompactionResult): number {
@@ -4454,14 +4509,27 @@ export class SessionMaintenance {
 		);
 	}
 
-	#compactionDeadEndWarning(remedies: string): string {
-		if (this.#fixedContextExceedsRecoveryBand()) {
-			return (
-				"Compaction cannot create headroom — pausing automatic maintenance. " +
-				"The system prompt and always-sent tool schemas alone exceed the recovery band; " +
-				"reduce fixed context or adjust compaction.modelThresholds."
-			);
+	/**
+	 * When the system prompt and tool schemas alone exceed the recovery band, no
+	 * threshold pass can land under it, and re-running one every turn loops
+	 * (#18589). Returns the blocking result (warning once per session), or
+	 * `undefined` when compaction can still help.
+	 */
+	#thresholdFixedContextDeadEnd(): CompactionCheckResult | undefined {
+		if (!this.#fixedContextExceedsRecoveryBand()) {
+			this.#fixedContextDeadEndNotifiedSessionId = undefined;
+			return undefined;
 		}
+		const sessionId = this.#host.sessionManager.getSessionId();
+		if (this.#fixedContextDeadEndNotifiedSessionId !== sessionId) {
+			this.#host.emitNotice("warning", FIXED_CONTEXT_DEAD_END_WARNING, "compaction");
+			this.#fixedContextDeadEndNotifiedSessionId = sessionId;
+		}
+		return COMPACTION_CHECK_BLOCK_AUTOMATIC_CONTINUATION;
+	}
+
+	#compactionDeadEndWarning(remedies: string): string {
+		if (this.#fixedContextExceedsRecoveryBand()) return FIXED_CONTEXT_DEAD_END_WARNING;
 		return (
 			"Compaction freed too little context to make progress — pausing automatic maintenance to avoid a compaction loop. " +
 			`The most recent turn alone is too large to reduce further; ${remedies} or switch to a larger-context model.`
@@ -5272,7 +5340,7 @@ export class SessionMaintenance {
 	 *
 	 * Every method, handoff included, runs to completion before this resolves,
 	 * so the result reports the continuation that was actually scheduled — the
-	 * `agent_end` settle derives `willContinue` from it.
+	 * loop-end routing decides from it whether the run pauses for that turn.
 	 *
 	 * @returns whether auto-compaction scheduled a follow-up turn.
 	 */
@@ -5316,6 +5384,11 @@ export class SessionMaintenance {
 		const explicitNewContextRequest = options.explicitNewContextRequest === true;
 		if (reason !== "idle" && !compactionSettings.enabled && !explicitNewContextRequest) {
 			return COMPACTION_CHECK_NONE;
+		}
+		// Every threshold caller and strategy goes through here, so the fixed-context gate lives here once.
+		if (reason === "threshold" && !explicitNewContextRequest) {
+			const deadEnd = this.#thresholdFixedContextDeadEnd();
+			if (deadEnd) return deadEnd;
 		}
 		if (this.#usesExperimentalContextManagement()) {
 			return await this.#runExperimentalContextRollover(reason, willRetry, options);
@@ -5768,18 +5841,12 @@ export class SessionMaintenance {
 			let snapcompactBlocker: string | undefined;
 			if (action === "snapcompact" && compactionPrep.kind !== "fromHook") {
 				const snapcompactIncludeThinking = snapcompact.readerIncludesThinking(this.#model);
-				const text = snapcompact.serializeConversation(
-					convertToLlm(preparation.messagesToSummarize.concat(preparation.turnPrefixMessages)),
-					{ includeThinking: snapcompactIncludeThinking },
+				const renderScan = this.#snapcompactPreflight(
+					preparation,
+					snapcompactIncludeThinking,
+					cfgSnapcompactShape.get(this.#host.settings),
 				);
-				const probeText = snapcompact.renderabilityProbeText(
-					text,
-					preparation.previousPreserveData,
-					preparation.previousSummary,
-				);
-				const shapeSetting = cfgSnapcompactShape.get(this.#host.settings);
-				const shape = snapcompact.resolveShapeForText(probeText, this.#model, shapeSetting);
-				const renderScan = snapcompact.scanRenderability(probeText, { shape });
+				const shape = renderScan.shape;
 				if (!renderScan.isSafe) {
 					const percent = (renderScan.unrenderableRatio * 100).toFixed(1);
 					logger.warn("Snapcompact disabled: unsupported characters for selected snapcompact font", {
@@ -5797,12 +5864,26 @@ export class SessionMaintenance {
 						snapcompactBlocker =
 							"snapcompact: kept history alone exceeds the context budget; trying the next preferred compaction method.";
 					} else {
+						// The preflight and the render each block the loop for a long history; let it breathe between them.
+						// The yield lets a model switch land, and the scanned shape and frame cap belong to the model they were sized for.
+						const scannedModel = this.#model;
+						await Bun.sleep(0);
+						if (this.#model !== scannedModel) {
+							logger.warn("Snapcompact skipped: the active model changed during preflight", {
+								from: scannedModel?.id,
+								to: this.#model?.id,
+							});
+							snapcompactBlocker =
+								"snapcompact: the active model changed during preflight; trying the next preferred compaction method.";
+						}
+					}
+					if (!snapcompactBlocker) {
 						const rendered = await this.#renderSnapcompactArchive(
 							preparation,
 							{
 								convertToLlm,
 								model: this.#model,
-								...(shapeSetting === "auto" ? {} : { shape }),
+								shape,
 								maxFrames,
 								includeThinking: snapcompactIncludeThinking,
 							},
@@ -6095,7 +6176,11 @@ export class SessionMaintenance {
 								break;
 							}
 
-							const retryAfterMs = this.#host.parseRetryAfterMsFromError(message);
+							const retryAfterMs = this.#host.parseRetryAfterMsFromError(
+								message,
+								candidate.provider,
+								candidate.baseUrl,
+							);
 							// An input the summarizer cannot fit is deterministic: the same
 							// prompt fails identically every attempt, so the retry budget is
 							// pure latency and the next candidate (a larger window) is the

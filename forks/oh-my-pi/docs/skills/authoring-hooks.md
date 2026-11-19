@@ -51,6 +51,7 @@ export default function myExtension(pi: ExtensionAPI): void {
 | `session_start`          | On initial session load            | —                                                                                 |
 | `session_before_switch`  | Before session switch              | `{ cancel?: boolean }`                                                            |
 | `session_switch`         | After session switch               | —                                                                                 |
+| `session_clear`          | After `/clear` resets context      | —                                                                                 |
 | `session_before_branch`  | Before session branch              | `{ cancel?: boolean; skipConversationRestore?: boolean }`                         |
 | `session_branch`         | After session branch               | —                                                                                 |
 | `session_before_compact` | Before compaction                  | `{ cancel?: boolean; compaction?: CompactionResult }`                             |
@@ -119,7 +120,7 @@ omp.on("tool_result", async (event, ctx) => {
 		});
 		return {
 			content: redacted,
-			additionalContext: "Use the redacted result for subsequent reasoning.",
+			additionalContext: "Use the redacted result in later steps.",
 		};
 	}
 });

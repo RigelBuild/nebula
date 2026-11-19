@@ -638,24 +638,48 @@ class GatewayStartupMixin:
             logger.warning("Skipping auto-resume for %s: authorization check failed: %s", session_key, exc)
         return False
 
-    def _schedule_resume_pending_sessions(self, platform=None) -> int:
+    async def _schedule_resume_pending_sessions_async(self, platform=None) -> int:
+        """``_schedule_resume_pending_sessions`` for a coroutine: the held set is read in a worker thread."""
+        candidates = self._resume_pending_candidates(platform)
+        if not candidates:
+            return self._schedule_resume_pending_sessions(platform=platform, candidates=candidates)
+        from gateway.session_authorities import all_authorities
+        held = await asyncio.to_thread(self._held_resume_sessions, all_authorities(self), candidates)
+        return self._schedule_resume_pending_sessions(platform=platform, candidates=candidates, held=held)
+
+    def _held_resume_sessions(self, authorities, candidates) -> set:
+        """Session ids of *candidates* a canonical admission holds (see ``held_admissions``), one read per authority."""
+        from gateway.session_authorities import held_admissions
+        ids = [entry.session_id for entry in candidates]
+        held: set = set()
+        for authority in authorities:
+            held |= held_admissions(authority, ids)
+        return held
+
+    def _schedule_resume_pending_sessions(self, platform=None, *, candidates=None, held=None) -> int:
         """Auto-continue fresh restart-interrupted sessions: synthesize an empty-text turn (the
         ``_is_resume_pending`` injection path owns the wording). Sessions whose adapter is offline stay
         ``resume_pending`` for the reconnect watcher, which re-calls this scoped to that ``platform``;
-        sessions with a running agent are skipped so none is resumed twice."""
+        sessions with a running agent are skipped so none is resumed twice.
+
+        ``held`` is the set of session ids a canonical admission holds, read off the loop by
+        ``_schedule_resume_pending_sessions_async``. Without it the set is read here, on the calling thread."""
         from gateway.run import (
             _AGENT_PENDING_SENTINEL, _auto_continue_freshness_window, _is_fresh_gateway_interruption,
         )
         window = _auto_continue_freshness_window()
-        candidates = self._resume_pending_candidates(platform)
+        if candidates is None:
+            candidates = self._resume_pending_candidates(platform)
         if candidates is None:
             return 0
+        if held is None:
+            from gateway.session_authorities import all_authorities
+            held = self._held_resume_sessions(all_authorities(self), candidates)
         scheduled = 0
         for entry in candidates:
             # Canonical admissions own restart decisions, including unknown pauses.
             # Legacy synthetic resume must not race their restored FIFO.
-            from gateway.session_authorities import all_authorities, holds_admission
-            if any(holds_admission(authority, entry.session_id) for authority in all_authorities(self)):
+            if entry.session_id in held:
                 logger.debug("Skipping auto-resume for %s: its canonical admission holds the session",
                              entry.session_id)
                 continue
@@ -1639,7 +1663,7 @@ class GatewayStartupMixin:
             recover_gateway_pending(self)
         # Auto-resume restart-interrupted sessions (ledger-answered ones were cleared above); a failed
         # auto-resume stays visible on the next user message.
-        self._schedule_resume_pending_sessions()
+        await self._schedule_resume_pending_sessions_async()
         await self._finish_startup_restore()
         from gateway.run_runtime import recover_gateway_native_sessions
         await recover_gateway_native_sessions(self)

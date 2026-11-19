@@ -298,6 +298,55 @@ def holds_admission(authority, session_id) -> bool:
         return True
 
 
+def held_admissions(authority, session_ids) -> set:
+    """``{id for id in session_ids if holds_admission(authority, id)}``, computed in one pass over the store.
+
+    The startup resume scan asks this for every candidate. Per id, ``holds_admission`` makes three blocking
+    reads; here each candidate's owner is resolved once, then two queries cover every candidate: the pending
+    rows, and the latest decision row per target. The answer matches ``holds_admission`` per id, including
+    the steer-row rule. A retiring store that cannot answer holds every candidate, as ``holds_admission`` does.
+    """
+    ids = list(session_ids)
+    if not ids:
+        return set()
+    try:
+        owners = {sid: admission_owner(authority, sid) for sid in ids}
+        pairs = {sid: tuple(t for t in dict.fromkeys((sid, owners[sid])) if t) for sid in ids}
+        targets = sorted({t for pair in pairs.values() for t in pair})
+        marks = ','.join('?' * len(targets))
+        pending = {row[0] for row in authority.db._read_all(
+            f"SELECT DISTINCT target_session_id FROM session_admissions WHERE target_session_id IN ({marks}) "
+            "AND status IN ('queued','started','unknown')", targets)}
+        latest_rows = authority.db._read_all(
+            f"SELECT a.* FROM session_admissions a WHERE a.target_session_id IN ({marks}) "
+            "AND NOT (a.status = 'terminal' AND a.owner_epoch IS NOT NULL AND EXISTS ("
+            "  SELECT 1 FROM session_admissions h WHERE h.target_session_id = a.target_session_id "
+            "  AND h.seq < a.seq AND h.owner_epoch = a.owner_epoch AND h.generation = a.generation))",
+            targets)
+        latest = {}
+        for row in latest_rows:
+            kept = latest.get(row['target_session_id'])
+            if kept is None or row['seq'] > kept['seq']:
+                latest[row['target_session_id']] = row
+        held = set()
+        for sid in ids:
+            if any(t in pending for t in pairs[sid]):
+                held.add(sid)
+                continue
+            rows = [latest[t] for t in pairs[sid] if t in latest]
+            newest = max(rows, key=lambda r: r['seq'], default=None)
+            if newest is not None and not _restart_interrupted(authority, newest):
+                held.add(sid)
+        return held
+    except Exception as exc:
+        if not getattr(authority, 'retiring', False):
+            raise
+        import logging
+        logging.getLogger('gateway.run').warning("Skipping auto-resume of %s: retained store %s cannot answer: %s",
+                                                 ids, getattr(authority, 'profile_id', '?'), exc)
+        return set(ids)
+
+
 def _restart_interrupted(authority, row) -> bool:
     """Whether a latest admission *row* is an attended turn a gateway restart or shutdown interrupted: the
     only terminal outcome that releases its session. The retained result records the stop cause. Completed,

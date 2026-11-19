@@ -289,7 +289,7 @@ class GatewaySecondaryReconnectMixin:
                             # channels, and sessions boot skipped for this offline adapter wait for this call.
                             self._schedule_planned_restart_replay()
                             try:
-                                self._schedule_resume_pending_sessions(platform=platform)
+                                await self._schedule_resume_pending_sessions_async(platform=platform)
                             except Exception:
                                 logger.debug("resume-pending reschedule after %s reconnect failed (profile: %s)",
                                              platform.value, profile_name, exc_info=True)

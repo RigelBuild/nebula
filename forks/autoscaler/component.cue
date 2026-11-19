@@ -5,11 +5,13 @@ images: {
 		dockerfile: "docker/Dockerfile"
 		platforms: ["linux/amd64", "linux/arm64"]
 		// The build context has no .git, so the Makefile takes the commit and
-		// tag from here. CD replaces {source} with the tested commit and {tag}
-		// with this Release's tag. The Dockerfile declares both as ARG.
+		// version from here. CD replaces {source} with the tested commit and
+		// {version} with the fork's .github/rigel-version. The Dockerfile
+		// declares both as ARG. The Makefile strips a leading v, so the bare
+		// version is passed.
 		buildArgs: {
 			CI_COMMIT_SHA: "{source}"
-			CI_COMMIT_TAG: "{tag}"
+			CI_COMMIT_TAG: "{version}"
 		}
 	}
 }

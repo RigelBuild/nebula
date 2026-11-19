@@ -2273,6 +2273,7 @@ export class MeshAgent extends EventEmitter {
       if (!failure) throw new Error(this.noPeer(target));
       // A manager without `roster` cannot say whether the recipient is present, but the broker still
       // stores a DM to a principal key. Only that addressable form proceeds; a bare name still refuses.
+      if (target === this.id) throw new Error(this.noPeer(target));
       if (!(presenceCommandMissing(failure) && parsePrincipalKey(target)))
         throw this.cannotVerify(`peer "${target}"`, failure, "The DM was not sent.");
     }

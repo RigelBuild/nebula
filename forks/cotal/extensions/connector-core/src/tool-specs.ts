@@ -1288,7 +1288,7 @@ export function cotalToolSpecs(
           const unrostered = recipientStatusAtSend === "unrostered"
             ? ` ${recipient.name} has no roster row: it messaged you from a connection that never joined the roster or has left it, so the space's DM history keeps this DM under its id and it may never reach an inbox.`
             : recipientStatusAtSend === "unchecked"
-              ? ` Presence was not checked: this manager does not serve the roster command, so the DM was stored under ${recipient.name}'s id without knowing whether it is online.`
+              ? ` Presence was not checked: the presence service does not serve the roster command, so the DM was stored under ${recipient.name}'s id without knowing whether it is online.`
               : recipientStatusAtSend === "last-known"
                 ? ` ${recipient.name} came from the last-known roster: presence could not be read, so it is unconfirmed whether ${recipient.name} is online.`
                 : "";

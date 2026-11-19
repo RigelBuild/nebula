@@ -19,8 +19,8 @@ func TestWriteFormulasSkipsPackageWithoutDarwinAsset(t *testing.T) {
 		"x86_64-linux": {URL: testReleaseURL + "trunk-mq-mcp-0.1.0-x86_64-linux.tar.zst", SHA256: sumDarwinArm},
 	}}
 	m := Manifest{Source: "abc", Tag: "nebula-20261117-43", Held: []string{}, Packages: map[string]Package{
-		"length-gate":   lengthGatePackage(),
-		"trunk-mq-mcp":  linuxOnly,
+		"length-gate":  lengthGatePackage(),
+		"trunk-mq-mcp": linuxOnly,
 	}}
 	data, err := json.Marshal(m)
 	if err != nil {

@@ -268,7 +268,9 @@ jobs:
         run: go -C tools/ref-gate run . --config ref-gate.config.json
   design-ledger:
     name: design-ledger
-    if: github.event_name == 'pull_request'
+    if: >-
+      github.event_name == 'pull_request' ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -288,6 +290,7 @@ jobs:
       - name: Run design-ledger-gate over docs
         env:
           CGO_ENABLED: '0'
+          BASE_REF: ${{ github.base_ref }}
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}

@@ -49,7 +49,9 @@ func writeFormulas(manifestPath, outDir string) ([]string, error) {
 	}
 	var names []string
 	for name, p := range m.Packages {
-		if len(p.Systems) > 0 {
+		// Homebrew needs an on_macos block, so a package with no darwin asset
+		// gets no formula. Its Linux assets still ship in the Release.
+		if _, darwin := p.Systems["aarch64-darwin"]; darwin {
 			names = append(names, name)
 		}
 	}

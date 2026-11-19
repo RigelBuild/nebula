@@ -67,7 +67,7 @@ Agent seats call `CotalEndpoint.readPresence()` when a tool needs a roster. User
 
 Open-mode agents have no per-profile grant boundary and retain direct presence reads.
 
-A failed read leaves a last-known roster. A DM or mention with a name that the failed read cannot verify refuses with that same reason. A name verified by an earlier read remains accepted. Watching managers, delivery, chat, and dashboard endpoints retain their transition watches.
+A failed read leaves a last-known roster. A DM or mention with a name that the failed read cannot verify refuses with that same reason. A name verified by an earlier read remains accepted, and a DM to such a name is marked last-known because presence was not read. The one exception is a manager that does not serve the `roster` command: a DM to a principal key then sends with presence not checked, and a name the retained roster holds sends to that row. Watching managers, delivery, chat, and dashboard endpoints retain their transition watches.
 
 A consuming endpoint that reads presence on demand reads the channel registry on demand too. It reads once at connect, and `listChannels()`, `joinChannel()` and `leaveChannel()` read again first. Call `CotalEndpoint.readChannels()` before `getChannelConfig()` or `channelReplay()` when the answer must be current. It needs `$JS.API.DIRECT.GET.KV_cotal_channels_<space>`, which issuers mint from 0.116.0; an older credential is refused with the grant named.
 

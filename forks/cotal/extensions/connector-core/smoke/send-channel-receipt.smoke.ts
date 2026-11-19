@@ -13,7 +13,7 @@
  *
  * Run: `pnpm smoke:send-channel-receipt`
  */
-import { MAX_CHANNEL_LENGTH } from "@cotal-ai/core";
+import { EpEnvelopeError, MAX_CHANNEL_LENGTH } from "@cotal-ai/core";
 import { closeChannelNames, MeshAgent, type MeshAgent as MeshAgentType } from "../src/agent.js";
 import { cotalToolSpecs } from "../src/tool-specs.js";
 import type { AgentConfig } from "../src/config.js";
@@ -360,6 +360,184 @@ const proto = MeshAgent.prototype as unknown as {
       status === "offline" ? dmText.text.includes(notice) : !dmText.text.includes("is offline"),
       dmText.text,
     );
+  }
+
+  // (j) the manager's describe has no `roster` command (an older build), so the presence read fails
+  //     as `not-found`. A DM to a principal key still goes out, and the result says presence was not checked.
+  {
+    const unicast: { to: string; text: string }[] = [];
+    const missingCommand = new EpEnvelopeError("not-found", `command "roster" is not in manager's visible surface; describe lists spawn`);
+    const agent = agentOverEp({
+      card: { id: "ALICEID0000000000000000000000000000000000000", name: "alice" },
+      getRoster: () => [],
+      readPresence: () => Promise.reject(missingCommand),
+      multicast: async () => mkMsg(),
+      unicast: async () => mkMsg("dm"),
+      unicastAttributed: async (to: string, text: string) => {
+        unicast.push({ to, text });
+        return { msg: mkMsg("dm"), ack: { seq: 9, duplicate: false } };
+      },
+    });
+    const sent = await agent.dm("u_x.otto", "x").then(
+      (r) => ({ ok: true as const, r }),
+      (e: Error) => ({ ok: false as const, message: e.message }),
+    );
+    check("1229:j dm reaches unicast when the manager lacks the presence command", sent.ok && unicast.length === 1 && unicast[0]!.to === "u_x.otto", sent.ok ? unicast : sent.message);
+    check("1229:j dm passes the attributed ack through", sent.ok && sent.r.ack.seq === 9, sent.ok ? sent.r.ack : sent.message);
+    check("1229:j the result says presence was not checked", sent.ok && sent.r.peer === undefined && sent.r.recipientStatusAtSend === "unchecked" && sent.r.recipient.id === "u_x.otto", sent.ok ? sent.r : sent.message);
+    // The unchecked text names the presence service, not the manager: user-mode reads go to auth.roster.
+    const uncheckedTool = cotalToolSpecs(cfg1229, "smoke").find((s) => s.name === "cotal_dm")!;
+    const uncheckedAgent = agentOverEp({
+      card: { id: "ALICEID0000000000000000000000000000000000000", name: "alice" },
+      getRoster: () => [],
+      readPresence: () => Promise.reject(missingCommand),
+      multicast: async () => mkMsg(),
+      unicast: async () => mkMsg("dm"),
+      unicastAttributed: async () => ({ msg: mkMsg("dm"), ack: { seq: 9, duplicate: false } }),
+    });
+    const uncheckedText = await Promise.resolve(uncheckedTool.run(uncheckedAgent, cfg1229, { to: "u_x.otto", text: "x" }));
+    check(
+      "1229:p unchecked cotal_dm text says the presence service does not serve roster, not the manager",
+      uncheckedText.text.includes("the presence service does not serve the roster command") && !uncheckedText.text.includes("this manager"),
+      uncheckedText.text,
+    );
+  }
+
+  // (k) the same send with a grant refusal still refuses: only the missing command falls back.
+  {
+    const unicast: unknown[] = [];
+    const agent = agentOverEp({
+      card: { id: "ALICEID0000000000000000000000000000000000000", name: "alice" },
+      getRoster: () => [],
+      readPresence: refused,
+      multicast: async () => mkMsg(),
+      unicast: async () => {
+        unicast.push("called");
+        return mkMsg("dm");
+      },
+      unicastAttributed: async () => {
+        unicast.push("called");
+        return { msg: mkMsg("dm"), ack: { seq: 9, duplicate: false } };
+      },
+    });
+    let threw = "";
+    try {
+      await agent.dm(OTTO.card.id, "x");
+    } catch (e) {
+      threw = e instanceof Error ? e.message : String(e);
+    }
+    check("1229:k a grant refusal still refuses the dm without sending", threw.includes("presence read failed") && unicast.length === 0, { threw, unicast });
+  }
+
+  // (l) a name DM with no `roster` command: the name resolves from the retained last-known roster,
+  //     reaches unicast by that row's id, and the result says the name came from the last-known roster.
+  {
+    const unicast: { to: string; text: string }[] = [];
+    const FOREMAN = { card: { id: "FOREMANID000000000000000000000000000000000000", name: "foreman", role: "worker" }, status: "idle" as const };
+    const missingCommand = new EpEnvelopeError("not-found", `command "roster" is not in manager's visible surface; describe lists spawn`);
+    const agent = agentOverEp({
+      card: { id: "ALICEID0000000000000000000000000000000000000", name: "alice" },
+      getRoster: () => [FOREMAN],
+      readPresence: () => Promise.reject(missingCommand),
+      multicast: async () => mkMsg(),
+      unicast: async () => mkMsg("dm"),
+      unicastAttributed: async (to: string, text: string) => {
+        unicast.push({ to, text });
+        return { msg: mkMsg("dm"), ack: { seq: 11, duplicate: false } };
+      },
+    });
+    const sent = await agent.dm("foreman", "x").then(
+      (r) => ({ ok: true as const, r }),
+      (e: Error) => ({ ok: false as const, message: e.message }),
+    );
+    check("1229:l name DM reaches unicast by the last-known row's id", sent.ok && unicast.length === 1 && unicast[0]!.to === FOREMAN.card.id, sent.ok ? unicast : sent.message);
+    check("1229:l name DM result says the name came from the last-known roster", sent.ok && sent.r.recipientStatusAtSend === "last-known" && sent.r.recipient.name === "foreman", sent.ok ? sent.r : sent.message);
+  }
+
+  // (m) a name DM with no `roster` command and no retained row for the name: nothing else proves the
+  //     name, so it still refuses with the read's reason. An address is never invented.
+  {
+    const unicast: unknown[] = [];
+    const missingCommand = new EpEnvelopeError("not-found", `command "roster" is not in manager's visible surface; describe lists spawn`);
+    const agent = agentOverEp({
+      card: { id: "ALICEID0000000000000000000000000000000000000", name: "alice" },
+      getRoster: () => [],
+      readPresence: () => Promise.reject(missingCommand),
+      multicast: async () => mkMsg(),
+      unicast: async () => {
+        unicast.push("called");
+        return mkMsg("dm");
+      },
+      unicastAttributed: async () => {
+        unicast.push("called");
+        return { msg: mkMsg("dm"), ack: { seq: 11, duplicate: false } };
+      },
+    });
+    let threw = "";
+    try {
+      await agent.dm("foreman", "x");
+    } catch (e) {
+      threw = e instanceof Error ? e.message : String(e);
+    }
+    check("1229:m name DM with no source refuses with the read's reason and sends nothing", threw.includes("presence read failed") && threw.includes("foreman") && unicast.length === 0, { threw, unicast });
+  }
+
+  // (n) two retained `foreman` rows and no roster command: the name is ambiguous, so the DM refuses
+  //     with AmbiguousPeerError and nothing is sent. The fallback must not pick one row.
+  {
+    const unicast: unknown[] = [];
+    const FOREMAN_A = { card: { id: "FOREMANAAA0000000000000000000000000000000000", name: "foreman", role: "worker" }, status: "idle" as const };
+    const FOREMAN_B = { card: { id: "FOREMANBBB0000000000000000000000000000000000", name: "foreman", role: "worker" }, status: "idle" as const };
+    const missingCommand = new EpEnvelopeError("not-found", `command "roster" is not in manager's visible surface; describe lists spawn`);
+    const agent = agentOverEp({
+      card: { id: "ALICEID0000000000000000000000000000000000000", name: "alice" },
+      getRoster: () => [FOREMAN_A, FOREMAN_B],
+      readPresence: () => Promise.reject(missingCommand),
+      multicast: async () => mkMsg(),
+      unicast: async () => {
+        unicast.push("called");
+        return mkMsg("dm");
+      },
+      unicastAttributed: async () => {
+        unicast.push("called");
+        return { msg: mkMsg("dm"), ack: { seq: 12, duplicate: false } };
+      },
+    });
+    let threw: unknown;
+    try {
+      await agent.dm("foreman", "x");
+    } catch (e) {
+      threw = e;
+    }
+    check("1229:n two retained foreman rows refuse as ambiguous and send nothing", threw instanceof Error && threw.name === "AmbiguousPeerError" && unicast.length === 0, { threw: String(threw), unicast });
+  }
+
+  // (o) a DM to our own principal key under the missing command refuses as "this session", the same as
+  //     a successful read does. The fallback must not send a DM to ourselves.
+  {
+    const unicast: unknown[] = [];
+    const missingCommand = new EpEnvelopeError("not-found", `command "roster" is not in manager's visible surface; describe lists spawn`);
+    const agent = agentOverEp({
+      card: { id: "u_x.alice", name: "alice" },
+      getRoster: () => [],
+      readPresence: () => Promise.reject(missingCommand),
+      multicast: async () => mkMsg(),
+      unicast: async () => {
+        unicast.push("called");
+        return mkMsg("dm");
+      },
+      unicastAttributed: async () => {
+        unicast.push("called");
+        return { msg: mkMsg("dm"), ack: { seq: 13, duplicate: false } };
+      },
+    });
+    let threw = "";
+    try {
+      await agent.dm("u_x.alice", "x");
+    } catch (e) {
+      threw = e instanceof Error ? e.message : String(e);
+    }
+    check("1229:o a DM to our own principal key refuses as this session and sends nothing", threw.includes("this session") && unicast.length === 0, { threw, unicast });
   }
 }
 

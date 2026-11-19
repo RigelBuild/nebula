@@ -111,7 +111,7 @@ The dashboard marks stale presence when its own poll fails.
 The [CLI reference](cli.mdx) describes the command.
 
 The shared connector checks DM targets and mentioned names against a fresh presence read.
-An unknown name after a failed read refuses the DM or the whole channel send, naming the read failure.
+An unknown name after a failed read refuses the DM or the whole channel send, naming the read failure, except one failure: a manager that does not serve the `roster` command (an older build). Then a DM to a principal key sends with presence not checked, and a name the retained last-known roster holds sends to that row and says it came from the last-known roster.
 It does not call the peer absent. A name known from a previous successful read remains usable.
 An authenticated sender retained by the connector can still receive a reply without a roster row.
 An unknown name after a successful read receives the ordinary unknown-peer refusal.

@@ -178,13 +178,39 @@
           };
         in
         { "docs-bundle" = docsBundle; };
+
+      # Static on Linux so the asset passes CD's check-asset gate (no /nix/store
+      # interpreter). A released manifest entry of the same name overrides it.
+      nix2containerFor =
+        system:
+        let
+          pkgs = import nixpkgs { inherit system; };
+          upstream = builtins.fromJSON (builtins.readFile ./forks/nix2container/upstream.json);
+          target = if pkgs.stdenv.hostPlatform.isLinux then pkgs.pkgsStatic else pkgs;
+          bin = (import ./forks/nix2container { pkgs = target; }).nix2container-bin;
+        in
+        {
+          nix2container = bin.overrideAttrs (old: {
+            # cgo off, as the Go commands above: the asset links no cgo libraries.
+            env = (old.env or { }) // {
+              CGO_ENABLED = "0";
+            };
+            version = "1.1.0-rigel.1";
+            passthru = (old.passthru or { }) // { upstreamRev = upstream.commit; };
+          });
+        };
     in
     {
-      # Later attrs win. Source builds come first, docs-bundle next, and
-      # released manifest packages last, so a release overrides the source
-      # build of the same name.
-      packages = forAllSystems (system:
-        commandPackagesFor system // docsBundleFor system // packagesFor manifest system);
+      # Later attrs win. Source builds come first, then docs-bundle and
+      # nix2container, and released manifest packages last, so a release
+      # overrides the source build of the same name.
+      packages = forAllSystems (
+        system:
+        commandPackagesFor system
+        // docsBundleFor system
+        // nix2containerFor system
+        // packagesFor manifest system
+      );
 
       # Eval-only check: a release-manifest entry must win over the source
       # build. The fixture is an attrset, so the check reads no file and
@@ -201,14 +227,30 @@
                 sha256 = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
               };
             };
+            nix2container = {
+              version = "9.9.9";
+              upstreamRev = null;
+              "${system}" = {
+                url = "https://example.invalid/nix2container.tar.zst";
+                sha256 = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+              };
+            };
           };
-          merged = commandPackagesFor system // docsBundleFor system // packagesFor fixture system;
+          merged =
+            commandPackagesFor system
+            // docsBundleFor system
+            // nix2containerFor system
+            // packagesFor fixture system;
           expected = "9.9.9";
         in
         {
           manifest-wins = pkgs.runCommand "nebula-manifest-wins" { } ''
             test "${merged.docs-bundle.version}" = "${expected}" || {
               echo "source build won over the release manifest" >&2
+              exit 1
+            }
+            test "${merged.nix2container.version}" = "${expected}" || {
+              echo "nix2container source build won over the release manifest" >&2
               exit 1
             }
             touch $out

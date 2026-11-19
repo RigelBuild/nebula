@@ -19,6 +19,7 @@ import {
   BASELINE_LIFECYCLE_ENDPOINT,
   BIND_SPLIT_REISSUES,
   assertLifecycleToken,
+  parsePrincipalKey,
   EpEnvelopeError,
   isPublishPermissionDenied,
   unansweredRequest,
@@ -2250,8 +2251,9 @@ export class MeshAgent extends EventEmitter {
     peer?: Presence;
     recipient: { id: string; name: string };
     ack: { seq: number; duplicate: boolean };
-    /** `unrostered`: the recipient is a peer that messaged us and has no roster row (#384). */
-    recipientStatusAtSend: Presence["status"] | "unrostered";
+    /** `unrostered`: the recipient is a peer that messaged us and has no roster row (#384). `unchecked`:
+     *  the manager lacks the presence command, so no roster was read and the DM went to a principal key. */
+    recipientStatusAtSend: Presence["status"] | "unrostered" | "unchecked";
   }> {
     await this.requireConnected();
     // #384: a sender's exact id is as unambiguous as a roster id, so it is never read as a roster
@@ -2268,7 +2270,10 @@ export class MeshAgent extends EventEmitter {
       : this.heldSender(target, !failure, peer);
     if (!peer && !held) {
       if (!failure) throw new Error(this.noPeer(target));
-      throw this.cannotVerify(`peer "${target}"`, failure, "The DM was not sent.");
+      // A manager without `roster` cannot say whether the recipient is present, but the broker still
+      // stores a DM to a principal key. Only that addressable form proceeds; a bare name still refuses.
+      if (!(presenceCommandMissing(failure) && parsePrincipalKey(target)))
+        throw this.cannotVerify(`peer "${target}"`, failure, "The DM was not sent.");
     }
     if (peer && !readsDirectMessages(peer))
       throw new Error(
@@ -2276,8 +2281,8 @@ export class MeshAgent extends EventEmitter {
       );
     // The only status we can truthfully attribute is the roster snapshot taken right before the
     // publish: recipient state can change the instant after, and the ack never tells us either way.
-    const recipientStatusAtSend = peer ? peer.status : "unrostered";
-    const recipient = peer ? { id: peer.card.id, name: peer.card.name } : held!;
+    const recipientStatusAtSend = peer ? peer.status : held ? "unrostered" : "unchecked";
+    const recipient = peer ? { id: peer.card.id, name: peer.card.name } : held ?? { id: target, name: target };
     // A DM back to a peer answers the message `replyTo` names, or the oldest one it sent us that no
     // DM has answered yet (see answering()). It counts as answered only once the DM is published,
     // so a failed send leaves it to the retry.
@@ -3616,6 +3621,16 @@ export interface RosterRead {
  *  one failure differently. */
 export function presenceReadCondition(failure: Error): string {
   return `the presence read failed (${failure.message})`;
+}
+
+/** True when the presence read failed only because the manager does not serve its `roster` command
+ *  (an older manager build, whose describe has no `roster` in the visible surface). That is the one
+ *  failure a sender may pass by: the broker still stores a DM durably, and the read says nothing about
+ *  the recipient. `not-found` comes only from the describe-surface resolution (`endpoint-invoke.ts`,
+ *  `endpoint-caller.ts`); an unanswered manager is `deadline-exceeded` and a refused grant is its own
+ *  code, so both keep refusing. The code is the discriminator, not the message text. */
+export function presenceCommandMissing(failure: Error): boolean {
+  return failure instanceof EpEnvelopeError && failure.code === "not-found";
 }
 
 /** Names already known that differ from `channel` by one insertion, deletion, or substitution. */

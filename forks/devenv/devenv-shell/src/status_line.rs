@@ -571,10 +571,7 @@ impl StatusLine {
         // Capture elapsed time once so the cache key and the iocraft tree use
         // the exact same rendered value, even when a millisecond boundary is
         // crossed while drawing.
-        let build_elapsed = self
-            .state
-            .build_start
-            .map(|start| now.saturating_duration_since(start));
+        let build_elapsed = self.build_elapsed_at(now);
         let spinner_frame = self.state.building.then_some(self.spinner_frame);
         let cache_hit = self.cached_width == cols
             && self.cached_spinner_frame == spinner_frame
@@ -610,15 +607,17 @@ impl StatusLine {
         Ok(())
     }
 
-    /// Build the status line element.
-    pub fn build_element(&self, width: u16) -> AnyElement<'static> {
-        self.build_element_with_elapsed(width, self.state.build_start.map(|start| start.elapsed()))
+    /// Build elapsed time measured against `now`.
+    fn build_elapsed_at(&self, now: Instant) -> Option<std::time::Duration> {
+        self.state
+            .build_start
+            .map(|start| now.saturating_duration_since(start))
     }
 
     /// Build the status line element using a captured elapsed duration.
     ///
-    /// `draw` supplies this so its cache key and element are based on one
-    /// instant. The public `build_element` retains its original behavior.
+    /// `draw_at` supplies this so its cache key and element are based on one
+    /// instant.
     fn build_element_with_elapsed(
         &self,
         width: u16,
@@ -925,11 +924,8 @@ mod tests {
     }
 
     fn uncached_content_at(status_line: &StatusLine, width: u16, now: Instant) -> Vec<u8> {
-        let build_elapsed = status_line
-            .state
-            .build_start
-            .map(|start| now.saturating_duration_since(start));
-        let mut element = status_line.build_element_with_elapsed(width, build_elapsed);
+        let mut element =
+            status_line.build_element_with_elapsed(width, status_line.build_elapsed_at(now));
         let canvas = element.render(Some(width as usize));
         let mut content = Vec::new();
         canvas.write_ansi(&mut content).unwrap();
@@ -1038,6 +1034,11 @@ mod tests {
         assert_eq!(status_line.cached_width, 40);
         assert_ne!(status_line.cached_content, paused_content);
 
+        // Deterministic output hides elapsed time, so the building checks below
+        // would compare identical text.
+        if cfg!(feature = "deterministic-tui") {
+            return;
+        }
         status_line
             .state_mut()
             .set_building(vec![PathBuf::from("devenv.nix")]);
@@ -1064,6 +1065,9 @@ mod tests {
 
     #[test]
     fn status_line_draw_matches_render_across_host_stall() {
+        if cfg!(feature = "deterministic-tui") {
+            return;
+        }
         let mut status_line = StatusLine::new();
         status_line
             .state_mut()

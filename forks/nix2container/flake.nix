@@ -29,6 +29,13 @@
           };
         in {
           inherit (nix2container) nix2container-bin skopeo-nix2container nix2container;
+          # The portable release build nebula CD ships as the nix2container asset.
+          # A release asset must run without this build's /nix/store: on Linux,
+          # pkgsStatic makes a static musl ELF. CD's check-asset gate enforces it.
+          nix2container-static =
+            (import ./. {
+              pkgs = if pkgs.stdenv.hostPlatform.isLinux then pkgs.pkgsStatic else pkgs;
+            }).nix2container-bin;
           inherit examples tests;
           default = nix2container.nix2container-bin;
         }

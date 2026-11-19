@@ -37,7 +37,8 @@ jobs:
         run: |
           set -euo pipefail
           # ls fails when no upstream.json exists, so an empty fork set stops the run here.
-          names=$(ls forks/*/upstream.json | cut -d/ -f2 | jq -R -s -c 'split("\n") | map(select(length > 0))')
+          # cotal is excluded: its upstream gitlink .internal is private, and gitlink handling is undecided.
+          names=$(ls forks/*/upstream.json | cut -d/ -f2 | grep -vx cotal | jq -R -s -c 'split("\n") | map(select(length > 0))')
           if [ -n "$FORK" ]; then
             names=$(jq -c --arg fork "$FORK" 'map(select(. == $fork))' <<<"$names")
             if [ "$names" = '[]' ]; then

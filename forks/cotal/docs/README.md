@@ -202,7 +202,7 @@ Task dispatch:
 
 The cotal design records (private) cover the topics below. They are not linked from this repository.
 
-| Page | Covers |
+| Record | Covers |
 |---|---|
 | Signer isolation | How the account signing seed moves off the manager uid. |
 | Tasks endpoint | How a tasks provider joins a space as an ordinary endpoint. |

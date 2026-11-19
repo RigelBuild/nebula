@@ -14,7 +14,7 @@ tasks:
     deps:
       - install
     inputs:
-      - "*.ts"
+      - "test/**/*.ts"
       - biome.json
       - package.json
       - bun.lock
@@ -23,7 +23,7 @@ tasks:
     deps:
       - install
     inputs:
-      - "*.ts"
+      - "test/**/*.ts"
       - biome.json
       - package.json
       - bun.lock

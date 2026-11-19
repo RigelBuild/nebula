@@ -60,7 +60,10 @@ function consumerFixture(prefix: string) {
 	const presetDirectory = join(directory, "preset");
 	mkdirSync(presetDirectory);
 	const presetPath = join(presetDirectory, "biome.json");
-	writeFileSync(presetPath, readFileSync(join(import.meta.dir, "biome.json")));
+	writeFileSync(
+		presetPath,
+		readFileSync(join(import.meta.dir, "..", "biome.json")),
+	);
 
 	const configPath = join(directory, "biome.json");
 	const spaceConfigPath = join(directory, "space.json");
@@ -85,7 +88,7 @@ afterAll(() => {
 describe("shared Biome preset", () => {
 	test("the source preset parses as a Biome preset", () => {
 		const preset = parseBiomePreset(
-			readFileSync(join(import.meta.dir, "biome.json"), "utf8"),
+			readFileSync(join(import.meta.dir, "..", "biome.json"), "utf8"),
 		);
 		expect(preset.formatter.indentStyle).toBe("tab");
 		expect(preset.linter.rules.preset).toBe("recommended");

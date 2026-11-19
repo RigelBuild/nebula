@@ -145,6 +145,7 @@
         let
           pkgs = import nixpkgs { inherit system; };
           # The build reads ../tsconfig/base.json through tools/docs-bundle/tsconfig.json,
+          # The packaged tsconfig.json's extends does not resolve; harmless, since nothing runs tsc on the package.
           # so the source carries both trees and the build runs in tools/docs-bundle.
           docsBundleSource = lib.fileset.toSource {
             root = ./.;

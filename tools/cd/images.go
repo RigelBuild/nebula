@@ -22,13 +22,17 @@ var (
 )
 
 // ImageSpec is one container image declared under images in a project's
-// component.cue. CD builds it from the project directory with buildx.
+// component.cue. CD builds it from the project directory with buildx, passing
+// BuildArgs as --build-arg. A BuildArgs value may name {source} (the tested
+// commit), {tag} (this Release's tag), or {version} (the project's
+// .github/rigel-version, resolved here); cd.yaml replaces {source} and {tag}.
 type ImageSpec struct {
-	Name       string   `json:"name"`
-	Project    string   `json:"project"`
-	Repository string   `json:"repository"`
-	Dockerfile string   `json:"dockerfile"`
-	Platforms  []string `json:"platforms"`
+	Name       string            `json:"name"`
+	Project    string            `json:"project"`
+	Repository string            `json:"repository"`
+	Dockerfile string            `json:"dockerfile"`
+	Platforms  []string          `json:"platforms"`
+	BuildArgs  map[string]string `json:"buildArgs,omitempty"`
 }
 
 // Image is one manifest image entry: the repository, this Release's tag on it,
@@ -41,10 +45,79 @@ type Image struct {
 
 type imagesComponent struct {
 	Images map[string]struct {
-		Repository string   `json:"repository"`
-		Dockerfile string   `json:"dockerfile"`
-		Platforms  []string `json:"platforms"`
+		Repository string         `json:"repository"`
+		Dockerfile string         `json:"dockerfile"`
+		Platforms  []string       `json:"platforms"`
+		BuildArgs  map[string]any `json:"buildArgs"`
 	} `json:"images"`
+}
+
+var (
+	errBuildArg        = errors.New("image buildArg is invalid")
+	errBuildArgUnknown = errors.New("image buildArg names an unknown placeholder")
+)
+
+// buildArgPlaceholders are the only {...} placeholders a buildArgs value may name.
+var buildArgPlaceholders = []string{"{source}", "{tag}", "{version}"}
+
+// resolveBuildArgs checks one project's buildArgs and resolves {version} from
+// its .github/rigel-version file. {source} and {tag} stay for cd.yaml.
+func resolveBuildArgs(repo, project string, args map[string]any) (map[string]string, error) {
+	if len(args) == 0 {
+		return nil, nil
+	}
+	version := ""
+	out := make(map[string]string, len(args))
+	for key, raw := range args {
+		value, ok := raw.(string)
+		if !ok {
+			return nil, fmt.Errorf("%w: %s: %s is not a string", errBuildArg, project, key)
+		}
+		if strings.ContainsAny(value, "\n\r") {
+			return nil, fmt.Errorf("%w: %s: %s contains a newline", errBuildArg, project, key)
+		}
+		rest := value
+		for {
+			open := strings.Index(rest, "{")
+			if open < 0 {
+				break
+			}
+			closeAt := strings.Index(rest[open:], "}")
+			if closeAt < 0 {
+				return nil, fmt.Errorf("%w: %s: %s has an unclosed {", errBuildArgUnknown, project, key)
+			}
+			token := rest[open : open+closeAt+1]
+			if !slices.Contains(buildArgPlaceholders, token) {
+				return nil, fmt.Errorf("%w: %s: %s uses %s", errBuildArgUnknown, project, key, token)
+			}
+			rest = rest[open+closeAt+1:]
+		}
+		if strings.Contains(value, "{version}") {
+			if version == "" {
+				v, err := readRigelVersion(filepath.Join(repo, project, ".github", "rigel-version"))
+				if err != nil {
+					return nil, fmt.Errorf("%w: %s: %s: %w", errBuildArg, project, key, err)
+				}
+				version = v
+			}
+			value = strings.ReplaceAll(value, "{version}", version)
+		}
+		out[key] = value
+	}
+	return out, nil
+}
+
+// readRigelVersion returns the one version in a fork's .github/rigel-version.
+func readRigelVersion(file string) (string, error) {
+	data, err := os.ReadFile(file)
+	if err != nil {
+		return "", err
+	}
+	v := strings.TrimSpace(string(data))
+	if v == "" || strings.ContainsAny(v, "\n\r") {
+		return "", fmt.Errorf("%s must hold exactly one version", file)
+	}
+	return v, nil
 }
 
 // listImages reads every tools/*/component.cue and forks/*/component.cue images entry.
@@ -73,7 +146,11 @@ func listImages(repo string) ([]ImageSpec, error) {
 			if i.Repository == "" || i.Dockerfile == "" || len(i.Platforms) == 0 {
 				return nil, fmt.Errorf("%w: %s: image %q", errImageSpec, m, name)
 			}
-			out = append(out, ImageSpec{Name: name, Project: project, Repository: i.Repository, Dockerfile: i.Dockerfile, Platforms: i.Platforms})
+			args, err := resolveBuildArgs(repo, project, i.BuildArgs)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, ImageSpec{Name: name, Project: project, Repository: i.Repository, Dockerfile: i.Dockerfile, Platforms: i.Platforms, BuildArgs: args})
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })

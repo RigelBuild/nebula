@@ -42,6 +42,7 @@ jobs:
         env:
           CGO_ENABLED: '0'
         run: |
+          set -o pipefail
           go -C tools/cd build -o "$RUNNER_TEMP/cd" .
           "$RUNNER_TEMP/cd" plan -out "$RUNNER_TEMP/plan.json"
           cat "$RUNNER_TEMP/plan.json"
@@ -246,7 +247,11 @@ jobs:
         # A planned image is built once and pushed by digest, with no tag; the smoke
         # test runs on that exact digest. Any failed step holds the image, so the
         # manifest carries its previous digest. Tags are applied after the Release.
+        env:
+          SOURCE: ${{ github.sha }}
+          TAG: ${{ needs.plan.outputs.tag }}
         run: |
+          set -o pipefail
           plan="$RUNNER_TEMP/plan.json"
           # smoke runs an image's smoke test; an image with none passes. Commands are
           # chained with && because bash -e does not apply inside an if condition.
@@ -268,6 +273,11 @@ jobs:
                   test -s "$home/.omp/auth-broker.token" &&
                   test -s "$home/.omp/auth-gateway.token"
                 ;;
+              autoscaler)
+                # The image must report the fork version it was built with, not
+                # just exit 0. An empty expectation fails, never passes.
+                test -n "$3" && docker run --rm "$2" --version | grep -Fqx "autoscaler version $3"
+                ;;
             esac
           }
           mkdir -p "$RUNNER_TEMP/images/held"
@@ -279,13 +289,19 @@ jobs:
             project=$(jq -r .project <<<"$i")
             dockerfile=$(jq -r .dockerfile <<<"$i")
             platforms=$(jq -r '.platforms | join(",")' <<<"$i")
+            # buildArgs may name {source} (the tested commit) or {tag} (this Release's
+            # tag). The planner has already resolved {version}; both others are replaced here.
+            mapfile -t build_args < <(jq -r --arg s "$SOURCE" --arg t "$TAG" \
+              '(.buildArgs // {}) | to_entries[] | "--build-arg=\(.key)=\(.value | gsub("\\{source\\}"; $s) | gsub("\\{tag\\}"; $t))"' <<<"$i")
+            # The fork version CI_COMMIT_TAG resolved to in the plan; empty if unset.
+            expected=$(jq -r '.buildArgs.CI_COMMIT_TAG // empty' <<<"$i")
             rm -f "$RUNNER_TEMP/meta.json"
-            if docker buildx build --platform "$platforms" --file "$project/$dockerfile" \
+            if docker buildx build --platform "$platforms" --file "$project/$dockerfile" "${build_args[@]}" \
                 --output "type=image,name=$repo,push-by-digest=true,name-canonical=true,push=true" \
                 --metadata-file "$RUNNER_TEMP/meta.json" "$project" &&
               digest=$(jq -er '.["containerimage.digest"]' "$RUNNER_TEMP/meta.json") &&
               docker pull "$repo@$digest" &&
-              smoke "$name" "$repo@$digest"; then
+              smoke "$name" "$repo@$digest" "$expected"; then
               echo "$name=$digest" >> "$RUNNER_TEMP/images/digests"
             else
               echo "::warning::image $name failed to build, push or pass its smoke test; holding it"
@@ -326,6 +342,7 @@ jobs:
         env:
           TAG: ${{ needs.plan.outputs.tag }}
         run: |
+          set -o pipefail
           jq -r '(.images // {}) | to_entries[] | "\(.value.repository) \(.value.digest)"' release-manifest.json |
           while read -r repo digest; do
             docker buildx imagetools create --tag "$repo:$TAG" "$repo@$digest"

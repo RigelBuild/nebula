@@ -60,6 +60,89 @@ func TestPlanListsImagesAndBuildsChangedOnes(t *testing.T) {
 	}
 }
 
+func TestPlanCarriesBuildArgs(t *testing.T) {
+	dir := newRepo(t)
+	writeFile(t, dir, "forks/pi/moon.yml", "layer: application\n")
+	writeFile(t, dir, "forks/pi/upstream.json", `{"commit":"abc"}`)
+	writeFile(t, dir, "forks/pi/Dockerfile.pi", "FROM scratch\n")
+	writeFile(t, dir, "forks/pi/component.cue", `images: {pi: {
+	repository: "ghcr.io/x/pi", dockerfile: "Dockerfile.pi", platforms: ["linux/amd64"]
+	buildArgs: {CI_COMMIT_SHA: "{source}", CI_COMMIT_TAG: "{tag}"}
+}}
+`)
+	commitAll(t, dir, "image with build args")
+	p, err := makePlan(t.Context(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []ImageSpec{{Name: "pi", Project: "forks/pi", Repository: "ghcr.io/x/pi", Dockerfile: "Dockerfile.pi",
+		Platforms: []string{"linux/amd64"}, BuildArgs: map[string]string{"CI_COMMIT_SHA": "{source}", "CI_COMMIT_TAG": "{tag}"}}}
+	if !reflect.DeepEqual(p.Images, want) {
+		t.Fatalf("images = %+v, want %+v", p.Images, want)
+	}
+}
+
+func TestPlanResolvesVersionFromRigelVersionFile(t *testing.T) {
+	dir := newRepo(t)
+	writeFile(t, dir, "forks/pi/moon.yml", "layer: application\n")
+	writeFile(t, dir, "forks/pi/upstream.json", `{"commit":"abc"}`)
+	writeFile(t, dir, "forks/pi/Dockerfile.pi", "FROM scratch\n")
+	writeFile(t, dir, "forks/pi/.github/rigel-version", "1.5.0-rigel.5\n")
+	writeFile(t, dir, "forks/pi/component.cue", `images: {pi: {
+	repository: "ghcr.io/x/pi", dockerfile: "Dockerfile.pi", platforms: ["linux/amd64"]
+	buildArgs: {CI_COMMIT_SHA: "{source}", CI_COMMIT_TAG: "{version}"}
+}}
+`)
+	commitAll(t, dir, "image with version")
+	p, err := makePlan(t.Context(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{"CI_COMMIT_SHA": "{source}", "CI_COMMIT_TAG": "1.5.0-rigel.5"}
+	if !reflect.DeepEqual(p.Images[0].BuildArgs, want) {
+		t.Fatalf("buildArgs = %v, want %v", p.Images[0].BuildArgs, want)
+	}
+}
+
+// planWithBuildArgs writes one image whose buildArgs is the given CUE value
+// and returns the planner's error.
+func planWithBuildArgs(t *testing.T, buildArgs string) error {
+	t.Helper()
+	dir := newRepo(t)
+	writeFile(t, dir, "forks/pi/moon.yml", "layer: application\n")
+	writeFile(t, dir, "forks/pi/upstream.json", `{"commit":"abc"}`)
+	writeFile(t, dir, "forks/pi/Dockerfile.pi", "FROM scratch\n")
+	writeFile(t, dir, "forks/pi/component.cue", `images: {pi: {
+	repository: "ghcr.io/x/pi", dockerfile: "Dockerfile.pi", platforms: ["linux/amd64"]
+	buildArgs: {`+buildArgs+`}
+}}
+`)
+	commitAll(t, dir, "image with bad build args")
+	_, err := makePlan(t.Context(), dir)
+	return err
+}
+
+func TestPlanRejectsAnUnknownPlaceholder(t *testing.T) {
+	err := planWithBuildArgs(t, `CI_COMMIT_TAG: "{commit}"`)
+	if !errors.Is(err, errBuildArgUnknown) {
+		t.Fatalf("err = %v, want errBuildArgUnknown", err)
+	}
+}
+
+func TestPlanRejectsANonStringBuildArg(t *testing.T) {
+	err := planWithBuildArgs(t, `CI_COMMIT_TAG: 7`)
+	if !errors.Is(err, errBuildArg) {
+		t.Fatalf("err = %v, want errBuildArg", err)
+	}
+}
+
+func TestPlanRejectsANewlineInABuildArg(t *testing.T) {
+	err := planWithBuildArgs(t, `CI_COMMIT_TAG: "a\nb"`)
+	if !errors.Is(err, errBuildArg) {
+		t.Fatalf("err = %v, want errBuildArg", err)
+	}
+}
+
 func TestPlanRebuildsAHeldImage(t *testing.T) {
 	dir := newRepo(t)
 	addImageFork(t, dir)

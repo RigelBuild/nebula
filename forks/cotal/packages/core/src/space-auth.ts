@@ -60,6 +60,19 @@ function claims<T>(jwt: string, field: string): ReturnType<typeof decode<T>> {
   }
 }
 
+/** Validate an account JWT against the space's keys: subject, issuer, type, name and signing key.
+ *  Throws on any mismatch, and on an unsigned, not-yet-valid or expired JWT, through `claims`. */
+export function validateAccountJwt(accountJwt: string, expected: { space: string; accountPub: string; signingPub: string; operatorPub: string }): void {
+  const accountClaims = claims<Account>(accountJwt, "account.jwt");
+  if (accountClaims.nats?.type !== Types.Account || accountClaims.sub !== expected.accountPub || accountClaims.iss !== expected.operatorPub)
+    throw new Error("validateSpaceAuth: account JWT subject, issuer, or type does not match the operator/account keys");
+  if (accountClaims.name !== token(expected.space))
+    throw new Error("validateSpaceAuth: account JWT name does not match space");
+  const signingKeys = accountClaims.nats.signing_keys;
+  if (!Array.isArray(signingKeys) || !signingKeys.includes(expected.signingPub))
+    throw new Error("validateSpaceAuth: active account signing key is not trusted as an unscoped signer by account.jwt");
+}
+
 /** The `iat` (issued-at, seconds) a NATS JWT carries — the monotonic generation marker persistence
  *  uses to refuse rolling a trust record BACK to an older issue of the same authority (e.g. a stale
  *  pre-rotation system account). Read-only; fails loud on anything that does not decode as a NATS
@@ -115,7 +128,6 @@ export function validateSpaceAuth(auth: unknown, expectedSpace?: string): SpaceA
   }
 
   const operatorClaims = claims<Operator>(operatorJwt, "operator.jwt");
-  const accountClaims = claims<Account>(accountJwt, "account.jwt");
   const sysClaims = claims<Account>(sysJwt, "sys.jwt");
 
   publicKey(operatorClaims.sub, "operator JWT subject", "O");
@@ -126,13 +138,7 @@ export function validateSpaceAuth(auth: unknown, expectedSpace?: string): SpaceA
   if (operatorClaims.nats.system_account !== sysPub)
     throw new Error("validateSpaceAuth: operator JWT system account does not match sys.pub");
 
-  if (accountClaims.nats?.type !== Types.Account || accountClaims.sub !== accountPub || accountClaims.iss !== operatorPub)
-    throw new Error("validateSpaceAuth: account JWT subject, issuer, or type does not match the operator/account keys");
-  if (accountClaims.name !== token(space))
-    throw new Error("validateSpaceAuth: account JWT name does not match space");
-  const signingKeys = accountClaims.nats.signing_keys;
-  if (!Array.isArray(signingKeys) || !signingKeys.includes(signingPub))
-    throw new Error("validateSpaceAuth: active account signing key is not trusted as an unscoped signer by account.jwt");
+  validateAccountJwt(accountJwt, { space, accountPub, signingPub, operatorPub });
 
   if (sysClaims.nats?.type !== Types.Account || sysClaims.sub !== sysPub || sysClaims.iss !== operatorPub)
     throw new Error("validateSpaceAuth: system account JWT subject, issuer, or type does not match the operator/system keys");

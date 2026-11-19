@@ -14,6 +14,8 @@ import {
   parsePrincipalKey,
   resolveAuthProvider,
   accountRevocations,
+  decodeNatsJwt,
+  validateAccountJwt,
   validateSpaceAuth,
   verifyStaticUserCredential,
   credsClaims,
@@ -124,20 +126,45 @@ function displayNameFromCreds(creds: string, profile: string | null): string | u
   catch { return undefined; }
 }
 
-/** Resolve only the registered space root; untrusted or revoked credentials give no guidance. */
-async function trustedSendCreds(creds: string, space: string) {
+/** A registered space's seed record is final: any refusal of it returns undefined and never falls to
+ *  the pins. The pins file (`<creds>.pins.json`, public keys only) is used only when no record exists. */
+async function trustedSendCreds(creds: string, space: string, credsPath?: string) {
   try {
     const root = findMesh(space)?.root;
-    if (!root) return undefined;
-    const auth = await getSpaceAuth(workspaceSecretStore(root), space);
-    if (!auth) return undefined;
-    validateSpaceAuth(auth, space);
-    const verified = verifyStaticUserCredential(creds, { accountPub: auth.account.pub, signingPub: auth.account.signingPub });
-    const claims = credsClaims(creds);
-    const revokedAt = accountRevocations(auth.account.jwt)[verified.identity];
-    if (revokedAt !== undefined && (claims.iat === undefined || claims.iat <= revokedAt)) return undefined;
-    return { creds, profile: verified.profile };
+    const auth = root !== undefined ? await getSpaceAuth(workspaceSecretStore(root), space) : undefined;
+    if (auth) {
+      validateSpaceAuth(auth, space);
+      return verifiedSendCreds(creds, { space, accountPub: auth.account.pub, signingPub: auth.account.signingPub, accountJwt: auth.account.jwt });
+    }
   } catch { return undefined; }
+  if (credsPath === undefined) return undefined;
+  try {
+    const pins = parseCredsPins(readFileSync(credsPath.replace(/\.creds$/, "") + ".pins.json", "utf8"));
+    if (pins?.space !== space) return undefined;
+    return verifiedSendCreds(creds, pins);
+  } catch { return undefined; }
+}
+
+/** Verify a creds text against trusted account pins, bind the pinned account JWT to those keys, and
+ *  refuse a cred its account JWT revokes or that is outside the JWT's validity window. */
+function verifiedSendCreds(creds: string, pins: { space: string; accountPub: string; signingPub: string; accountJwt: string }) {
+  const operatorPub = decodeNatsJwt<{ iss?: unknown }>(pins.accountJwt).iss;
+  if (typeof operatorPub !== "string") throw new Error("pinned account JWT has no issuer");
+  validateAccountJwt(pins.accountJwt, { space: pins.space, accountPub: pins.accountPub, signingPub: pins.signingPub, operatorPub });
+  const verified = verifyStaticUserCredential(creds, { accountPub: pins.accountPub, signingPub: pins.signingPub });
+  const claims = credsClaims(creds);
+  const revokedAt = accountRevocations(pins.accountJwt)[verified.identity];
+  if (revokedAt !== undefined && (claims.iat === undefined || claims.iat <= revokedAt)) return undefined;
+  return { creds, profile: verified.profile };
+}
+
+/** The public pins file's shape, or undefined when it is not one. */
+function parseCredsPins(raw: string): { space: string; accountPub: string; signingPub: string; accountJwt: string } | undefined {
+  const value: unknown = JSON.parse(raw);
+  if (!value || typeof value !== "object") return undefined;
+  const { space, accountPub, signingPub, accountJwt } = value as Record<string, unknown>;
+  if (typeof space !== "string" || typeof accountPub !== "string" || typeof signingPub !== "string" || typeof accountJwt !== "string") return undefined;
+  return { space, accountPub, signingPub, accountJwt };
 }
 
 function osSenderName(): string {
@@ -360,7 +387,7 @@ function storeFullRefusal(error: unknown, root: string | undefined, space: strin
  *  identity may post to: its grant when this machine holds it, read as `cotal whoami` reads it, the
  *  post grant in the claims of a `--creds` agent file (`credsFile`), and otherwise the space's
  *  registered channels. */
-async function channelDenied(channel: string, target: { space: string }, connection: Connection, registered: readonly string[], credsFile?: string): Promise<CommandFailure> {
+async function channelDenied(channel: string, target: { space: string }, connection: Connection, registered: readonly string[], credsFile?: string, credsPath?: string): Promise<CommandFailure> {
   let post: string[] | undefined;
   if (connection.mode === "user" && connection.root) {
     try {
@@ -368,7 +395,7 @@ async function channelDenied(channel: string, target: { space: string }, connect
       post = status.grant === "not-granted" ? [] : status.grant?.allowPublish;
     } catch { /* the grant stays unknown */ }
   } else if (credsFile !== undefined) {
-    const trusted = await trustedSendCreds(credsFile, target.space);
+    const trusted = await trustedSendCreds(credsFile, target.space, credsPath);
     if (trusted?.profile === "agent") post = agentGrants(credsClaims(trusted.creds).nats ?? {}, target.space).post;
   }
   const list = (channels: readonly string[]) => channels.map((name) => `#${name}`).join(", ");
@@ -422,7 +449,7 @@ export async function send(args: ParsedArgs): Promise<void> {
   const warnings: OutputWarning[] = [];
   const senderSpace = values.space ?? (values.creds && values.server === undefined ? credsSpace(process.cwd())?.space : undefined) ?? connectSpace(values);
   let senderCreds: { creds: string; profile: string | null } | undefined;
-  try { if (values.creds && senderSpace) senderCreds = await trustedSendCreds(readFileSync(resolve(values.creds), "utf8"), senderSpace); } catch { /* fall back to the OS sender */ }
+  try { if (values.creds && senderSpace) senderCreds = await trustedSendCreds(readFileSync(resolve(values.creds), "utf8"), senderSpace, resolve(values.creds)); } catch { /* fall back to the OS sender */ }
   const senderNameValue = senderName(senderCreds);
   const senderActor = `cli_${createHash("sha256").update(senderNameValue).digest("hex")}`;
   const opened = await openTransient(values, senderNameValue, { throwOnRefusal: true, senderActor, report: (level) => {
@@ -486,7 +513,7 @@ export async function send(args: ParsedArgs): Promise<void> {
       } else messageId = (await ep.multicast(text, { channel: input.target, mentions })).id;
     } catch (error) {
       if (payloadRefused(error)) throw tooLarge(bytes);
-      if (input.mode === "msg" && isPublishPermissionDenied(error)) throw await channelDenied(input.target, target, connection, registered, values.creds !== undefined ? connection.creds : undefined);
+      if (input.mode === "msg" && isPublishPermissionDenied(error)) throw await channelDenied(input.target, target, connection, registered, values.creds !== undefined ? connection.creds : undefined, values.creds !== undefined ? resolve(values.creds) : undefined);
       const full = storeFullRefusal(error, connection.root, space, target);
       if (full) throw full;
       if (spaceStreamsExpected(space, connection.mode) && await chatStreamGone(ep)) throw streamsAbsent(connection);

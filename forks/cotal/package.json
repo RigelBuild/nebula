@@ -900,6 +900,7 @@
     "smoke:use-interrupted-seed": "pnpm --filter cotal-ai... build && tsx implementations/cli/smoke/use-interrupted-seed.smoke.ts",
     "smoke:setup-no-connector": "pnpm --filter cotal-ai... build && tsx implementations/cli/smoke/setup-no-connector.smoke.ts",
     "smoke:send-refusal-mesh": "pnpm --filter cotal-ai... build && tsx implementations/cli/smoke/send-refusal-mesh.smoke.ts",
+    "smoke:send-creds-pins": "pnpm --filter cotal-ai... build && tsx implementations/cli/smoke/send-creds-pins.smoke.ts",
     "smoke:history-clear-surface": "pnpm --filter cotal-ai... build && tsx implementations/cli/smoke/history-clear-surface.smoke.ts",
     "smoke:operation-space": "pnpm --filter cotal-ai... build && tsx implementations/cli/smoke/operation-space.smoke.ts",
     "smoke:service-stop-mesh:live": "pnpm --filter cotal-ai... build && tsx implementations/cli/smoke/service-stop-mesh-live.smoke.ts",

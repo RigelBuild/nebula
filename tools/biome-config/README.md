@@ -7,4 +7,4 @@ repository extend it from source by relative path:
 { "extends": ["../biome-config/biome.json"] }
 ```
 
-`biome.json` is the preset. `shared-configs.test.ts` checks its behaviour.
+`biome.json` is the preset. `test/shared-configs.test.ts` checks its behaviour.

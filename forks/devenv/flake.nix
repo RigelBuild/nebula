@@ -374,5 +374,53 @@
       overlays.default = final: prev: {
         devenv = self.packages.${prev.stdenv.hostPlatform.system}.default;
       };
+
+      # Shell for this fork's Rust tasks (moon devenv:build, devenv:test).
+      # Mirrors the fork's own dev environment (devenv.nix and
+      # devenv-nix-backend/devenv.nix): the Nix C API `.dev` packages from the
+      # same cachix/nix revision the Nix build uses (flake.lock `nix` input),
+      # boehmgc for the GC bindings, bindgenHook for libclang, and the
+      # libghostty-vt `.dev` pkg-config provider. The toolchain is the same
+      # rust-overlay stable that nix/workspace.nix builds with. Kept out of the
+      # root shell so root `nix develop` stays light.
+      devShells = forAllSystems (
+        system:
+        let
+          pkgs = import nixpkgs {
+            inherit system;
+            overlays = [ inputs.rust-overlay.overlays.default ];
+          };
+          nixPkgs = nix.packages.${system};
+        in
+        {
+          default = pkgs.mkShell {
+            packages = [
+              pkgs.rust-bin.stable.latest.default
+              pkgs.pkg-config
+              pkgs.cmake
+              pkgs.openssl.dev
+              pkgs.sqlite.dev
+              pkgs.boehmgc
+              pkgs.rustPlatform.bindgenHook
+              (pkgs.callPackage "${inputs.ghostty}/nix/libghostty-vt.nix" {
+                optimize = "ReleaseSafe";
+              }).dev
+              nixPkgs.nix-expr-c
+              nixPkgs.nix-store-c
+              nixPkgs.nix-util-c
+              nixPkgs.nix-flake-c
+              nixPkgs.nix-cmd-c
+              nixPkgs.nix-fetchers-c
+              nixPkgs.nix-main-c
+              nixPkgs.nix.dev
+            ]
+            ++ pkgs.lib.optional pkgs.stdenv.hostPlatform.isDarwin pkgs.libiconv;
+            env = {
+              LIBSQLITE3_SYS_USE_PKG_CONFIG = "1";
+              OPENSSL_NO_VENDOR = "1";
+            };
+          };
+        }
+      );
     };
 }

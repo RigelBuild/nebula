@@ -1012,13 +1012,22 @@ mod tests {
         status_line
             .state_mut()
             .set_building(vec![PathBuf::from("devenv.nix")]);
+        // Start 62.5 s back, mid-way through the `1m 2s` text, which changes only
+        // at 63 s, so the two clock reads in `expected` and `draw` print the same text.
+        status_line.state_mut().build_start = Some(
+            Instant::now()
+                .checked_sub(std::time::Duration::from_millis(62_500))
+                .unwrap(),
+        );
+        // `draw` advances the spinner once 80 ms pass since the last tick. A
+        // future instant makes `elapsed()` zero, keeping the frame still.
         status_line.spinner_frame = 0;
-        status_line.last_spinner_update = Instant::now();
+        status_line.last_spinner_update = Instant::now() + std::time::Duration::from_secs(3600);
         assert_draw_matches_fresh_render(&mut status_line, 80);
         let first_spinner_content = status_line.cached_content.clone();
 
         status_line.spinner_frame = 1;
-        status_line.last_spinner_update = Instant::now();
+        status_line.last_spinner_update = Instant::now() + std::time::Duration::from_secs(3600);
         assert_draw_matches_fresh_render(&mut status_line, 80);
         assert_ne!(status_line.cached_content, first_spinner_content);
         assert_eq!(status_line.cached_spinner_frame, Some(1));

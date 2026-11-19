@@ -234,7 +234,25 @@
             ''}
             touch $out
           '';
+          nix2container-attrs =
+            let
+              names = builtins.attrNames (self.lib.nix2container { inherit pkgs; });
+              expected = [ "buildImage" "buildLayer" "pullImage" "pullImageFromManifest" ];
+            in
+            pkgs.runCommand "nix2container-attrs" { } ''
+              test '${builtins.toJSON names}' = '${builtins.toJSON expected}' || {
+                echo "lib.nix2container attribute names changed" >&2
+                exit 1
+              }
+              touch $out
+            '';
         });
+
+      # Nix libraries. lib.nix2container takes the caller's pkgs and returns the
+      # attrset upstream exposes as packages.<system>.nix2container. It has no
+      # per-system form: the caller's pkgs picks the system.
+      lib.nix2container = { pkgs }:
+        (import ./forks/nix2container { inherit pkgs; }).nix2container;
 
       devShells = forAllSystems (system:
         let

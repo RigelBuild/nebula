@@ -247,6 +247,9 @@ jobs:
         # A planned image is built once and pushed by digest, with no tag; the smoke
         # test runs on that exact digest. Any failed step holds the image, so the
         # manifest carries its previous digest. Tags are applied after the Release.
+        env:
+          SOURCE: ${{ github.sha }}
+          TAG: ${{ needs.plan.outputs.tag }}
         run: |
           set -o pipefail
           plan="$RUNNER_TEMP/plan.json"
@@ -284,8 +287,12 @@ jobs:
             project=$(jq -r .project <<<"$i")
             dockerfile=$(jq -r .dockerfile <<<"$i")
             platforms=$(jq -r '.platforms | join(",")' <<<"$i")
+            # buildArgs values may name {source} (the tested commit) or {tag} (this
+            # Release's tag); both are replaced before buildx sees them.
+            mapfile -t build_args < <(jq -r --arg s "$SOURCE" --arg t "$TAG" \
+              '(.buildArgs // {}) | to_entries[] | "--build-arg=\(.key)=\(.value | gsub("\\{source\\}"; $s) | gsub("\\{tag\\}"; $t))"' <<<"$i")
             rm -f "$RUNNER_TEMP/meta.json"
-            if docker buildx build --platform "$platforms" --file "$project/$dockerfile" \
+            if docker buildx build --platform "$platforms" --file "$project/$dockerfile" "${build_args[@]}" \
                 --output "type=image,name=$repo,push-by-digest=true,name-canonical=true,push=true" \
                 --metadata-file "$RUNNER_TEMP/meta.json" "$project" &&
               digest=$(jq -er '.["containerimage.digest"]' "$RUNNER_TEMP/meta.json") &&

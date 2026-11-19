@@ -22,13 +22,16 @@ var (
 )
 
 // ImageSpec is one container image declared under images in a project's
-// component.cue. CD builds it from the project directory with buildx.
+// component.cue. CD builds it from the project directory with buildx, passing
+// BuildArgs as --build-arg. A BuildArgs value may name {source} (the tested
+// commit) or {tag} (this Release's tag); cd.yaml replaces both.
 type ImageSpec struct {
-	Name       string   `json:"name"`
-	Project    string   `json:"project"`
-	Repository string   `json:"repository"`
-	Dockerfile string   `json:"dockerfile"`
-	Platforms  []string `json:"platforms"`
+	Name       string            `json:"name"`
+	Project    string            `json:"project"`
+	Repository string            `json:"repository"`
+	Dockerfile string            `json:"dockerfile"`
+	Platforms  []string          `json:"platforms"`
+	BuildArgs  map[string]string `json:"buildArgs,omitempty"`
 }
 
 // Image is one manifest image entry: the repository, this Release's tag on it,
@@ -41,9 +44,10 @@ type Image struct {
 
 type imagesComponent struct {
 	Images map[string]struct {
-		Repository string   `json:"repository"`
-		Dockerfile string   `json:"dockerfile"`
-		Platforms  []string `json:"platforms"`
+		Repository string            `json:"repository"`
+		Dockerfile string            `json:"dockerfile"`
+		Platforms  []string          `json:"platforms"`
+		BuildArgs  map[string]string `json:"buildArgs"`
 	} `json:"images"`
 }
 
@@ -73,7 +77,7 @@ func listImages(repo string) ([]ImageSpec, error) {
 			if i.Repository == "" || i.Dockerfile == "" || len(i.Platforms) == 0 {
 				return nil, fmt.Errorf("%w: %s: image %q", errImageSpec, m, name)
 			}
-			out = append(out, ImageSpec{Name: name, Project: project, Repository: i.Repository, Dockerfile: i.Dockerfile, Platforms: i.Platforms})
+			out = append(out, ImageSpec{Name: name, Project: project, Repository: i.Repository, Dockerfile: i.Dockerfile, Platforms: i.Platforms, BuildArgs: i.BuildArgs})
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })

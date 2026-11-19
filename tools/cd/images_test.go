@@ -60,6 +60,28 @@ func TestPlanListsImagesAndBuildsChangedOnes(t *testing.T) {
 	}
 }
 
+func TestPlanCarriesBuildArgs(t *testing.T) {
+	dir := newRepo(t)
+	writeFile(t, dir, "forks/pi/moon.yml", "layer: application\n")
+	writeFile(t, dir, "forks/pi/upstream.json", `{"commit":"abc"}`)
+	writeFile(t, dir, "forks/pi/Dockerfile.pi", "FROM scratch\n")
+	writeFile(t, dir, "forks/pi/component.cue", `images: {pi: {
+	repository: "ghcr.io/x/pi", dockerfile: "Dockerfile.pi", platforms: ["linux/amd64"]
+	buildArgs: {CI_COMMIT_SHA: "{source}", CI_COMMIT_TAG: "{tag}"}
+}}
+`)
+	commitAll(t, dir, "image with build args")
+	p, err := makePlan(t.Context(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []ImageSpec{{Name: "pi", Project: "forks/pi", Repository: "ghcr.io/x/pi", Dockerfile: "Dockerfile.pi",
+		Platforms: []string{"linux/amd64"}, BuildArgs: map[string]string{"CI_COMMIT_SHA": "{source}", "CI_COMMIT_TAG": "{tag}"}}}
+	if !reflect.DeepEqual(p.Images, want) {
+		t.Fatalf("images = %+v, want %+v", p.Images, want)
+	}
+}
+
 func TestPlanRebuildsAHeldImage(t *testing.T) {
 	dir := newRepo(t)
 	addImageFork(t, dir)

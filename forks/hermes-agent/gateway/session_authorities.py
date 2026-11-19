@@ -298,13 +298,21 @@ def holds_admission(authority, session_id) -> bool:
         return True
 
 
-def held_admissions(authority, session_ids) -> set:
-    """``{id for id in session_ids if holds_admission(authority, id)}``, computed in one pass over the store.
+HELD_ID_CHUNK = 400  # ids per query: two bound parameters per id stay under SQLite's 999 host-parameter limit
+_HELD_COLUMNS = ('admission_id, target_session_id, seq, principal_id, payload_json, payload_digest, '
+                 'lineage_json, status, outcome, owner_epoch, generation')
 
-    The startup resume scan asks this for every candidate. Per id, ``holds_admission`` makes three blocking
-    reads; here each candidate's owner is resolved once, then two queries cover every candidate: the pending
-    rows, and the latest decision row per target. The answer matches ``holds_admission`` per id, including
-    the steer-row rule. A retiring store that cannot answer holds every candidate, as ``holds_admission`` does.
+
+def held_admissions(authority, session_ids) -> set:
+    """``{id for id in session_ids if holds_admission(authority, id)}``, read in batches.
+
+    The startup resume scan asks this for every candidate, off the loop. It is two batched queries per chunk of
+    at most ``HELD_ID_CHUNK`` targets, plus a per-id owner lookup (``admission_owner``, one read per id) that
+    runs first. The per-id reads of ``holds_admission`` are not batched away: ``_restart_interrupted`` still
+    reads one admission result per interrupted row. The pending query and the latest-decision query are the
+    two batched reads; the latest decision row is picked in SQL. The answer matches ``holds_admission`` per id,
+    including the steer-row rule. A retiring store that cannot answer holds every candidate, as
+    ``holds_admission`` does; a serving store still raises.
     """
     ids = list(session_ids)
     if not ids:
@@ -313,20 +321,22 @@ def held_admissions(authority, session_ids) -> set:
         owners = {sid: admission_owner(authority, sid) for sid in ids}
         pairs = {sid: tuple(t for t in dict.fromkeys((sid, owners[sid])) if t) for sid in ids}
         targets = sorted({t for pair in pairs.values() for t in pair})
-        marks = ','.join('?' * len(targets))
-        pending = {row[0] for row in authority.db._read_all(
-            f"SELECT DISTINCT target_session_id FROM session_admissions WHERE target_session_id IN ({marks}) "
-            "AND status IN ('queued','started','unknown')", targets)}
-        latest_rows = authority.db._read_all(
-            f"SELECT a.* FROM session_admissions a WHERE a.target_session_id IN ({marks}) "
-            "AND NOT (a.status = 'terminal' AND a.owner_epoch IS NOT NULL AND EXISTS ("
-            "  SELECT 1 FROM session_admissions h WHERE h.target_session_id = a.target_session_id "
-            "  AND h.seq < a.seq AND h.owner_epoch = a.owner_epoch AND h.generation = a.generation))",
-            targets)
-        latest = {}
-        for row in latest_rows:
-            kept = latest.get(row['target_session_id'])
-            if kept is None or row['seq'] > kept['seq']:
+        pending: set = set()
+        latest: dict = {}
+        for start in range(0, len(targets), HELD_ID_CHUNK):
+            chunk = targets[start:start + HELD_ID_CHUNK]
+            marks = ','.join('?' * len(chunk))
+            pending.update(row[0] for row in authority.db._read_all(
+                f"SELECT DISTINCT target_session_id FROM session_admissions WHERE target_session_id IN ({marks}) "
+                "AND status IN ('queued','started','unknown')", chunk))
+            for row in authority.db._read_all(
+                    f"SELECT {_HELD_COLUMNS} FROM ("
+                    f"  SELECT a.*, ROW_NUMBER() OVER (PARTITION BY a.target_session_id ORDER BY a.seq DESC) AS rn"
+                    f"  FROM session_admissions a WHERE a.target_session_id IN ({marks}) "
+                    "  AND NOT (a.status = 'terminal' AND a.owner_epoch IS NOT NULL AND EXISTS ("
+                    "    SELECT 1 FROM session_admissions h WHERE h.target_session_id = a.target_session_id "
+                    "    AND h.seq < a.seq AND h.owner_epoch = a.owner_epoch AND h.generation = a.generation))"
+                    ") WHERE rn = 1", chunk):
                 latest[row['target_session_id']] = row
         held = set()
         for sid in ids:
@@ -342,8 +352,9 @@ def held_admissions(authority, session_ids) -> set:
         if not getattr(authority, 'retiring', False):
             raise
         import logging
-        logging.getLogger('gateway.run').warning("Skipping auto-resume of %s: retained store %s cannot answer: %s",
-                                                 ids, getattr(authority, 'profile_id', '?'), exc)
+        logging.getLogger('gateway.run').warning(
+            "Skipping auto-resume of %d candidate(s): retained store %s cannot answer: %s",
+            len(ids), getattr(authority, 'profile_id', '?'), exc)
         return set(ids)
 
 

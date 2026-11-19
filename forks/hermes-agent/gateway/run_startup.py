@@ -656,6 +656,14 @@ class GatewayStartupMixin:
             held |= held_admissions(authority, ids)
         return held
 
+    def _still_resume_pending(self, session_key: str) -> bool:
+        """Whether the live entry for *session_key* still awaits a startup resume: marked ``resume_pending``
+        and not ``suspended``. Read under the store lock so a ``/stop`` or a finished turn is seen."""
+        store = self.session_store
+        with store._lock:
+            live = store._entries.get(session_key)
+        return live is not None and live.resume_pending and not live.suspended
+
     def _schedule_resume_pending_sessions(self, platform=None, *, candidates=None, held=None) -> int:
         """Auto-continue fresh restart-interrupted sessions: synthesize an empty-text turn (the
         ``_is_resume_pending`` injection path owns the wording). Sessions whose adapter is offline stay
@@ -682,6 +690,10 @@ class GatewayStartupMixin:
             if entry.session_id in held:
                 logger.debug("Skipping auto-resume for %s: its canonical admission holds the session",
                              entry.session_id)
+                continue
+            # The held set was read off the loop, so the candidate snapshot may be stale: a /stop or a
+            # finished turn can change the live flags during the read. Act on the live entry only.
+            if not self._still_resume_pending(entry.session_key):
                 continue
             # Epoch math: the marker was stamped naive-local by the previous process, possibly
             # on the other side of a DST change; wall-clock subtraction is off by the shift.

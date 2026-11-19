@@ -9,12 +9,13 @@ import (
 	"testing"
 
 	"github.com/RigelBuild/nebula/tools/code-shape-gate/codeshape"
+	"github.com/RigelBuild/nebula/tools/code-shape-gate/codeshape/golang"
 )
 
 func TestUnmeasuredSkipFinding(t *testing.T) {
 	skips := []codeshape.Skip{
-		{Path: "plain.ts", Reason: "no functions", Unmeasured: nil},
-		{Path: "bad.ts", Reason: "parse error", Unmeasured: &codeshape.UnmeasuredFunctions{
+		{Path: "plain.ts", Reason: "no functions", Remedy: "", Unmeasured: nil},
+		{Path: "bad.ts", Reason: "parse error", Remedy: "", Unmeasured: &codeshape.UnmeasuredFunctions{
 			Values: map[codeshape.Metric]int{codeshape.MetricTSLines: 70}, BiomeParseFailed: false}},
 	}
 	var output strings.Builder
@@ -52,6 +53,34 @@ func TestUnparseableFileCannotRaiseBaseEntry(t *testing.T) {
 		code := Main(t.Context(), args, func(string) string { return "HEAD" }, &out, &stderr)
 		if code != 1 || !strings.Contains(out.String(), "do not add or raise allowlist entries") {
 			t.Fatalf("args=%v code=%d out=%q stderr=%q", args, code, out.String(), stderr.String())
+		}
+	}
+}
+
+func TestGoSkipFixNamesDefaultGOARCH(t *testing.T) {
+	skips := []codeshape.Skip{{Path: "a_riscv64.go", Reason: "not in any measured Go build", Remedy: "",
+		Unmeasured: &codeshape.UnmeasuredFunctions{Values: nil, BiomeParseFailed: false}}}
+	var output strings.Builder
+	findings, _, err := handleGoSkips(&output, skips)
+	want := "not in any measured Go build; exclude it or include it in a default-GOARCH " +
+		goosPhrase(golang.MeasuredGOOS()) + " Go build"
+	if err != nil || len(findings) != 1 || findings[0].Fix != want {
+		t.Fatalf("findings=%v want fix %q err=%v", findings, want, err)
+	}
+}
+
+func TestGoosPhrase(t *testing.T) {
+	cases := []struct {
+		goos []string
+		want string
+	}{
+		{[]string{"linux"}, "linux"},
+		{[]string{"linux", "darwin"}, "linux or darwin"},
+		{[]string{"freebsd", "linux", "darwin", "windows"}, "freebsd, linux, darwin or windows"},
+	}
+	for _, tc := range cases {
+		if got := goosPhrase(tc.goos); got != tc.want {
+			t.Fatalf("goosPhrase(%v) = %q, want %q", tc.goos, got, tc.want)
 		}
 	}
 }

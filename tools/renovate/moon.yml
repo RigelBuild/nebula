@@ -1,0 +1,16 @@
+# yaml-language-server: $schema=https://moonrepo.dev/schemas/project.json
+#
+# Tasks run from this project's directory, so preset.json5 is a local path.
+layer: "tool"
+language: "unknown"
+tags: ["renovate"]
+tasks:
+  test:
+    # The nebula devshell has no node. nix shell takes node from the flake's
+    # pinned nixpkgs; npx runs the validator from the pinned Renovate release.
+    command: "nix"
+    args: ["shell", "--inputs-from", "../..", "nixpkgs#nodejs", "--command", "npx", "--yes", "--package", "renovate@44.46.2", "renovate-config-validator", "preset.json5"]
+    inputs:
+      - "preset.json5"
+      - "moon.yml"
+      - "README.md"

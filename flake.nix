@@ -135,7 +135,7 @@
                 '';
               };
           in
-          builtins.mapAttrs wrap (builtins.removeAttrs manifest [ "source" "tag" "held" ]);
+          builtins.mapAttrs wrap (builtins.removeAttrs manifest [ "source" "tag" "held" "images" ]);
 
       # docs-bundle is a TypeScript CLI run by Bun. Dependencies are fetched
       # as a fixed-output derivation pinned by outputHash, then the wrapper
@@ -235,6 +235,14 @@
                 sha256 = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
               };
             };
+            # Image records are not packages; packagesFor must skip them.
+            images = {
+              omp = {
+                repository = "ghcr.io/rigelbuild/omp";
+                tag = "nebula-20261117-1";
+                digest = "sha256:0000000000000000000000000000000000000000000000000000000000000000";
+              };
+            };
           };
           merged =
             commandPackagesFor system
@@ -251,6 +259,14 @@
             }
             test "${merged.nix2container.version}" = "${expected}" || {
               echo "nix2container source build won over the release manifest" >&2
+              exit 1
+            }
+            touch $out
+          '';
+          # A manifest with images evaluates, and images is not a package.
+          manifest-images-skipped = pkgs.runCommand "nebula-manifest-images-skipped" { } ''
+            test "${builtins.toJSON (builtins.hasAttr "images" (packagesFor fixture system))}" = false || {
+              echo "the manifest images key became a package" >&2
               exit 1
             }
             touch $out

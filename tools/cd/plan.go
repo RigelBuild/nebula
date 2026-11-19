@@ -58,6 +58,10 @@ type Plan struct {
 	// NotBuilt lists binary packages CD has no build step for (no go.mod). They
 	// are not tested, built, held or put in the manifest; the notes list them.
 	NotBuilt []string `json:"notBuilt"`
+	// Images lists every container image; BuildImages names the ones whose
+	// project changed. The rest are re-tagged at their previous digest.
+	Images      []ImageSpec `json:"images"`
+	BuildImages []string    `json:"buildImages"`
 }
 
 func makePlan(ctx context.Context, repo string) (Plan, error) {
@@ -92,6 +96,9 @@ func makePlan(ctx context.Context, repo string) (Plan, error) {
 		binaries = append(binaries, b)
 	}
 	p.Binaries = binaries
+	if p.Images, err = listImages(repo); err != nil {
+		return Plan{}, err
+	}
 	all = slices.DeleteFunc(all, func(project string) bool { return notBuiltProjects[project] })
 
 	tag, prev, raw, err := newestRelease(ctx, repo)
@@ -123,6 +130,8 @@ func makePlan(ctx context.Context, repo string) (Plan, error) {
 		for _, held := range prev.Held {
 			if project := projectOfPackage(binaries, held); project != "" {
 				set[project] = true
+			} else if i := slices.IndexFunc(p.Images, func(i ImageSpec) bool { return i.Name == held }); i >= 0 {
+				set[p.Images[i].Project] = true
 			}
 		}
 		for project := range set {
@@ -138,6 +147,15 @@ func makePlan(ctx context.Context, repo string) (Plan, error) {
 		if slices.Contains(p.Projects, b.Project) {
 			p.Build = append(p.Build, b.Package)
 		}
+	}
+	p.BuildImages = []string{}
+	for _, i := range p.Images {
+		if slices.Contains(p.Projects, i.Project) {
+			p.BuildImages = append(p.BuildImages, i.Name)
+		}
+	}
+	if p.Images == nil {
+		p.Images = []ImageSpec{}
 	}
 	return p, nil
 }

@@ -19,4 +19,4 @@ Each `upstream.json` `repo`, the `--upstream` value and the `--fork` URL must st
 
 Both a dry-run and a sync with no upstream changes print one plan line per fork. A no-op says the fork is up to date; an update dry-run reports the sync branch, upstream commit count, and commit range.
 
-No GitHub workflow runs this command yet. Scheduled sync and outbox export are planned for a later pull request. Export reads the outbox URL from `--outbox` and pushes the `upstream/<topic>` branch there; without it, export uses `RigelBuild/<name>`.
+`.github/workflows/fork-sync.yaml` runs `sync --name <fork>` hourly, one job per `forks/<name>/upstream.json`, and on `workflow_dispatch` with an optional fork name. Each job mints a `rigelbuild-automation` App token and passes it as `GITHUB_TOKEN`, so the pull requests start CI. Until that App is configured in `main`, the sync steps are skipped and the run stays green. The `export` command works. Only its scheduled run is not wired yet; it is planned for a later pull request. Export reads the outbox URL from `--outbox` and pushes the `upstream/<topic>` branch there; without it, export uses `RigelBuild/<name>`.

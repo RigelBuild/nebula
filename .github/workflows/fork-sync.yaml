@@ -1,0 +1,113 @@
+name: Fork sync
+
+# Syncs every vendored fork from its upstream, one job per fork. A fork is any
+# forks/<name>/upstream.json, so adding a fork needs no edit here.
+on:
+  schedule:
+    - cron: '0 * * * *'
+  workflow_dispatch:
+    inputs:
+      fork:
+        description: Fork name under forks/ to sync (empty syncs every fork)
+        required: false
+        type: string
+        default: ''
+
+# Pushes and pull requests use the App token, not GITHUB_TOKEN, so the PRs start CI.
+permissions: {}
+
+jobs:
+  plan:
+    name: Plan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      forks: ${{ steps.plan.outputs.forks }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: List forks
+        id: plan
+        env:
+          FORK: ${{ inputs.fork }}
+        run: |
+          set -euo pipefail
+          # ls fails when no upstream.json exists, so an empty fork set stops the run here.
+          # cotal is excluded: its upstream gitlink .internal is private, and gitlink handling is undecided.
+          names=$(ls forks/*/upstream.json | cut -d/ -f2 | grep -vx cotal | jq -R -s -c 'split("\n") | map(select(length > 0))')
+          if [ -n "$FORK" ]; then
+            names=$(jq -c --arg fork "$FORK" 'map(select(. == $fork))' <<<"$names")
+            if [ "$names" = '[]' ]; then
+              echo "::error::no fork named $FORK under forks/"
+              exit 1
+            fi
+          fi
+          echo "$names"
+          echo "forks=$names" >> "$GITHUB_OUTPUT"
+
+  sync:
+    name: Sync ${{ matrix.fork }}
+    needs: plan
+    runs-on: ubuntu-latest
+    environment: main
+    concurrency:
+      group: fork-sync-${{ matrix.fork }}
+      cancel-in-progress: false
+    strategy:
+      fail-fast: false
+      matrix:
+        fork: ${{ fromJSON(needs.plan.outputs.forks) }}
+    permissions:
+      contents: read
+    steps:
+      # The App is not configured in main yet (RIG-10145). Without it sync is skipped, and the job stays green.
+      - name: Mint automation App token
+        id: app
+        if: vars.AUTOMATION_APP_CLIENT_ID != ''
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510
+        with:
+          client-id: ${{ vars.AUTOMATION_APP_CLIENT_ID }}
+          private-key: ${{ secrets.AUTOMATION_APP_PRIVATE_KEY }}
+          owner: RigelBuild
+          repositories: nebula
+          permission-contents: write
+          permission-pull-requests: write
+      # Only the mint step's outputs feed the rest. Each later step needs the same guard.
+      - name: Check out source
+        if: vars.AUTOMATION_APP_CLIENT_ID != ''
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up Go
+        if: vars.AUTOMATION_APP_CLIENT_ID != ''
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version: '1.27.4'
+          cache: false
+      - name: Configure git credential helper
+        if: vars.AUTOMATION_APP_CLIENT_ID != ''
+        run: |
+          # Scoped to the nebula repository, not all of github.com: jj-vine syncs from
+          # Codeberg, and other GitHub repos must never get the App token. useHttpPath makes
+          # git send the repo path, so the helper matches this repo's URL, which checkout sets without .git.
+          # The helper reads GITHUB_TOKEN when git asks, so the token is not written to disk.
+          base=https://github.com/RigelBuild/nebula
+          git config --global "credential.$base.useHttpPath" true
+          git config --global "credential.$base.helper" '!f() { echo username=x-access-token; echo "password=$GITHUB_TOKEN"; }; f'
+      - name: Sync fork
+        if: vars.AUTOMATION_APP_CLIENT_ID != ''
+        env:
+          CGO_ENABLED: '0'
+          FORK: ${{ matrix.fork }}
+          GITHUB_TOKEN: ${{ steps.app.outputs.token }}
+        run: go -C tools/fork-sync run . sync --name "$FORK" --root "$GITHUB_WORKSPACE"
+      - name: Warn that fork sync is skipped
+        if: vars.AUTOMATION_APP_CLIENT_ID == ''
+        run: |
+          echo "::warning::fork sync skipped: automation App credentials not configured (RIG-10145)"

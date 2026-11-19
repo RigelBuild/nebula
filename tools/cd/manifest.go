@@ -212,7 +212,7 @@ func buildManifest(p Plan, tag, assets, previous, baseURL string, systems, held 
 			continue
 		}
 		entry := Package{Version: b.Version, UpstreamRev: b.UpstreamRev, Systems: map[string]Asset{}}
-		for _, system := range systems {
+		for _, system := range targetSystems(b, systems) {
 			name := fmt.Sprintf("%s-%s-%s.tar.zst", b.Package, b.Version, system)
 			sum, err := fileSHA256(filepath.Join(assets, name))
 			if err != nil {
@@ -224,6 +224,23 @@ func buildManifest(p Plan, tag, assets, previous, baseURL string, systems, held 
 	}
 	sort.Strings(m.Held)
 	return m, nil
+}
+
+// targetSystems returns the release systems a built package has assets for: its
+// artifact's systems that the Release also ships, or every Release system when
+// the artifact names none. A package limited to x86_64-linux gets no asset for
+// aarch64-linux, so the Release does not need one there.
+func targetSystems(b Binary, systems []string) []string {
+	if len(b.Systems) == 0 {
+		return systems
+	}
+	var out []string
+	for _, s := range systems {
+		if slices.Contains(b.Systems, s) {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 // carry copies a previous entry into this Release. Each asset is read from

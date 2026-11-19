@@ -117,6 +117,7 @@ jobs:
         # A red project is held: it keeps its previous asset and joins the held list.
         env:
           PROJECTS: ${{ needs.plan.outputs.projects }}
+          SYSTEM: ${{ matrix.system }}
         run: |
           mkdir -p "$RUNNER_TEMP/held"
           : > "$RUNNER_TEMP/held/${{ matrix.system }}"
@@ -126,6 +127,14 @@ jobs:
           shells=$(jq -r '.[]' <<<"$shells_json")
           for project in $PROJECTS; do
             id=$(basename "$project")
+            # A project whose planned binaries all name other systems is not tested on this leg.
+            # A project with no planned binaries is not gated here, so it keeps its test.
+            on_leg=$(jq -r --arg p "$project" --arg s "$SYSTEM" '
+              [.binaries[] | select(.project == $p)] as $bins
+              | if ($bins | length) == 0 then "yes"
+                elif any($bins[]; ((.systems // []) | length == 0) or ((.systems // []) | index($s))) then "yes"
+                else "no" end' "$RUNNER_TEMP/plan.json")
+            if [ "$on_leg" = no ]; then echo "$project does not target $SYSTEM; not tested here"; continue; fi
             # A project with its own devShell (named after the project) enters it; others use default.
             shell=default
             if grep -Fqx "$id" <<<"$shells"; then shell=$id; fi
@@ -160,6 +169,8 @@ jobs:
           jq -c '.binaries[] as $b | select(.build | index($b.package)) | $b' "$RUNNER_TEMP/plan.json" |
           while read -r b; do
             pkg=$(jq -r .package <<<"$b")
+            # Not built on this leg: the artifact names other systems. This is not a hold.
+            if [ "$(jq -r --arg s "$SYSTEM" 'if (.systems // []) | length == 0 then "yes" elif (.systems | index($s)) then "yes" else "no" end' <<<"$b")" = no ]; then continue; fi
             if grep -qx "$pkg" "$RUNNER_TEMP/held/$SYSTEM"; then continue; fi
             project=$(jq -r .project <<<"$b")
             version=$(jq -r .version <<<"$b")
@@ -179,7 +190,9 @@ jobs:
             fi
             # Every kind: a consumer runs the asset without this build's /nix/store.
             for name in $(jq -r '.binaries[]' <<<"$b"); do
-              "$RUNNER_TEMP/cd" check-asset -system "$SYSTEM" "$stage/bin/$name"
+              runtime=()
+              while read -r soname; do runtime+=(-runtime "$soname"); done < <(jq -r '.runtimeDeps[]?' <<<"$b")
+              "$RUNNER_TEMP/cd" check-asset -system "$SYSTEM" "${runtime[@]}" "$stage/bin/$name"
             done
             tar -C "$stage" -cf - bin | zstd -19 -q -o "$RUNNER_TEMP/assets/$pkg-$version-$SYSTEM.tar.zst"
           done

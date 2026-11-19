@@ -101,6 +101,8 @@ func dispatch(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 		return nil
 	case "check-asset":
 		system := flags.String("system", "", "target system, for example aarch64-darwin")
+		var runtime listFlag
+		flags.Var(&runtime, "runtime", "declared DT_NEEDED soname (repeatable); enables runtimeDeps")
 		if err := flags.Parse(args[1:]); err != nil {
 			return err
 		}
@@ -108,7 +110,7 @@ func dispatch(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 			return errUsage
 		}
 		for _, path := range flags.Args() {
-			if err := checkAsset(path, *system); err != nil {
+			if err := checkAssetWithRuntime(path, *system, runtime); err != nil {
 				return err
 			}
 		}

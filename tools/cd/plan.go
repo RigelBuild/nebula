@@ -29,8 +29,9 @@ const (
 
 var errNotDescendant = errors.New("HEAD does not descend from the previous release source")
 var (
-	errNixAttr  = errors.New("nix artifact needs an attr")
-	errNixFlake = errors.New("nix artifact project has no flake.nix")
+	errNixAttr       = errors.New("nix artifact needs an attr")
+	errNixFlake      = errors.New("nix artifact project has no flake.nix")
+	errRuntimeNotNix = errors.New("runtimeDeps needs a nix artifact")
 )
 
 // Binary is one releasable binary package declared by a tool's component.cue.
@@ -45,6 +46,10 @@ type Binary struct {
 	// UpstreamRev is the imported upstream commit, for forks only.
 	UpstreamRev string   `json:"upstreamRev,omitempty"`
 	Binaries    []string `json:"binaries"`
+	// RuntimeDeps lists the sonames a declared-runtime nix artifact may link.
+	RuntimeDeps []string `json:"runtimeDeps,omitempty"`
+	// Systems limits the artifact to these release systems. Empty means all.
+	Systems []string `json:"systems,omitempty"`
 }
 
 // Plan is the batch job's build plan and the previous Release it builds on.
@@ -202,9 +207,11 @@ type component struct {
 	Release struct {
 		Base      string `json:"base"`
 		Artifacts map[string]struct {
-			Kind     string   `json:"kind"`
-			Attr     string   `json:"attr"`
-			Binaries []string `json:"binaries"`
+			Kind        string   `json:"kind"`
+			Attr        string   `json:"attr"`
+			Binaries    []string `json:"binaries"`
+			RuntimeDeps []string `json:"runtimeDeps"`
+			Systems     []string `json:"systems"`
 		} `json:"artifacts"`
 	} `json:"release"`
 }
@@ -253,8 +260,10 @@ func listBinaries(repo string) ([]Binary, error) {
 				if _, err := os.Stat(filepath.Join(filepath.Dir(m), "flake.nix")); err != nil {
 					return nil, fmt.Errorf("%w: %s: %w", errNixFlake, m, err)
 				}
+			} else if len(a.RuntimeDeps) > 0 {
+				return nil, fmt.Errorf("%w: %s: artifact %q", errRuntimeNotNix, m, name)
 			}
-			out = append(out, Binary{Package: name, Project: project, Version: c.Release.Base, Kind: a.Kind, Attr: a.Attr, UpstreamRev: upstreamRev, Binaries: a.Binaries})
+			out = append(out, Binary{Package: name, Project: project, Version: c.Release.Base, Kind: a.Kind, Attr: a.Attr, UpstreamRev: upstreamRev, Binaries: a.Binaries, RuntimeDeps: a.RuntimeDeps, Systems: a.Systems})
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Package < out[j].Package })

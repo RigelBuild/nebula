@@ -135,7 +135,7 @@
                 '';
               };
           in
-          builtins.mapAttrs wrap (builtins.removeAttrs manifest [ "source" "tag" "held" "images" ]);
+          builtins.mapAttrs wrap (lib.filterAttrs (_: p: p ? ${system}) (builtins.removeAttrs manifest [ "source" "tag" "held" "images" ]));
 
       # docs-bundle is a TypeScript CLI run by Bun. Dependencies are fetched
       # as a fixed-output derivation pinned by outputHash, then the wrapper
@@ -271,6 +271,33 @@
             }
             touch $out
           '';
+          # A package released for one system only is absent on the others, not an
+          # eval error. Without the filter in packagesFor, aarch64-linux throws on
+          # trunk-mq-mcp, which has no aarch64-linux asset.
+          manifest-single-system =
+            let
+              singleFixture = {
+                source = "abc";
+                tag = "nebula-20261117-44";
+                held = [ ];
+                trunk-mq-mcp = {
+                  version = "0.1.0";
+                  upstreamRev = null;
+                  "x86_64-linux" = {
+                    url = "https://example.invalid/trunk-mq-mcp.tar.zst";
+                    sha256 = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+                  };
+                };
+              };
+              onOther = builtins.attrNames (packagesFor singleFixture "aarch64-linux");
+            in
+            pkgs.runCommand "nebula-manifest-single-system" { } ''
+              test '${builtins.toJSON onOther}' = '[]' || {
+                echo "aarch64-linux listed a package with no aarch64-linux asset" >&2
+                exit 1
+              }
+              touch $out
+            '';
           # A command that replaces go-lib must ship tools/go-lib in its source.
           go-lib-included = pkgs.runCommand "nebula-go-lib-included" { } ''
             test -f "${commandSource "dl-claim"}/tools/go-lib/go.mod" || {

@@ -23,6 +23,7 @@ jobs:
       contents: read
     outputs:
       projects: ${{ steps.plan.outputs.projects }}
+      tag: ${{ steps.plan.outputs.tag }}
     steps:
       - name: Check out tested source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -45,6 +46,8 @@ jobs:
           "$RUNNER_TEMP/cd" plan -out "$RUNNER_TEMP/plan.json"
           cat "$RUNNER_TEMP/plan.json"
           echo "projects=$(jq -r '.projects | join(" ")' "$RUNNER_TEMP/plan.json")" >> "$GITHUB_OUTPUT"
+          # The release tag is fixed here so the images job and the release job share it.
+          echo "tag=nebula-$(date -u +%Y%m%d)-$GITHUB_RUN_NUMBER" >> "$GITHUB_OUTPUT"
       - name: Upload plan
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
@@ -191,9 +194,104 @@ jobs:
             ${{ runner.temp }}/held
           if-no-files-found: ignore
 
+  images:
+    name: Images
+    needs: plan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Check out tested source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Download plan
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: plan
+          path: ${{ runner.temp }}
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435
+      - name: Log in to GHCR
+        uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build, test and tag images
+        # Every image gets this Release's tag. A planned image is built, smoke-tested
+        # and pushed; an unplanned or red image re-tags its previous digest.
+        env:
+          TAG: ${{ needs.plan.outputs.tag }}
+        run: |
+          plan="$RUNNER_TEMP/plan.json"
+          # smoke runs an image's smoke test; an image with none passes. Commands are
+          # chained with && because bash -e does not apply inside an if condition.
+          smoke() {
+            case "$1" in
+              omp)
+                # omp unpacks its native addon under HOME and loads it, so HOME must allow exec.
+                local tmp=(--rm --user nonroot:nonroot --tmpfs /tmp:rw,exec,nosuid,nodev,uid=65532,gid=65532,mode=0700 --env HOME=/tmp)
+                local home="$RUNNER_TEMP/omp-home"
+                local bind=(--rm --user nonroot:nonroot --mount "type=bind,source=$home,target=/tmp" --env HOME=/tmp)
+                docker run "${tmp[@]}" "$2" --version &&
+                  docker run "${tmp[@]}" "$2" auth-broker --help &&
+                  docker run "${tmp[@]}" "$2" auth-broker serve --help &&
+                  docker run "${tmp[@]}" "$2" auth-gateway --help &&
+                  docker run "${tmp[@]}" "$2" auth-gateway serve --help &&
+                  mkdir -p "$home" && chmod 777 "$home" &&
+                  docker run "${bind[@]}" "$2" auth-broker token > /dev/null &&
+                  docker run "${bind[@]}" "$2" auth-gateway token > /dev/null &&
+                  test -s "$home/.omp/auth-broker.token" &&
+                  test -s "$home/.omp/auth-gateway.token"
+                ;;
+            esac
+          }
+          mkdir -p "$RUNNER_TEMP/images/held"
+          : > "$RUNNER_TEMP/images/held/images"
+          : > "$RUNNER_TEMP/images/digests"
+          jq -c '.images[]' "$plan" | while read -r i; do
+            name=$(jq -r .name <<<"$i")
+            repo=$(jq -r .repository <<<"$i")
+            project=$(jq -r .project <<<"$i")
+            dockerfile=$(jq -r .dockerfile <<<"$i")
+            platforms=$(jq -r '.platforms | join(",")' <<<"$i")
+            previous=$(jq -r --arg n "$name" '(.previous // {}) | (.images // {})[$n].digest // empty' "$plan")
+            digest=
+            if jq -e --arg n "$name" '.buildImages | index($n)' "$plan" > /dev/null; then
+              docker buildx build --platform "$platforms" --file "$project/$dockerfile" \
+                --load --tag "cd-smoke/$name" "$project"
+              if smoke "$name" "cd-smoke/$name"; then
+                docker buildx build --platform "$platforms" --file "$project/$dockerfile" \
+                  --push --tag "$repo:$TAG" --metadata-file "$RUNNER_TEMP/meta.json" "$project"
+                digest=$(jq -r '.["containerimage.digest"]' "$RUNNER_TEMP/meta.json")
+              else
+                echo "::warning::image $name is red; holding it"
+                echo "$name" >> "$RUNNER_TEMP/images/held/images"
+              fi
+            fi
+            if [ -z "$digest" ]; then
+              if [ -z "$previous" ]; then
+                echo "image $name has no previous digest to keep"
+                continue
+              fi
+              docker buildx imagetools create --tag "$repo:$TAG" "$repo@$previous"
+              digest=$previous
+            fi
+            echo "$name=$digest" >> "$RUNNER_TEMP/images/digests"
+          done
+        shell: bash -e {0}
+      - name: Upload image digests
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: images
+          path: ${{ runner.temp }}/images
+
   release:
     name: Release
-    needs: batch
+    needs: [plan, batch, images]
     environment: release
     runs-on: ubuntu-latest
     permissions:
@@ -241,11 +339,12 @@ jobs:
         id: publish
         env:
           CGO_ENABLED: '0'
-          RUN_NUMBER: ${{ github.run_number }}
+          TAG: ${{ needs.plan.outputs.tag }}
           REPOSITORY: ${{ github.repository }}
         run: |
-          tag="nebula-$(date -u +%Y%m%d)-$RUN_NUMBER"
+          tag=$TAG
           held=$(find "$RUNNER_TEMP/in" -path '*/held/*' -type f -exec cat {} + | sort -u | paste -sd, -)
+          images=$(paste -sd, - < "$RUNNER_TEMP/in/images/digests")
           # A package held on any system keeps its previous assets everywhere, so
           # its newly built assets from the other systems stay out of the release set.
           jq -r --arg held "$held" '($held | split(",")) as $h | .binaries[]
@@ -261,7 +360,7 @@ jobs:
           git config user.email 'rigelbuild-nebula-release[bot]@users.noreply.github.com'
           go -C tools/cd build -o "$RUNNER_TEMP/cd" .
           commit=$("$RUNNER_TEMP/cd" publish -plan "$RUNNER_TEMP/in/plan/plan.json" -tag "$tag" \
-            -assets "$RUNNER_TEMP/assets" -previous-assets "$RUNNER_TEMP/previous" -held "$held" \
+            -assets "$RUNNER_TEMP/assets" -previous-assets "$RUNNER_TEMP/previous" -held "$held" -image "$images" \
             -base-url "https://github.com/$REPOSITORY/releases/download/" \
             -system x86_64-linux -system aarch64-linux -system aarch64-darwin)
           "$RUNNER_TEMP/cd" guard "$commit"

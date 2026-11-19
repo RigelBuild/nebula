@@ -79,11 +79,12 @@ func (p *Package) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// Manifest is release-manifest.json: source, tag, held, then one key per package.
+// Manifest is release-manifest.json: source, tag, held, images, then one key per package.
 type Manifest struct {
 	Source   string
 	Tag      string
 	Held     []string
+	Images   map[string]Image
 	Packages map[string]Package
 }
 
@@ -92,6 +93,9 @@ func (m Manifest) MarshalJSON() ([]byte, error) {
 	out := map[string]any{"source": m.Source, "tag": m.Tag, "held": m.Held}
 	if m.Held == nil {
 		out["held"] = []string{}
+	}
+	if len(m.Images) > 0 {
+		out["images"] = m.Images
 	}
 	for name, p := range m.Packages {
 		out[name] = p
@@ -115,6 +119,8 @@ func (m *Manifest) UnmarshalJSON(data []byte) error {
 			err = json.Unmarshal(value, &m.Tag)
 		case "held":
 			err = json.Unmarshal(value, &m.Held)
+		case "images":
+			err = json.Unmarshal(value, &m.Images)
 		default:
 			var p Package
 			err = json.Unmarshal(value, &p)
@@ -135,6 +141,7 @@ type manifestInput struct {
 	baseURL  string
 	held     []string
 	systems  []string
+	images   []string
 }
 
 // build renders the manifest bytes from the plan, the built assets and the held list.
@@ -154,6 +161,19 @@ func (in *manifestInput) build() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	digests, err := parseImageDigests(in.images)
+	if err != nil {
+		return nil, err
+	}
+	images, heldImages, err := buildImages(p, in.tag, digests, in.held)
+	if err != nil {
+		return nil, err
+	}
+	if len(images) > 0 {
+		m.Images = images
+	}
+	m.Held = append(m.Held, heldImages...)
+	sort.Strings(m.Held)
 	out, err := json.MarshalIndent(m, "", "  ")
 	if err != nil {
 		return nil, err

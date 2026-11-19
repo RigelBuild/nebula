@@ -161,6 +161,7 @@ func manifestFlags(flags *flag.FlagSet) *manifestInput {
 	flags.StringVar(&in.baseURL, "base-url", "", "download URL prefix; the tag and asset name are appended")
 	flags.Var((*listFlag)(&in.held), "held", "package held by a red test (repeatable)")
 	flags.Var((*listFlag)(&in.systems), "system", "release system (repeatable)")
+	flags.Var((*listFlag)(&in.images), "image", "pushed image digest as name=sha256:<hex> (repeatable)")
 	return in
 }
 

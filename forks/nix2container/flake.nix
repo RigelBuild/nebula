@@ -41,7 +41,7 @@
                 env = (old.env or { }) // {
                   CGO_ENABLED = "0";
                 };
-                version = "1.1.0-rigel.1";
+                version = "1.1.0-rigel.2";
               });
           inherit examples tests;
           default = nix2container.nix2container-bin;

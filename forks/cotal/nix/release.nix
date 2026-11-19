@@ -1,6 +1,5 @@
-# The `cotal` CLI from the prebuilt runtime tarball that rigel-release publishes.
-# Nothing is compiled: fetchurl pins the tarball by hash, and the install keeps the
-# tree layout the release assembler writes (.github/workflows/rigel-release.yml).
+# The `cotal` CLI from the runtime tarball that nebula CD's `runtime` job publishes (.github/workflows/cd.yaml).
+# Nothing is compiled: fetchurl pins the tarball by hash, and the install keeps the tree layout that job writes.
 { pkgs }:
 let
   inherit (pkgs) lib;
@@ -11,8 +10,8 @@ let
       or (throw "cotal: no published runtime asset for ${system} in nix/release.json");
   assetName = "cotal-runtime-${asset.platform}.tar.gz";
 in
-assert lib.assertMsg (lib.hasPrefix "rigel-v${release.version}-" release.tag)
-  "nix/release.json: tag ${release.tag} does not carry version ${release.version}";
+assert lib.assertMsg ((builtins.match "nebula-[0-9]{8}-[0-9]+" release.tag) != null)
+  "nix/release.json: tag ${release.tag} is not a nebula-YYYYMMDD-N release tag";
 pkgs.stdenvNoCC.mkDerivation {
   pname = "cotal";
   inherit (release) version;
@@ -36,11 +35,8 @@ pkgs.stdenvNoCC.mkDerivation {
     mkdir -p "$out/lib" "$out/bin"
     cp -a . "$out/lib/cotal"
 
-    # The release assembler copies only bin, extensions, implementations, packages and examples
-    # (.github/workflows/rigel-release.yml). The pnpm workspace links that point at the other
-    # members (desktop, tools/docs-content) therefore dangle in the tarball. nixpkgs' noBrokenSymlinks
-    # fixup fails the build on them, and they are unused at runtime, so drop them. Do not disable
-    # the fixup: it still guards every other link.
+    # The runtime job copies no other pnpm workspace members (desktop, tools/docs-content), so links to them dangle.
+    # Drop only those links; keep the noBrokenSymlinks fixup, which still guards every other link.
     find "$out/lib/cotal" -xtype l -delete
 
     makeWrapper ${pkgs.nodejs_24}/bin/node "$out/bin/cotal" \
@@ -50,7 +46,7 @@ pkgs.stdenvNoCC.mkDerivation {
   '';
 
   meta = {
-    description = "Cotal mesh CLI and built-in extension packages from the rigel-release runtime tarball";
+    description = "Cotal mesh CLI and built-in extension packages from the nebula runtime tarball";
     homepage = "https://github.com/${release.repo}";
     license = lib.licenses.asl20;
     mainProgram = "cotal";

@@ -179,7 +179,9 @@ jobs:
             fi
             # Every kind: a consumer runs the asset without this build's /nix/store.
             for name in $(jq -r '.binaries[]' <<<"$b"); do
-              "$RUNNER_TEMP/cd" check-asset -system "$SYSTEM" "$stage/bin/$name"
+              runtime=()
+              while read -r soname; do runtime+=(-runtime "$soname"); done < <(jq -r '.runtimeDeps[]?' <<<"$b")
+              "$RUNNER_TEMP/cd" check-asset -system "$SYSTEM" "${runtime[@]}" "$stage/bin/$name"
             done
             tar -C "$stage" -cf - bin | zstd -19 -q -o "$RUNNER_TEMP/assets/$pkg-$version-$SYSTEM.tar.zst"
           done

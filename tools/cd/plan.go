@@ -45,6 +45,8 @@ type Binary struct {
 	// UpstreamRev is the imported upstream commit, for forks only.
 	UpstreamRev string   `json:"upstreamRev,omitempty"`
 	Binaries    []string `json:"binaries"`
+	// RuntimeDeps lists the sonames a declared-runtime nix artifact may link.
+	RuntimeDeps []string `json:"runtimeDeps,omitempty"`
 }
 
 // Plan is the batch job's build plan and the previous Release it builds on.
@@ -202,9 +204,10 @@ type component struct {
 	Release struct {
 		Base      string `json:"base"`
 		Artifacts map[string]struct {
-			Kind     string   `json:"kind"`
-			Attr     string   `json:"attr"`
-			Binaries []string `json:"binaries"`
+			Kind        string   `json:"kind"`
+			Attr        string   `json:"attr"`
+			Binaries    []string `json:"binaries"`
+			RuntimeDeps []string `json:"runtimeDeps"`
 		} `json:"artifacts"`
 	} `json:"release"`
 }
@@ -254,7 +257,7 @@ func listBinaries(repo string) ([]Binary, error) {
 					return nil, fmt.Errorf("%w: %s: %w", errNixFlake, m, err)
 				}
 			}
-			out = append(out, Binary{Package: name, Project: project, Version: c.Release.Base, Kind: a.Kind, Attr: a.Attr, UpstreamRev: upstreamRev, Binaries: a.Binaries})
+			out = append(out, Binary{Package: name, Project: project, Version: c.Release.Base, Kind: a.Kind, Attr: a.Attr, UpstreamRev: upstreamRev, Binaries: a.Binaries, RuntimeDeps: a.RuntimeDeps})
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Package < out[j].Package })

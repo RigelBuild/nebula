@@ -42,6 +42,7 @@ jobs:
         env:
           CGO_ENABLED: '0'
         run: |
+          set -o pipefail
           go -C tools/cd build -o "$RUNNER_TEMP/cd" .
           "$RUNNER_TEMP/cd" plan -out "$RUNNER_TEMP/plan.json"
           cat "$RUNNER_TEMP/plan.json"
@@ -247,6 +248,7 @@ jobs:
         # test runs on that exact digest. Any failed step holds the image, so the
         # manifest carries its previous digest. Tags are applied after the Release.
         run: |
+          set -o pipefail
           plan="$RUNNER_TEMP/plan.json"
           # smoke runs an image's smoke test; an image with none passes. Commands are
           # chained with && because bash -e does not apply inside an if condition.
@@ -267,6 +269,9 @@ jobs:
                   docker run "${bind[@]}" "$2" auth-gateway token > /dev/null &&
                   test -s "$home/.omp/auth-broker.token" &&
                   test -s "$home/.omp/auth-gateway.token"
+                ;;
+              autoscaler)
+                docker run --rm "$2" --version
                 ;;
             esac
           }
@@ -326,6 +331,7 @@ jobs:
         env:
           TAG: ${{ needs.plan.outputs.tag }}
         run: |
+          set -o pipefail
           jq -r '(.images // {}) | to_entries[] | "\(.value.repository) \(.value.digest)"' release-manifest.json |
           while read -r repo digest; do
             docker buildx imagetools create --tag "$repo:$TAG" "$repo@$digest"

@@ -35,3 +35,4 @@ a hit. Its allowlist is `tools/ref-gate/ref-gate.config.json`.
   out of upstream patches.
 - `tools/<name>/` — first-party public tools, each with its own `moon.yml`.
 - `docs/designs/<project>/` — public design records.
+- `docs/README.md` — design-record layout, public-only rule, and claim procedure.

@@ -574,6 +574,11 @@ jobs:
         with:
           go-version: '1.27.4'
           cache: false
+      - name: Run ref-gate before publishing
+        env:
+          CGO_ENABLED: '0'
+          GATE_ROOT: ${{ github.workspace }}
+        run: go -C tools/ref-gate run . --config ref-gate.config.json
       - name: Download plan and assets
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:

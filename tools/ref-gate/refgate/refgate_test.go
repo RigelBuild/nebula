@@ -768,7 +768,7 @@ func TestRepositoryConfigRejectsSealedReferences(t *testing.T) {
 		wantLine string
 	}{
 		{
-			name:     "sealed/x in a non-allowlisted file fails the gate",
+			name:     "a former-name path reference in a non-allowlisted file fails the gate",
 			path:     "docs/page.md",
 			text:     "see " + former + "/x for details\n",
 			wantCode: 1,

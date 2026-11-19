@@ -68,7 +68,7 @@ func checkELF(path, arch string, runtime []string) error {
 		}
 		return nil
 	}
-	if err := checkInterp(f, path); err != nil {
+	if err := checkInterp(f, arch, path); err != nil {
 		return err
 	}
 	if err := checkRunpath(f, path); err != nil {
@@ -82,8 +82,18 @@ func checkELF(path, arch string, runtime []string) error {
 	return nil
 }
 
-// checkInterp refuses a PT_INTERP that points under the build's /nix/store.
-func checkInterp(f *elf.File, path string) error {
+// standardLoader is the dynamic loader a consumer's FHS host provides for each
+// Linux machine. The declared branch accepts only this interpreter.
+var standardLoader = map[string]string{
+	"x86_64":  "/lib64/ld-linux-x86-64.so.2",
+	"aarch64": "/lib/ld-linux-aarch64.so.1",
+}
+
+// checkInterp requires the declared branch's PT_INTERP to be the system's
+// standard loader. Anything else, including a path under the build's /nix/store,
+// is refused. A binary with no PT_INTERP is static and passes.
+func checkInterp(f *elf.File, arch, path string) error {
+	want := standardLoader[arch]
 	for _, prog := range f.Progs {
 		if prog.Type != elf.PT_INTERP {
 			continue
@@ -93,8 +103,8 @@ func checkInterp(f *elf.File, path string) error {
 			return fmt.Errorf("%w: %s: read interpreter: %w", errAssetCheck, path, err)
 		}
 		interp := strings.TrimRight(string(buf), "\x00")
-		if strings.HasPrefix(interp, nixStore) {
-			return fmt.Errorf("%w: %s: interpreter %s is under %s", errAssetCheck, path, interp, nixStore)
+		if interp != want {
+			return fmt.Errorf("%w: %s: interpreter %s, want the standard loader %s", errAssetCheck, path, interp, want)
 		}
 	}
 	return nil

@@ -6,6 +6,7 @@ release: {
 			kind:     "nix"
 			attr:     "trunk-mq-mcp"
 			binaries: ["trunk-mq-mcp"]
+			systems: ["x86_64-linux"]
 			runtimeDeps: [
 				"libc.so.6",
 				"ld-linux-x86-64.so.2",

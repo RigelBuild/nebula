@@ -160,6 +160,8 @@ jobs:
           jq -c '.binaries[] as $b | select(.build | index($b.package)) | $b' "$RUNNER_TEMP/plan.json" |
           while read -r b; do
             pkg=$(jq -r .package <<<"$b")
+            # Not built on this leg: the artifact names other systems. This is not a hold.
+            if [ "$(jq -r --arg s "$SYSTEM" 'if (.systems // []) | length == 0 then "yes" elif (.systems | index($s)) then "yes" else "no" end' <<<"$b")" = no ]; then continue; fi
             if grep -qx "$pkg" "$RUNNER_TEMP/held/$SYSTEM"; then continue; fi
             project=$(jq -r .project <<<"$b")
             version=$(jq -r .version <<<"$b")

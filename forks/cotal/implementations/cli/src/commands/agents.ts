@@ -193,6 +193,8 @@ type AgentRow = {
   model?: string;
   variant?: string;
   provider?: string;
+  /** The seat's reported background work (`running` while jobs or subagents run); absent when none is running. */
+  background?: "running";
   cwd?: string;
   pid?: number;
   spawner?: string;

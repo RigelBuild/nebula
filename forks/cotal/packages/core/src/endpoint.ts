@@ -3486,6 +3486,20 @@ export class CotalEndpoint extends EventEmitter {
     await this.publishPresence();
   }
 
+  /** Overlay whether this session has running background work (a subagent or a background job) onto
+   *  the card's display-only `meta.background`, then republish presence. `true` writes the key as
+   *  `"running"`; `false` removes it, so an idle card carries no key at all. Advisory display data:
+   *  no routing or access decision reads it. An unchanged value writes nothing. */
+  async setCardBackground(running: boolean): Promise<void> {
+    const meta: Record<string, unknown> = { ...(this.card.meta ?? {}) };
+    const was = meta.background;
+    if (running) meta.background = "running";
+    else delete meta.background;
+    if (was === meta.background) return;
+    this.card.meta = meta;
+    await this.publishPresence();
+  }
+
   // ---- channel discovery ---------------------------------------------------
 
   /** A consumer that reads presence on demand reads the channel registry on demand too: it holds no
@@ -8108,10 +8122,14 @@ export class CotalEndpoint extends EventEmitter {
   /** Materialize an OFFLINE presence record: drop the advisory attention fields. An offline peer must
    *  not show a stale `[focus]` or "locally muted #x" hint — SPEC: attention removed on offline sweep,
    *  channel modes reset on restart. `statusSince` goes too: it dated the live status, and an observer
-   *  that derives offline from a stale heartbeat does not know when the peer left. card/activity/ts
-   *  are kept. */
+   *  that derives offline from a stale heartbeat does not know when the peer left. `meta.background` goes
+   *  too: a seat that quit cannot report running work. card, activity and ts are kept. */
   private toOffline(p: Presence): Presence {
-    return { ...p, status: "offline", statusSince: undefined, attention: undefined, channelModes: undefined };
+    const meta = p.card.meta;
+    const card = meta && "background" in meta
+      ? { ...p.card, meta: Object.fromEntries(Object.entries(meta).filter(([key]) => key !== "background")) }
+      : p.card;
+    return { ...p, card, status: "offline", statusSince: undefined, attention: undefined, channelModes: undefined };
   }
 
   /** Mark a known peer offline (on KV delete/purge), keeping it in the roster. */

@@ -3331,6 +3331,12 @@ export class MeshAgent extends EventEmitter {
     await this.inOrder(() => this.ep.setCardCwd(cwd));
   }
 
+  /** Report whether the session has running background work (a subagent or a background job) as the
+   *  advisory `meta.background` key on its presence card. Cleared when none is running. */
+  async setBackgroundWork(running: boolean): Promise<void> {
+    await this.inOrder(() => this.ep.setCardBackground(running));
+  }
+
   // ---- channel registry ----------------------------------------------------
 
   /** The boot-time "push" half of channel onboarding: a fenced, one-line description per

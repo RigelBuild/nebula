@@ -213,6 +213,21 @@
             passthru = (old.passthru or { }) // { upstreamRev = upstream.commit; };
           });
         };
+
+      # Shared markdown policy that consumers extend with
+      # `extends = "$RUMDL_BASE_CONFIG"`. The file sits at rumdl/base.toml under
+      # the package root. It is a flake output read by path, not a Release asset.
+      rumdlBaseConfigFor =
+        system:
+        let
+          pkgs = import nixpkgs { inherit system; };
+        in
+        {
+          rumdl-base-config = pkgs.runCommand "rumdl-base-config" { } ''
+            mkdir -p "$out/rumdl"
+            cp ${./tools/rumdl-base-config/base.toml} "$out/rumdl/base.toml"
+          '';
+        };
     in
     {
       # Later attrs win. Source builds come first, then docs-bundle and
@@ -223,6 +238,7 @@
         commandPackagesFor system
         // docsBundleFor system
         // nix2containerFor system
+        // rumdlBaseConfigFor system
         // packagesFor manifest system
       );
 

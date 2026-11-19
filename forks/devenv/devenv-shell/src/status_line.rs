@@ -550,6 +550,17 @@ impl StatusLine {
     ///
     /// The caller is responsible for repositioning the cursor after this call.
     pub fn draw(&mut self, stdout: &mut impl Write, cols: u16, total_rows: u16) -> io::Result<()> {
+        self.draw_at(Instant::now(), stdout, cols, total_rows)
+    }
+
+    /// Draw the status line, measuring build elapsed time against `now`.
+    fn draw_at(
+        &mut self,
+        now: Instant,
+        stdout: &mut impl Write,
+        cols: u16,
+        total_rows: u16,
+    ) -> io::Result<()> {
         if !self.enabled {
             return Ok(());
         }
@@ -560,7 +571,7 @@ impl StatusLine {
         // Capture elapsed time once so the cache key and the iocraft tree use
         // the exact same rendered value, even when a millisecond boundary is
         // crossed while drawing.
-        let build_elapsed = self.state.build_start.map(|start| start.elapsed());
+        let build_elapsed = self.build_elapsed_at(now);
         let spinner_frame = self.state.building.then_some(self.spinner_frame);
         let cache_hit = self.cached_width == cols
             && self.cached_spinner_frame == spinner_frame
@@ -596,15 +607,17 @@ impl StatusLine {
         Ok(())
     }
 
-    /// Build the status line element.
-    pub fn build_element(&self, width: u16) -> AnyElement<'static> {
-        self.build_element_with_elapsed(width, self.state.build_start.map(|start| start.elapsed()))
+    /// Build elapsed time measured against `now`.
+    fn build_elapsed_at(&self, now: Instant) -> Option<std::time::Duration> {
+        self.state
+            .build_start
+            .map(|start| now.saturating_duration_since(start))
     }
 
     /// Build the status line element using a captured elapsed duration.
     ///
-    /// `draw` supplies this so its cache key and element are based on one
-    /// instant. The public `build_element` retains its original behavior.
+    /// `draw_at` supplies this so its cache key and element are based on one
+    /// instant.
     fn build_element_with_elapsed(
         &self,
         width: u16,
@@ -907,7 +920,12 @@ mod tests {
     }
 
     fn uncached_content(status_line: &StatusLine, width: u16) -> Vec<u8> {
-        let mut element = status_line.build_element(width);
+        uncached_content_at(status_line, width, Instant::now())
+    }
+
+    fn uncached_content_at(status_line: &StatusLine, width: u16, now: Instant) -> Vec<u8> {
+        let mut element =
+            status_line.build_element_with_elapsed(width, status_line.build_elapsed_at(now));
         let canvas = element.render(Some(width as usize));
         let mut content = Vec::new();
         canvas.write_ansi(&mut content).unwrap();
@@ -918,14 +936,21 @@ mod tests {
     }
 
     fn draw_content(status_line: &mut StatusLine, width: u16) -> Vec<u8> {
+        draw_content_at(status_line, width, Instant::now())
+    }
+
+    fn draw_content_at(status_line: &mut StatusLine, width: u16, now: Instant) -> Vec<u8> {
         let mut output = Vec::new();
-        status_line.draw(&mut output, width, 24).unwrap();
+        status_line.draw_at(now, &mut output, width, 24).unwrap();
         output
     }
 
+    /// Draw and render against one fixed `now`, so a host stall between the
+    /// two cannot change the rendered elapsed time.
     fn assert_draw_matches_fresh_render(status_line: &mut StatusLine, width: u16) {
-        let expected = uncached_content(status_line, width);
-        let output = draw_content(status_line, width);
+        let now = Instant::now();
+        let expected = uncached_content_at(status_line, width, now);
+        let output = draw_content_at(status_line, width, now);
         assert_eq!(status_line.cached_content, expected);
         if !expected.is_empty() {
             assert!(
@@ -1009,11 +1034,16 @@ mod tests {
         assert_eq!(status_line.cached_width, 40);
         assert_ne!(status_line.cached_content, paused_content);
 
+        // Deterministic output hides elapsed time, so the building checks below
+        // would compare identical text.
+        if cfg!(feature = "deterministic-tui") {
+            return;
+        }
         status_line
             .state_mut()
             .set_building(vec![PathBuf::from("devenv.nix")]);
-        // Start 62.5 s back, mid-way through the `1m 2s` text, which changes only
-        // at 63 s, so the two clock reads in `expected` and `draw` print the same text.
+        // Start 62.5 s back, mid-way through the `1m 2s` text. Both renders
+        // share one `now`, so the elapsed text cannot differ between them.
         status_line.state_mut().build_start = Some(
             Instant::now()
                 .checked_sub(std::time::Duration::from_millis(62_500))
@@ -1031,6 +1061,32 @@ mod tests {
         assert_draw_matches_fresh_render(&mut status_line, 80);
         assert_ne!(status_line.cached_content, first_spinner_content);
         assert_eq!(status_line.cached_spinner_frame, Some(1));
+    }
+
+    #[test]
+    fn status_line_draw_matches_render_across_host_stall() {
+        if cfg!(feature = "deterministic-tui") {
+            return;
+        }
+        let mut status_line = StatusLine::new();
+        status_line
+            .state_mut()
+            .set_building(vec![PathBuf::from("devenv.nix")]);
+        // 62.9 s back: a 200 ms stall crosses the 63 s rounding boundary.
+        status_line.state_mut().build_start = Some(
+            Instant::now()
+                .checked_sub(std::time::Duration::from_millis(62_900))
+                .unwrap(),
+        );
+        status_line.last_spinner_update = Instant::now() + std::time::Duration::from_secs(3600);
+        let now = Instant::now();
+        let expected = uncached_content_at(&status_line, 80, now);
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        draw_content_at(&mut status_line, 80, now);
+        assert_eq!(
+            plain_text(&status_line.cached_content),
+            plain_text(&expected)
+        );
     }
 
     /// Strip SGR sequences, leaving the text a terminal would show.

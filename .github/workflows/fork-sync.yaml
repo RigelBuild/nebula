@@ -94,7 +94,7 @@ jobs:
         run: |
           # Scoped to the nebula repository, not all of github.com: jj-vine syncs from
           # Codeberg, and other GitHub repos must never get the App token. useHttpPath makes
-          # git send the repo path, so the helper matches both the plain and the .git URL.
+          # git send the repo path, so the helper matches this repo's URL, which checkout sets without .git.
           # The helper reads GITHUB_TOKEN when git asks, so the token is not written to disk.
           base=https://github.com/RigelBuild/nebula
           git config --global "credential.$base.useHttpPath" true

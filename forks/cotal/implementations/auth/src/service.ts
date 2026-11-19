@@ -1,6 +1,6 @@
 import { registryStores } from "./lifecycle-registry.js";
 import { createToolResultConsentSigner, makeToolResultConsentRecorder, type ToolResultConsentRecorder, type ToolResultConsentSignerOptions } from "./tool-result-consent.js";
-import { boundPlacementDelivery, createPlacementEnrollmentAuthority, type PlacementEnrollmentAuthority } from "./placement-enrollment.js";
+import { boundPlacementDelivery, createPlacementEnrollmentAuthority, reconcilerServiceAuthenticator, type PlacementEnrollmentAuthority } from "./placement-enrollment.js";
 import type { PlacementEnrollmentResult } from "@cotal-ai/core";
 import type { ReconcilerPort, RolePolicyPort, ServiceAuthenticator } from "./placement-enrollment.js";
 /**
@@ -2406,6 +2406,12 @@ function parseReconcilerSecret(raw: unknown, refused: boolean): ReconcilerSecret
   return { namespace, name };
 }
 
+/** The placement reconciler's `owner.actor` key: the auth identity's reconciler, derived from the
+ *  owner secret, space and account key. Never read from config. */
+export function reconcilerPrincipalFor(ownerSecret: string | Uint8Array, space: string, accountPublicKey: string): string {
+  return principalKey(platformControlOwner(ownerSecret, space, accountPublicKey), "reconciler").key;
+}
+
 /** Trusted local embedding hooks. They carry no prepared key material or loopback capability. */
 export interface AuthDaemonLifecycle extends AuthServiceRuntimeOptions {
   readonly root: string;
@@ -2987,7 +2993,7 @@ async function startAuthContext(o: AuthContextOptions): Promise<{ handle: Omit<A
     log,
     localManager: o.localManager,
     placementReconciler: o.placementReconciler,
-    placementAuthenticator: o.placementAuthenticator,
+    placementAuthenticator: reconcilerServiceAuthenticator(reconcilerPrincipalFor(ownerSecret, space, keys.dataAccount.pub)),
     placementRolePolicy: o.placementRolePolicy,
     ...(o.interactiveManagerSelection !== undefined ? { interactiveManagerSelection: o.interactiveManagerSelection } : {}),
     ...(o.runCancelLimits !== undefined ? { runCancelLimits: o.runCancelLimits } : {}),

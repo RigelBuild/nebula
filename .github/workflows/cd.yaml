@@ -278,6 +278,16 @@ jobs:
                 # just exit 0. An empty expectation fails, never passes.
                 test -n "$3" && docker run --rm "$2" --version | grep -Fqx "autoscaler version $3"
                 ;;
+              headlamp)
+                # The image must run and carry the tested commit as its frontend git
+                # version. $SOURCE is the commit passed as the build arg. An empty or
+                # "unknown" value fails: that is the Dockerfile default when the arg is
+                # missing. --version prints only the Go constant, so the check reads the
+                # frontend bundle the image serves.
+                test -n "$SOURCE" && test "$SOURCE" != unknown &&
+                  docker run --rm "$2" --version > /dev/null &&
+                  docker run --rm --entrypoint /bin/sh "$2" -c "grep -rqsF -- '$SOURCE' /headlamp/frontend"
+                ;;
             esac
           }
           mkdir -p "$RUNNER_TEMP/images/held"

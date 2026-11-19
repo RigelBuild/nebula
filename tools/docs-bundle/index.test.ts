@@ -717,7 +717,7 @@ describe("docs bundle helpers", () => {
 		const root = await fixture();
 		expect(await readFetched(join(root, "missing.json"))).toEqual([]);
 		const manifest = {
-			docsRepo: { repo: "RigelBuild/docs", sha: "def456" },
+			docsRepo: { repo: "RigelBuild/nebula", sha: "def456" },
 			sources: [{ repo: source.repo, ref: "main", sha: source.sha, pages: 2 }],
 		};
 		await writeManifest(join(root, "dist"), manifest);

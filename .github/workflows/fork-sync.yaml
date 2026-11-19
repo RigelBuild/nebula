@@ -1,0 +1,98 @@
+name: Fork sync
+
+# Syncs every vendored fork from its upstream, one job per fork. A fork is any
+# forks/<name>/upstream.json, so adding a fork needs no edit here.
+on:
+  schedule:
+    - cron: '0 * * * *'
+  workflow_dispatch:
+    inputs:
+      fork:
+        description: Fork name under forks/ to sync (empty syncs every fork)
+        required: false
+        type: string
+        default: ''
+
+# Pushes and pull requests use the App token, not GITHUB_TOKEN, so the PRs start CI.
+permissions: {}
+
+jobs:
+  plan:
+    name: Plan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      forks: ${{ steps.plan.outputs.forks }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: List forks
+        id: plan
+        env:
+          FORK: ${{ inputs.fork }}
+        run: |
+          set -euo pipefail
+          # ls fails when no upstream.json exists, so an empty fork set stops the run here.
+          names=$(ls forks/*/upstream.json | cut -d/ -f2 | jq -R -s -c 'split("\n") | map(select(length > 0))')
+          if [ -n "$FORK" ]; then
+            names=$(jq -c --arg fork "$FORK" 'map(select(. == $fork))' <<<"$names")
+            if [ "$names" = '[]' ]; then
+              echo "::error::no fork named $FORK under forks/"
+              exit 1
+            fi
+          fi
+          echo "$names"
+          echo "forks=$names" >> "$GITHUB_OUTPUT"
+
+  sync:
+    name: Sync ${{ matrix.fork }}
+    needs: plan
+    runs-on: ubuntu-latest
+    environment: main
+    concurrency:
+      group: fork-sync-${{ matrix.fork }}
+      cancel-in-progress: false
+    strategy:
+      fail-fast: false
+      matrix:
+        fork: ${{ fromJSON(needs.plan.outputs.forks) }}
+    permissions:
+      contents: read
+    steps:
+      - name: Mint automation App token
+        id: app
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510
+        with:
+          client-id: ${{ vars.AUTOMATION_APP_CLIENT_ID }}
+          private-key: ${{ secrets.AUTOMATION_APP_PRIVATE_KEY }}
+          owner: RigelBuild
+          repositories: nebula
+          permission-contents: write
+          permission-pull-requests: write
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version: '1.27.4'
+          cache: false
+      - name: Configure git credential helper
+        run: |
+          # Scoped to github.com so the App token is never offered to another host
+          # (jj-vine syncs from Codeberg). The helper reads GITHUB_TOKEN when git
+          # asks, so the token is not written to disk.
+          git config --global credential.https://github.com.helper '!f() { echo username=x-access-token; echo "password=$GITHUB_TOKEN"; }; f'
+      - name: Sync fork
+        env:
+          CGO_ENABLED: '0'
+          FORK: ${{ matrix.fork }}
+          GITHUB_TOKEN: ${{ steps.app.outputs.token }}
+        run: go -C tools/fork-sync run . sync --name "$FORK" --root "$GITHUB_WORKSPACE"

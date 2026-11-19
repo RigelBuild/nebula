@@ -748,3 +748,52 @@ func TestRepositoryPrefilterKeepsEveryConfiguredPattern(t *testing.T) {
 		}
 	})
 }
+
+func TestRepositoryConfigRejectsSealedReferences(t *testing.T) {
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller failed")
+	}
+	config, err := LoadConfig(filepath.Join(filepath.Dir(file), "..", "ref-gate.config.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	former := strings.Join([]string{"seal", "ed"}, "")
+	tests := []struct {
+		name     string
+		path     string
+		text     string
+		wantCode int
+		wantLine string
+	}{
+		{
+			name:     "sealed/x in a non-allowlisted file fails the gate",
+			path:     "docs/page.md",
+			text:     "see " + former + "/x for details\n",
+			wantCode: 1,
+			wantLine: "docs/page.md:1: see " + former + "/x for details\n",
+		},
+		{
+			name:     "a file without a sealed reference passes the gate",
+			path:     "docs/page.md",
+			text:     "see the public docs\n",
+			wantCode: 0,
+			wantLine: "ref-gate: clean\n",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			repository := createTrackedRepository(t, map[string]string{test.path: test.text})
+			var stdout, stderr bytes.Buffer
+			code := runOnce(t.Context(), repository, config, GitGrep, &stdout, &stderr)
+			if code != test.wantCode {
+				t.Fatalf("runOnce = %d, stdout %q, stderr %q; want %d", code, stdout.String(), stderr.String(), test.wantCode)
+			}
+			got := stdout.String() + stderr.String()
+			if !strings.Contains(got, test.wantLine) {
+				t.Fatalf("output = %q; want it to contain %q", got, test.wantLine)
+			}
+		})
+	}
+}

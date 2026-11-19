@@ -1,20 +1,20 @@
 # yaml-language-server: $schema=https://moonrepo.dev/schemas/project.json
 #
 # Tasks run from this project's directory, which is the fork tree root.
-# The devshell has cargo, but not the Nix C++ headers or bindgen that nix-bindings needs. CI skips these tasks until those are added.
+# Each task enters the fork's own devShell (forks/devenv/flake.nix
+# devShells.default), which supplies the Nix C API .dev packages, boehmgc,
+# and libclang that nix-bindings-bindgen-raw needs.
 layer: 'application'
 language: 'rust'
 tasks:
   build:
-    command: cargo
-    args: ['build']
+    command: nix
+    args: ['develop', '--command', 'cargo', 'build']
     options:
-      # Blocker: nix-bindings needs Nix C++ headers and bindgen. The devshell has neither.
-      runInCI: false
+      runInCI: true
   test:
-    command: cargo
-    args: ['test']
+    command: nix
+    args: ['develop', '--command', 'cargo', 'test']
     options:
       cache: false
-      # Same blocker as build: nix-bindings needs Nix C++ headers and bindgen.
-      runInCI: false
+      runInCI: true

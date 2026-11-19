@@ -1,6 +1,6 @@
 id: "nix2container"
 release: {
-	base: "1.1.0-rigel.1"
+	base: "1.1.0-rigel.2"
 	artifacts: {
 		"nix2container": {
 			kind:     "nix"

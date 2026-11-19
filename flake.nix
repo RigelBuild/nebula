@@ -195,7 +195,7 @@
             env = (old.env or { }) // {
               CGO_ENABLED = "0";
             };
-            version = "1.1.0-rigel.1";
+            version = "1.1.0-rigel.2";
             passthru = (old.passthru or { }) // { upstreamRev = upstream.commit; };
           });
         };

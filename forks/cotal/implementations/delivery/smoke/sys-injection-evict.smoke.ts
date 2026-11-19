@@ -1,6 +1,6 @@
 /**
  * U3 GATE — live eviction proven per space from a STORE-INJECTED composition
- * (RigelBuild/nebula `docs/designs/cotal/u3-membership-sys-injection.md` §6).
+ * (the cotal u3-membership-sys-injection design record §6).
  *
  * The claim under test is not "the code compiles with a store": it is that the `$SYS` pair — the
  * CONNZ observer and the KICK evictor — can come from an injected {@link SecretStore} with **no

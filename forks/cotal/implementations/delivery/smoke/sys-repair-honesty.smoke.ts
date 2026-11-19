@@ -1,6 +1,6 @@
 /**
  * THE `$SYS` REPAIR ADVICE NAMES ONLY COMMANDS THIS ROOT CAN RUN
- * (RigelBuild/nebula `docs/designs/cotal/space-segmentation-p7-p1.md` §6, promoted from the probe that found this).
+ * (the cotal space-segmentation-p7-p1 design record §6, promoted from the probe that found this).
  *
  * The delivery daemon reports a missing or half-rotated `$SYS` pair and tells the operator how to
  * repair it. On a multi-tenant root it used to name `cotal down` then `cotal up --rotate-sys`, and

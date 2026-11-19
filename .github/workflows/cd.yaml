@@ -570,3 +570,25 @@ jobs:
         if: vars.AUTOMATION_APP_CLIENT_ID == ''
         run: |
           echo "::warning::homebrew-tap sync skipped: automation App credentials not configured (RIG-10833)"
+
+  held:
+    name: Held packages and images
+    needs: [release, tag-images]
+    if: always() && needs.release.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Fail the run when the release holds a package or image
+        # A held package or image keeps its previous asset or digest, and the Release
+        # still ships. This job makes that visible: the run goes red so the hold is seen.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.release.outputs.tag }}
+        run: |
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern release-manifest.json --dir "$RUNNER_TEMP"
+          held=$(jq -r '.held | join(" ")' "$RUNNER_TEMP/release-manifest.json")
+          if [ -n "$held" ]; then
+            echo "::error::held: ${held// /, }"
+            exit 1
+          fi

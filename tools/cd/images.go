@@ -34,9 +34,9 @@ type ImageSpec struct {
 // Image is one manifest image entry: the repository, this Release's tag on it,
 // and the pushed digest, so a consumer can pin repository:tag@digest.
 type Image struct {
-	Name   string `json:"name"`
-	Tag    string `json:"tag"`
-	Digest string `json:"digest"`
+	Repository string `json:"repository"`
+	Tag        string `json:"tag"`
+	Digest     string `json:"digest"`
 }
 
 type imagesComponent struct {
@@ -117,7 +117,7 @@ func buildImages(p Plan, tag string, digests map[string]string, held []string) (
 			if !ok {
 				return nil, nil, fmt.Errorf("%w: image %s was built and has no digest", errImageDigest, i.Name)
 			}
-			images[i.Name] = Image{Name: i.Repository, Tag: tag, Digest: digest}
+			images[i.Name] = Image{Repository: i.Repository, Tag: tag, Digest: digest}
 			continue
 		}
 		old, ok := prev.Images[i.Name]
@@ -127,7 +127,7 @@ func buildImages(p Plan, tag string, digests map[string]string, held []string) (
 			}
 			return nil, nil, fmt.Errorf("image %s was not built and has no previous Release entry", i.Name)
 		}
-		images[i.Name] = Image{Name: i.Repository, Tag: tag, Digest: old.Digest}
+		images[i.Name] = Image{Repository: i.Repository, Tag: tag, Digest: old.Digest}
 	}
 	return images, heldImages, nil
 }

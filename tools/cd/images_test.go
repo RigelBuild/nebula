@@ -87,7 +87,7 @@ func TestPlanRefusesAnIncompleteImage(t *testing.T) {
 
 func TestManifestImagesRoundTrip(t *testing.T) {
 	in := Manifest{Source: "s", Tag: "nebula-20261117-1", Held: []string{}, Packages: map[string]Package{},
-		Images: map[string]Image{"omp": {Name: "ghcr.io/rigelbuild/omp", Tag: "nebula-20261117-1", Digest: "sha256:aa"}}}
+		Images: map[string]Image{"omp": {Repository: "ghcr.io/rigelbuild/omp", Tag: "nebula-20261117-1", Digest: "sha256:aa"}}}
 	data, err := json.Marshal(in)
 	if err != nil {
 		t.Fatal(err)
@@ -125,7 +125,7 @@ func TestOldManifestWithoutImagesParses(t *testing.T) {
 func imagePlan(t *testing.T, build []string) Plan {
 	t.Helper()
 	prev, err := json.Marshal(Manifest{Source: "old", Tag: "nebula-20261101-1", Images: map[string]Image{
-		"omp": {Name: "ghcr.io/rigelbuild/omp", Tag: "nebula-20261101-1", Digest: "sha256:old"}}})
+		"omp": {Repository: "ghcr.io/rigelbuild/omp", Tag: "nebula-20261101-1", Digest: "sha256:old"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,7 +135,7 @@ func imagePlan(t *testing.T, build []string) Plan {
 
 func TestImagesCarryTheirDigestWhenNotRebuilt(t *testing.T) {
 	tag := "nebula-20261117-5"
-	want := Image{Name: "ghcr.io/rigelbuild/omp", Tag: tag, Digest: "sha256:old"}
+	want := Image{Repository: "ghcr.io/rigelbuild/omp", Tag: tag, Digest: "sha256:old"}
 	for _, tc := range []struct {
 		name     string
 		build    []string
@@ -170,6 +170,50 @@ func TestImagesRecordTheNewDigestWhenRebuilt(t *testing.T) {
 	}
 	if _, _, err := buildImages(imagePlan(t, []string{"omp"}), "t", nil, nil); err == nil {
 		t.Fatal("a built image with no digest must fail")
+	}
+}
+
+func TestUnplannedImageWithoutPreviousEntryFails(t *testing.T) {
+	p := imagePlan(t, nil)
+	p.Previous = nil
+	_, _, err := buildImages(p, "t", nil, nil)
+	if err == nil || !strings.Contains(err.Error(), "no previous Release entry") {
+		t.Fatalf("err = %v, want the no-previous-entry error", err)
+	}
+}
+
+func TestImageHeldBeforeFirstReleaseIsSkipped(t *testing.T) {
+	p := imagePlan(t, []string{"omp"})
+	p.Previous = nil
+	images, held, err := buildImages(p, "t", map[string]string{"omp": "sha256:new"}, []string{"omp"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := images["omp"]; ok {
+		t.Fatalf("held image with no previous Release was recorded: %+v", images)
+	}
+	if !reflect.DeepEqual(held, []string{"omp"}) {
+		t.Fatalf("held = %v, want [omp]", held)
+	}
+}
+
+func TestManifestMergesAndSortsHeldPackagesAndImages(t *testing.T) {
+	// Neither has a previous Release, so both are skipped and only listed as held.
+	p := Plan{Source: "s", Build: []string{"beta"}, BuildImages: []string{"aaa"},
+		Binaries: []Binary{{Package: "beta", Version: "1.2.0"}},
+		Images:   []ImageSpec{{Name: "aaa", Repository: "ghcr.io/x/aaa"}}}
+	in := &manifestInput{planPath: writePlan(t, p), tag: "nebula-20261117-8", baseURL: "https://x/",
+		systems: []string{"x86_64-linux"}, held: []string{"beta", "aaa"}}
+	data, err := in.build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m Manifest
+	if err := json.Unmarshal(data, &m); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(m.Held, []string{"aaa", "beta"}) {
+		t.Fatalf("held = %v, want [aaa beta]", m.Held)
 	}
 }
 

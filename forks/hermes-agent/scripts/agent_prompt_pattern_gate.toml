@@ -1,0 +1,105 @@
+# Config for scripts/agent_prompt_pattern_gate.py (RIG-10290).
+#
+# globs: repo-relative patterns of agent-facing prompt text. Each file is scanned line by line.
+# exclude_globs: paths dropped after globbing.
+# pattern: a case-insensitive regex. A line that matches it is a finding.
+# config_keys: regexes blanked out of a line before `pattern` runs, so config terms such as
+#   `reasoning_effort: high` or `--reasoning max` are not flagged.
+# exceptions: exact markdown `path:line` strings allowed through. Keep each one to a real, reviewed hit.
+# symbol_exceptions: "<repo-relative .py path>:<dotted symbol>" entries. A raw hit inside the source
+#   span of that top-level or class-nested def, class, or assignment is allowed. The span covers
+#   its decorators and the comment lines directly above it. A symbol with no raw hit is stale.
+#   A name bound twice in its file is ambiguous: it exempts nothing and is reported.
+#   A symbol nests at most one level, Class.member; deeper names are rejected at load.
+
+globs = [
+  "skills/**/SKILL.md",
+  "optional-skills/**/SKILL.md",
+  "plugins/**/SKILL.md",
+  "skills/**/references/**/*.md",
+  "optional-skills/**/references/**/*.md",
+  "plugins/**/references/**/*.md",
+  "agent/prompt_builder.py",
+  "agent/system_prompt.py",
+  "agent/delegation_prompt.py",
+  "agent/learn_prompt.py",
+  "agent/plan_prompt.py",
+  "agent/background_review.py",
+  "agent/context_compressor*.py",
+  "agent/conversation_compression*.py",
+  "cron/scheduler_prompt.py",
+  "AGENTS.md",
+  "**/AGENTS.md",
+]
+exclude_globs = [
+  "**/node_modules/**",
+  # Vendored upstream docs (generated from each project's docs site). Edits here conflict on
+  # every upstream sync, so the gate leaves them alone.
+  "optional-skills/mlops/training/**",
+  "optional-skills/mlops/pytorch-fsdp/references/**",
+]
+
+pattern = "(?i)reasoning|chain of thought|chain-of-thought|thinking process|your thought process|explain (your|how you)|walk (me )?through (your|how)|show your work|step[- ]by[- ]step|think (out loud|aloud)|internal monologue|scratchpad"
+
+config_keys = [
+  "(?i)^\\s*[\"']?(?:reasonin[g]_effort|thinking[-_]level|thinkingLevel)[\"']?\\s*:",
+  "^\\s*--reasonin[g](?:[= ]|$)",
+  "(?i)\\b\\w*reasoning\\w*\\s*=(?!=)",
+  "(?i)\\[\\s*[\"']\\w*reasoning\\w*[\"']\\s*\\]\\s*=(?!=)",
+]
+
+exceptions = [
+  "agent/AGENTS.md:49",
+  "agent/AGENTS.md:101",
+  "optional-skills/creative/system-atlas/SKILL.md:25",
+  "optional-skills/devops/actual-setup/SKILL.md:105",
+  "optional-skills/devops/actual-setup/SKILL.md:111",
+  "optional-skills/devops/actual-setup/SKILL.md:121",
+  "optional-skills/devops/actual-setup/SKILL.md:126",
+  "optional-skills/devops/actual-setup/references/opencode.md:75",
+  "optional-skills/devops/actual-setup/references/opencode.md:77",
+  "optional-skills/devops/actual-setup/references/opencode.md:79",
+  "optional-skills/devops/actual-setup/references/opencode.md:80",
+  "optional-skills/mlops/evaluation/evaluating-llms-harness/SKILL.md:67",
+  "optional-skills/mlops/evaluation/evaluating-llms-harness/references/benchmark-guide.md:267",
+  "optional-skills/mlops/research/dspy/references/examples.md:77",
+  "optional-skills/mlops/research/dspy/references/examples.md:223",
+  "optional-skills/mlops/research/dspy/references/modules.md:70",
+  "optional-skills/mlops/research/dspy/references/modules.md:77",
+  "optional-skills/mlops/research/dspy/references/optimizers.md:147",
+  "optional-skills/mlops/saelens/references/README.md:8",
+  "optional-skills/mlops/simpo/references/datasets.md:71",
+  "optional-skills/research/research-paper-writing/references/paper-types.md:231",
+  "optional-skills/security/godmode/SKILL.md:91",
+  "optional-skills/security/godmode/references/jailbreak-templates.md:66",
+  "optional-skills/security/godmode/references/refusal-detection.md:106",
+  "skills/autonomous-ai-agents/hermes-agent/references/configuration.md:14",
+  "skills/autonomous-ai-agents/hermes-agent/references/slash-commands.md:41",
+]
+
+symbol_exceptions = [
+  "agent/background_review.py:_warn_review_routing_fallback",
+  "agent/background_review.py:_USAGE_COUNTERS",
+  "agent/background_review.py:_same_model_parity_kwargs",
+  "agent/background_review.py:_warn_ignored_reasoning_effort",
+  "agent/background_review.py:_routed_reasoning_config",
+  "agent/background_review.py:_fork_init_kwargs",
+  "agent/background_review.py:build_cache_parity_fork",
+  "agent/context_compressor.py:drop_shadowed_checkpoints",
+  "agent/context_compressor.py:_prune_stale_reasoning_replay",
+  "agent/context_compressor.py:salvage_grown_transcript",
+  "agent/context_compressor.py:_REPLAY_BUDGET_KEYS",
+  "agent/context_compressor.py:_ALWAYS_REPLAYED_BUDGET_KEYS",
+  "agent/context_compressor.py:_NEWEST_TURN_ONLY_BUDGET_KEYS",
+  "agent/context_compressor.py:_STALE_REPLAY_PRUNE_KEYS",
+  "agent/context_compressor.py:_reasoning_details_text_chars",
+  "agent/context_compressor.py:_estimate_msg_budget_tokens",
+  "agent/context_compressor.py:ContextCompressor._find_inflight_user_task",
+  "agent/context_compressor.py:ContextCompressor._native_anthropic_budget",
+  "agent/context_compressor.py:ContextCompressor._finalize_compressed",
+  "agent/context_compressor_telemetry.py:CompressionTelemetryMixin._begin_compression_telemetry",
+  "agent/context_compressor_telemetry.py:CompressionTelemetryMixin._record_compression_effect",
+  "agent/conversation_compression.py:_salvage_or_refuse_grown_transcript",
+  "agent/conversation_compression.py:_commit_compaction",
+  "agent/conversation_compression_reply_anchor.py:_ensure_compressed_keeps_last_assistant_reply",
+]

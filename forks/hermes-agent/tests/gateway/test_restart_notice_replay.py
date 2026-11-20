@@ -51,7 +51,7 @@ def boot_notice(tmp_path, monkeypatch):
     runner._bind_voice_input_callback = Mock()
     runner._update_platform_runtime_status = Mock()
     runner._redeliver_failed_obligations_for_platform = AsyncMock()
-    runner._schedule_resume_pending_sessions = Mock()
+    runner._schedule_resume_pending_sessions_async = AsyncMock(return_value=0)
     monkeypatch.setattr("gateway.channel_directory.build_channel_directory", AsyncMock())
     # Unrelated conversation recovery is isolated.
     runner._claim_pending_obligations = AsyncMock(return_value=[])

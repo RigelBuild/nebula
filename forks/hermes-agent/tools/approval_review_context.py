@@ -112,14 +112,54 @@ def _refuse(path: str, reason: str) -> str:
     return ""
 
 
-def _owner_mode_problem(st: os.stat_result) -> str:
-    """Why an inode is not operator-controlled, or ``""`` when it is owned by root and not group- or
-    other-writable. The owner is the uid that can chmod the file, so only root qualifies."""
+_WRITABLE_PROBLEM = "is group- or other-writable"
+
+
+def _owner_mode_problem(st: os.stat_result, *, link: bool = False) -> str:
+    """Why an inode is not operator-controlled, or ``""`` when root owns it and no group or other user can write
+    it. The owner is the uid that can chmod the file, so only root qualifies. The kernel ignores a symlink's own
+    mode (it is always 0777), so a link (``link=True``) is judged by its owner alone."""
     if st.st_uid != 0:
-        return f"owned by uid {st.st_uid}, not root"
-    if st.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
-        return "group- or other-writable"
+        return f"is owned by uid {st.st_uid}, not root"
+    if not link and st.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+        return _WRITABLE_PROBLEM
     return ""
+
+
+def _chain_problem(chain: list[str]) -> tuple[str, str]:
+    """Check ``chain``, innermost first: a path, then each directory above it. Returns ``(entry, problem)`` for the
+    first entry that is not operator-controlled, or ``("", "")`` when every entry passes.
+
+    A root-owned sticky directory may be group- or other-writable when the entry directly under it is root-owned
+    and not writable: sticky stops other users renaming or deleting that entry. A missing innermost entry is
+    skipped, since opening it reports the miss."""
+    under_ok = False
+    for index, entry in enumerate(chain):
+        try:
+            st = os.lstat(entry)
+        except OSError as exc:
+            if index == 0 and isinstance(exc, FileNotFoundError):
+                continue
+            return entry, f"cannot be checked ({type(exc).__name__})"
+        problem = _owner_mode_problem(st, link=stat.S_ISLNK(st.st_mode))
+        sticky_root = stat.S_ISDIR(st.st_mode) and st.st_uid == 0 and bool(st.st_mode & stat.S_ISVTX)
+        if problem and not (problem == _WRITABLE_PROBLEM and sticky_root and under_ok):
+            return entry, problem
+        under_ok = not problem
+    return "", ""
+
+
+def _as_given_chain(path: str) -> list[str]:
+    """The configured path and every prefix of it, innermost first, exactly as typed. Nothing is resolved or
+    normalised, so a symlink anywhere on the way is an entry of its own. A relative path starts at the cwd."""
+    absolute = os.path.expanduser(path)
+    if not os.path.isabs(absolute):
+        absolute = os.path.join(os.getcwd(), absolute)
+    prefixes = ["/"]
+    for part in absolute.split("/"):
+        if part not in ("", "."):
+            prefixes.append(prefixes[-1].rstrip("/") + "/" + part)
+    return prefixes[::-1]
 
 
 def _ancestors(path: str) -> list[str]:
@@ -137,17 +177,21 @@ def _ancestors(path: str) -> list[str]:
 def approval_policy_path() -> str:
     """The resolved operator policy path, or ``""`` when none is configured or it is refused.
 
-    The path comes from ``HERMES_APPROVAL_POLICY_FILE`` (env wins) or ``approvals.policy_file``, and is
-    resolved with ``realpath``, so a symlink is judged by its target. It is refused, with one warning per
-    process, when either:
+    The path comes from ``HERMES_APPROVAL_POLICY_FILE`` (env wins) or ``approvals.policy_file``. The realpath is
+    what gets read, so a symlink is followed to its target. It is refused, with one warning per process, when:
 
-    * it lies inside the Hermes home, the cwd or the project root (trees the agent writes to), or
-    * an ancestor directory of the realpath, up to ``/``, is owned by a uid other than root or is
-      group- or other-writable.
+    * the realpath lies inside the Hermes home, the cwd or the project root (trees the agent writes to);
+    * an entry of the configured path, as typed, is not operator-controlled. Every prefix counts, so a symlink
+      the agent owns is refused even when its target is root-owned; or
+    * an entry of the realpath is not operator-controlled: the file and each directory above it, up to ``/``.
 
-    :func:`load_operator_policy` checks the file itself on the opened descriptor. The policy text is
-    trusted instructions for the reviewer, and the terminal tool runs as the agent user, so a policy
-    that user can rewrite is never loaded.
+    An entry is operator-controlled when root owns it and no group or other user can write it. A symlink is
+    judged by its owner alone, since the kernel ignores its mode. A root-owned sticky directory may be group-
+    or other-writable when the entry directly under it passes.
+
+    :func:`load_operator_policy` checks the file itself on the opened descriptor. The policy text is trusted
+    instructions for the reviewer, and the terminal tool runs as the agent user, so a policy that user can
+    rewrite is never loaded.
     """
     path = os.environ.get("HERMES_APPROVAL_POLICY_FILE", "").strip()
     if not path:
@@ -160,14 +204,12 @@ def approval_policy_path() -> str:
     for root in _writable_roots():
         if resolved == root or resolved.startswith(root + os.sep):
             return _refuse(resolved, f"is inside the agent-writable tree {root}")
-    for directory in _ancestors(resolved):
-        try:
-            st = os.lstat(directory)
-        except OSError as exc:
-            return _refuse(resolved, f"has ancestor {directory} that cannot be checked ({type(exc).__name__})")
-        problem = _owner_mode_problem(st)
-        if problem:
-            return _refuse(resolved, f"has ancestor {directory} that is {problem}")
+    entry, problem = _chain_problem(_as_given_chain(path))
+    if problem:
+        return _refuse(path, f"has entry {entry} that {problem}")
+    entry, problem = _chain_problem([resolved, *_ancestors(resolved)])
+    if problem:
+        return _refuse(resolved, f"has entry {entry} that {problem}")
     return resolved
 
 
@@ -185,13 +227,20 @@ def load_operator_policy() -> str:
     except OSError as exc:
         logger.warning("Approval policy file unreadable (%s: %s); reviewer runs without it", type(exc).__name__, exc)
         return ""
-    with os.fdopen(fd, encoding="utf-8") as handle:
-        st = os.fstat(handle.fileno())
+    owned = True  # until fdopen takes the descriptor, every refusal or error below closes it
+    try:
+        st = os.fstat(fd)
         if not stat.S_ISREG(st.st_mode):
             return _refuse(path, "is not a regular file")
         problem = _owner_mode_problem(st)
         if problem:
-            return _refuse(path, f"is {problem}")
+            return _refuse(path, problem)
+        handle = os.fdopen(fd, encoding="utf-8")
+        owned = False
+    finally:
+        if owned:
+            os.close(fd)
+    with handle:
         return handle.read().strip()
 
 

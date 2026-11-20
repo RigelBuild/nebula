@@ -33,7 +33,7 @@ from agent.credential_pool import (
 )
 from agent.error_classifier import USAGE_LIMIT_TEXT, FailoverReason
 from agent.retry_utils import parse_retry_after_seconds, reset_delay_from_message
-from agent.message_metadata import MERGED_RUNTIME_ROW, MERGED_TURN_PREFIX
+from agent.message_metadata import MERGED_TURN_PREFIX, is_merged_runtime_row, stamp_merged_runtime_row
 from agent.turn_context import drop_stale_api_content
 from agent.agent_runtime_helpers_placeholders import _INTERRUPTED_PLACEHOLDER
 from agent.primary_runtime_snapshot import _build_primary_runtime_snapshot
@@ -660,6 +660,17 @@ def _prune_unanswered_tool_calls(messages: list[dict]) -> tuple[list[dict], int]
     return pruned, repairs
 
 
+def _is_runtime_user_row(msg: dict) -> bool:
+    """A user-role row the runtime or an agent wrote: typed (``display_kind``), already a merged runtime row,
+    scaffolding by flag or prefix, or a heartbeat prompt delivered as a plain row (CLI watchdog, TUI)."""
+    from agent.conversation_compression_scaffolding import _message_text, is_user_role_scaffolding
+    from hermes_cli.heartbeat import HEARTBEAT_PROMPT_PREFIX
+
+    if msg.get("display_kind") or is_merged_runtime_row(msg) or is_user_role_scaffolding(msg):
+        return True
+    return _message_text(msg).lstrip().startswith(HEARTBEAT_PROMPT_PREFIX)
+
+
 def _merge_consecutive_users(messages: list[dict]) -> tuple[list[dict], int]:
     """Pass 3: merge consecutive plain-text user messages (no user input lost)."""
     from agent.context_compressor import _DB_PERSISTED_MARKER, split_user_originated_turn
@@ -687,6 +698,9 @@ def _merge_consecutive_users(messages: list[dict]) -> tuple[list[dict], int]:
             and _plain_text(prev.get("content", "")) and _plain_text(msg.get("content", ""))
         ):
             prev_content, new_content = prev.get("content", ""), msg.get("content", "")
+            # Judged per part before the merge: once welded, a runtime part after a typed one hides behind
+            # the typed text, and the display_kind of either part is gone.
+            holds_runtime_text = _is_runtime_user_row(prev) or _is_runtime_user_row(msg)
             merged_content = (
                 (prev_content + "\n\n" + new_content) if prev_content and new_content else (prev_content or new_content)
             )
@@ -720,8 +734,6 @@ def _merge_consecutive_users(messages: list[dict]) -> tuple[list[dict], int]:
             if prev.get("display_kind") and not msg.get("display_kind"):
                 marker_row_id = prev.get("_row_id")
                 prev.pop("display_kind", None)
-                # The runtime text stays in the row: keep it untrusted for the approval reviewer.
-                prev[MERGED_RUNTIME_ROW] = True
                 if msg.get("_row_id") is not None:
                     if isinstance(marker_row_id, int) and not isinstance(marker_row_id, bool):
                         absorbed_ids = prev.setdefault("_absorbed_row_ids", [])
@@ -730,6 +742,10 @@ def _merge_consecutive_users(messages: list[dict]) -> tuple[list[dict], int]:
                     prev["_row_id"] = msg["_row_id"]
                 # display_kind is part of the persisted row; reclassifying stales it even
                 # when the merged bytes reproduce the persisted content (empty absorb).
+                prev.pop(_DB_PERSISTED_MARKER, None)
+            if holds_runtime_text and not is_merged_runtime_row(prev):
+                # The runtime text stays in the row: keep it untrusted for the approval reviewer, across a resume.
+                stamp_merged_runtime_row(prev)
                 prev.pop(_DB_PERSISTED_MARKER, None)
             # Pop the persist marker only when the durable row actually changed: a merge that
             # reproduces the persisted bytes (e.g. an empty incoming turn) keeps its stamp.

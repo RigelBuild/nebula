@@ -28,9 +28,10 @@ REPAIR_BOOKKEEPING_FIELDS = frozenset({DB_ROW_SNAPSHOT, CANONICAL_ROW, RESTORED_
 # (agent_runtime_helpers._merge_consecutive_users); the persist override keeps it.
 # It repeats the row's own content, so pricing it would double the estimate.
 MERGED_TURN_PREFIX = "_merged_turn_prefix"
-# Set on a merged user row that absorbed a typed runtime row (a notice, a model-switch marker) and dropped its
-# ``display_kind``: the row holds runtime text, so the approval reviewer never treats it as a person's turn.
-MERGED_RUNTIME_ROW = "_merged_runtime_row"
+# ``display_metadata`` flag on a merged user row that absorbed a runtime row (a typed notice, a model-switch marker,
+# a plain heartbeat prompt), in either order: the row holds runtime text, so the approval reviewer never treats it
+# as a person's turn. Kept in ``display_metadata`` so the flush persists it and a resumed session reads it back.
+MERGED_RUNTIME_ROW = "merged_runtime_row"
 # The durable per-message id (``messages.message_uid``): minted once at the row's first insert and kept by
 # every host copy of that logical message (in-place compaction generation, rotation child, concurrent-tail
 # clone, replace re-issue, rewrite in place). Unlike ``_row_id`` (a physical id re-issued per copy, opt-in on
@@ -51,7 +52,7 @@ PERSISTENCE_ONLY_MESSAGE_FIELDS = frozenset(
     # to sweep underscore keys, but turn_context.py pops this set from every outgoing copy and a strict
     # backend 400s on any key it does not know.
     {"timestamp", "display_kind", "display_metadata", "_row_id", "_submit_row_session_id",
-     MERGED_TURN_PREFIX, MERGED_RUNTIME_ROW, MESSAGE_UID, ABSORBED_MESSAGE_UIDS, TOOL_CALL_UIDS, TOOL_CALL_UID,
+     MERGED_TURN_PREFIX, MESSAGE_UID, ABSORBED_MESSAGE_UIDS, TOOL_CALL_UIDS, TOOL_CALL_UID,
      # The alternation repair's row counts: an in-place compaction reads them off the live dict.
      MERGED_DURABLE_ROWS, UNNAMED_DURABLE_ROWS, RETIRED_DURABLE_ROWS}
 ) | REPAIR_BOOKKEEPING_FIELDS
@@ -72,6 +73,17 @@ def _display_metadata_str(message: Any, key: str) -> Optional[str]:
     metadata = message.get("display_metadata") if isinstance(message, Mapping) else None
     value = metadata.get(key) if isinstance(metadata, Mapping) else None
     return value if isinstance(value, str) else None
+
+
+def stamp_merged_runtime_row(message: MutableMapping[str, Any]) -> None:
+    """Mark a merged user row that absorbed runtime text (see :data:`MERGED_RUNTIME_ROW`)."""
+    _set_display_metadata_key(message, MERGED_RUNTIME_ROW, True)
+
+
+def is_merged_runtime_row(message: Any) -> bool:
+    """Whether *message* is a merged user row holding runtime text, live or reloaded."""
+    metadata = message.get("display_metadata") if isinstance(message, Mapping) else None
+    return isinstance(metadata, Mapping) and metadata.get(MERGED_RUNTIME_ROW) is True
 
 
 def data_use_requirement(messages: Any) -> frozenset[str]:

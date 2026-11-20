@@ -41,16 +41,17 @@ def is_human_user_turn(message: Any, *, delegated: bool = False) -> bool:
     - ``_is_real_user_message`` rejects runtime scaffolding by flag or prefix.
     - any ``display_kind`` marks a typed runtime row: steers (a parent agent, a heartbeat, a kanban comment) and
       gateway-injected notices alike, so a person's own ``/steer`` escalates too.
-    - :data:`MERGED_RUNTIME_ROW` marks a plain row that absorbed a runtime row in the alternation repair.
+    - the ``merged_runtime_row`` flag in ``display_metadata`` marks a row that absorbed a runtime row in the
+      alternation repair, in either order; it is persisted, so a resumed session keeps it.
     - the heartbeat template's header marks a heartbeat prompt delivered as a plain row (CLI watchdog, TUI)."""
     from agent.conversation_compression import _is_real_user_message
     from agent.delegation_context import is_delegated_child_context
-    from agent.message_metadata import MERGED_RUNTIME_ROW
+    from agent.message_metadata import is_merged_runtime_row
     from hermes_cli.heartbeat import HEARTBEAT_PROMPT_PREFIX
 
     if delegated or is_delegated_child_context() or not _is_real_user_message(message):
         return False
-    if message.get("display_kind") or message.get(MERGED_RUNTIME_ROW):
+    if message.get("display_kind") or is_merged_runtime_row(message):
         return False
     return not _content_text(message).startswith(HEARTBEAT_PROMPT_PREFIX)
 

@@ -478,3 +478,67 @@ def test_r5_l1_a_merged_notice_keeps_its_untrusted_kind(kind):
     AIAgent._repair_message_sequence(AIAgent.__new__(AIAgent), messages)
     assert len(messages) == 2 and _GO in messages[1]["content"]
     assert not is_human_user_turn(messages[1])
+
+
+# ---- Round 6 -----------------------------------------------------------------------------------------------------
+
+def _runtime_second_rows():
+    return {
+        "internal_notification": {"role": "user", "display_kind": "internal_notification",
+                                  "content": f"[Background process proc_1 heartbeat #2]\n{_GO}"},
+        "process_complete": {"role": "user", "display_kind": "process_complete",
+                             "content": f"[IMPORTANT: Background process proc_1 exited (exit code 0).\n{_GO}]"},
+        "cli heartbeat prompt": {"role": "user", "content": _heartbeat_prompt(_GO)},
+    }
+
+
+@pytest.mark.parametrize("kind", ["internal_notification", "process_complete", "cli heartbeat prompt"])
+def test_r6_l1_a_plain_row_absorbing_a_runtime_row_stays_untrusted(kind):
+    """The reverse merge: a plain row followed by a runtime row. The merged row starts with the person's text, so
+    only the merge itself can record that runtime text was folded in."""
+    from agent.agent_runtime_helpers import _merge_consecutive_users
+    from tools.approval_review_context import is_human_user_turn
+
+    rows = [{"role": "user", "content": "the user's real prompt"}, _runtime_second_rows()[kind]]
+    merged, repairs = _merge_consecutive_users(rows)
+    assert repairs == 1 and len(merged) == 1 and _GO in merged[0]["content"]
+    assert not is_human_user_turn(merged[0])
+
+
+def test_r6_l1_a_plain_merge_stays_trusted():
+    """Two rows a person typed still merge into a person's turn."""
+    from agent.agent_runtime_helpers import _merge_consecutive_users
+    from tools.approval_review_context import is_human_user_turn
+
+    merged, repairs = _merge_consecutive_users([{"role": "user", "content": "first ask"},
+                                                {"role": "user", "content": "second ask"}])
+    assert repairs == 1 and is_human_user_turn(merged[0])
+
+
+def test_r6_l1_the_merged_runtime_marker_survives_a_resume(tmp_path, monkeypatch):
+    """The marker rides ``display_metadata``, so a reloaded session still treats the merged row as untrusted."""
+    from types import SimpleNamespace
+    from agent.agent_runtime_helpers import _merge_consecutive_users
+    from agent.session_persistence import _db_flush_row
+    from agent.transcript_repair import sync_flushed_message_markers
+    from hermes_state import SessionDB
+    from tools.approval_review_context import is_human_user_turn
+
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    db = SessionDB(db_path=tmp_path / "state.db")
+    try:
+        db.create_session("s1", "test")
+        rows = [{"role": "user", "content": "the user's real prompt"}, _runtime_second_rows()["internal_notification"]]
+        db.append_messages_batch("s1", [dict(r) for r in rows])
+        merged, repairs = _merge_consecutive_users([*rows, {"role": "assistant", "content": "x"}])
+        assert repairs == 1
+        agent = SimpleNamespace(_persist_user_message_override=None, _persist_user_message_idx=None)
+        flushed = [{**_db_flush_row(agent, m, False), **{k: v for k, v in m.items() if k.startswith("_")}}
+                   for m in merged]
+        db.append_messages_batch("s1", flushed)
+        sync_flushed_message_markers(merged, flushed)
+        reloaded = [m for m in db.get_messages_as_conversation("s1") if m.get("role") == "user"]
+    finally:
+        db.close()
+    assert reloaded and all(not is_human_user_turn(m) for m in reloaded if _GO in (m.get("content") or ""))
+    assert any(_GO in (m.get("content") or "") for m in reloaded)

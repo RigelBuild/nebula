@@ -120,9 +120,11 @@
             pkgs = import nixpkgs { inherit system; };
             wrap = name: package:
               pkgs.stdenvNoCC.mkDerivation {
-                pname = name;
+                # Distinct from the source build's name, so consumers can tell a fetch from a compile.
+                pname = "${name}-prebuilt";
                 version = package.version;
                 passthru.upstreamRev = package.upstreamRev or null;
+                meta.mainProgram = name;
                 src = pkgs.fetchurl {
                   inherit (package.${system}) url sha256;
                 };
@@ -289,6 +291,19 @@
             }
             test "${merged.nix2container.version}" = "${expected}" || {
               echo "nix2container source build won over the release manifest" >&2
+              exit 1
+            }
+            touch $out
+          '';
+          # The wrapper must not take a source package's name: a consumer host's
+          # check fails on a derivation named <fork>-<digit>...
+          manifest-prebuilt-name = pkgs.runCommand "nebula-manifest-prebuilt-name" { } ''
+            test "${merged.docs-bundle.name}" = "docs-bundle-prebuilt-${expected}" || {
+              echo "the manifest wrapper kept the source package name" >&2
+              exit 1
+            }
+            test "${merged.docs-bundle.meta.mainProgram}" = "docs-bundle" || {
+              echo "the manifest wrapper has no meta.mainProgram" >&2
               exit 1
             }
             touch $out

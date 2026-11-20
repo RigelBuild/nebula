@@ -1,6 +1,6 @@
 # yaml-language-server: $schema=https://moonrepo.dev/schemas/project.json
 #
-# Cotal is a pnpm TypeScript monorepo; the root package.json owns the build and typecheck scripts.
+# Cotal is a pnpm TypeScript monorepo; the root package.json owns the build, typecheck, test and docs-bundle scripts.
 language: 'typescript'
 tags: ['typescript']
 
@@ -14,8 +14,7 @@ tasks:
       - 'pnpm-workspace.yaml'
       - '.npmrc'
     options:
-      # nebula devshell has no pnpm or node (only go, bun, moon, rumdl, biome); CI cannot run pnpm. See RIG-10145.
-      runInCI: false
+      runInCI: true
   build:
     command: 'pnpm'
     args: ['build']
@@ -34,8 +33,7 @@ tasks:
       - 'pnpm-workspace.yaml'
       - 'tsconfig*.json'
     options:
-      # nebula devshell has no pnpm or node (only go, bun, moon, rumdl, biome); CI cannot run pnpm. See RIG-10145.
-      runInCI: false
+      runInCI: true
   typecheck:
     command: 'pnpm'
     args: ['-r', 'typecheck']
@@ -53,5 +51,63 @@ tasks:
       - 'pnpm-workspace.yaml'
       - 'tsconfig*.json'
     options:
-      # nebula devshell has no pnpm or node (only go, bun, moon, rumdl, biome); CI cannot run pnpm. See RIG-10145.
-      runInCI: false
+      runInCI: true
+  # The zellij package is excluded: its holder-darwin smoke fails on Linux. Owner: RIG-11519.
+  test:
+    command: 'pnpm'
+    args: ['--filter', '!@cotal-ai/zellij', '-r', '--if-present', 'test']
+    deps:
+      - 'build'
+    inputs:
+      - 'packages/**/*'
+      - 'extensions/**/*'
+      - 'implementations/**/*'
+      - 'examples/**/*'
+      - 'bin/**/*'
+      - 'desktop/**/*'
+      - 'tools/docs-content/**/*'
+      - 'scripts/**/*'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+      - 'tsconfig*.json'
+    options:
+      runInCI: true
+  website-install:
+    command: 'npm'
+    args: ['--prefix', 'website', 'ci', '--ignore-scripts', '--no-audit', '--no-fund']
+    inputs:
+      - 'website/package.json'
+      - 'website/package-lock.json'
+    options:
+      runInCI: true
+  check-docsbundle:
+    command: 'pnpm'
+    args: ['check:docsbundle']
+    deps:
+      - 'build'
+      - 'website-install'
+    inputs:
+      - 'packages/**/*'
+      - 'extensions/**/*'
+      - 'implementations/**/*'
+      - 'examples/**/*'
+      - 'bin/**/*'
+      - 'desktop/**/*'
+      - 'tools/docs-content/**/*'
+      - 'docs/**/*'
+      - 'spec/**/*'
+      - 'scripts/**/*'
+      - 'skills/**/*'
+      - 'website/**/*'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+      - 'tsconfig*.json'
+      - 'typedoc.json'
+      - 'README.md'
+      - 'SPEC.md'
+      - 'llms.txt'
+    options:
+      cache: false
+      runInCI: true

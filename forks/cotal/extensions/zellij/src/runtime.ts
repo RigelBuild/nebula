@@ -16,6 +16,7 @@ import {
 import * as zellij from "./driver.js";
 import { readZellijPlacement, type AgentPlacement } from "./placement.js";
 const CONFIRM_BUDGET_MS = 1_000;
+const STATUS_BUDGET_MS = 1_000;
 
 export interface PrivateLauncher {
   /** Runs the launcher script from `cwd`, so zellij's fallback pane title reads `./<agent>.cjs`. */
@@ -92,6 +93,40 @@ export async function waitForLauncherExit(dir: string, pollMs = 1_000): Promise<
   while (launcherState(dir) === "running") await new Promise<void>((resolve) => setTimeout(resolve, pollMs));
 }
 
+/** One read of a seat. Its launcher's files answer first, with no zellij call; only a seat whose launcher
+ * never wrote a pid or an exit file asks its pane. A probe that throws is "unknown", not a dead pane. */
+type SeatProbe = "running" | "exited" | "unknown";
+
+function probeSeat(dir: string, session: string, paneId: string): SeatProbe {
+  const state = launcherState(dir);
+  if (state === "exited" || existsSync(join(dir, "pid"))) return state;
+  try {
+    // "dead-session" (no session listed) and "exited" (the pane is gone) both end the seat.
+    return zellij.paneState(session, paneId, Date.now() + STATUS_BUDGET_MS) === "running" ? "running" : "exited";
+  } catch (error) {
+    console.error(`zellij runtime: could not read pane ${paneId} state: ${error instanceof Error ? error.message : String(error)}`);
+    return "unknown";
+  }
+}
+
+/** A seat whose launcher never wrote a pid or an exit file may never have loaded. Its pane settles it.
+ * The probe has a fixed budget; a probe that fails or runs past it reads running, because an unknown pane is not a dead one. */
+export function seatState(dir: string, session: string, paneId: string): "running" | "exited" {
+  return probeSeat(dir, session, paneId) === "exited" ? "exited" : "running";
+}
+
+/** Waits until the seat exits. After maxProbeFailures unknown reads in a row it throws, so a wait on an unreadable pane ends. */
+export async function waitForSeatExit(dir: string, session: string, paneId: string, pollMs = 1_000, maxProbeFailures = 30): Promise<void> {
+  let failures = 0;
+  for (;;) {
+    const state = probeSeat(dir, session, paneId);
+    if (state === "exited") return;
+    failures = state === "unknown" ? failures + 1 : 0;
+    if (failures >= maxProbeFailures) throw new Error(`zellij runtime: pane ${paneId} state unknown after ${failures} failed probes`);
+    await new Promise<void>((resolve) => setTimeout(resolve, pollMs));
+  }
+}
+
 function cleanupLauncher(launcher: PrivateLauncher): void {
   try {
     rmSync(launcher.dir, { recursive: true, force: true });
@@ -117,6 +152,8 @@ function paneForTab(session: string, tabId: number): string {
  * undefined until the watch settles, so a caller waits on that event rather than on a timer. */
 export interface ZellijAgentHandle extends AgentHandle {
   confirmOutcome(): string | undefined;
+  /** The failure text of a watch that ended `failed`, or undefined. */
+  confirmFailure(): string | undefined;
 }
 
 export class ZellijRuntime implements Runtime {
@@ -187,11 +224,13 @@ export class ZellijRuntime implements Runtime {
     // The watch reports how it ended through `settled`. The handle exposes that outcome, so a caller
     // waits on the event itself rather than on a timer.
     let settledOutcome: string | undefined;
+    let failureText: string | undefined;
     watch?.({
       read: () => zellij.dumpScreen(this.session, startedPane, Date.now() + CONFIRM_BUDGET_MS),
       enter: () => zellij.writePane(this.session, startedPane, "13", Date.now() + CONFIRM_BUDGET_MS),
       down: () => zellij.writeKeyDown(this.session, startedPane, Date.now() + CONFIRM_BUDGET_MS),
       fail: (message) => {
+        failureText = message;
         console.error(`zellij runtime: "${name}": ${message}`);
         try {
           zellij.closePane(this.session, startedPane, Date.now() + CONFIRM_BUDGET_MS);
@@ -206,7 +245,7 @@ export class ZellijRuntime implements Runtime {
     return {
       name,
       kind: "zellij",
-      status: () => launcherState(launcher.dir),
+      status: () => seatState(launcher.dir, this.session, startedPane),
       stop: () => {
         try {
           zellij.closePane(this.session, startedPane);
@@ -216,7 +255,8 @@ export class ZellijRuntime implements Runtime {
       },
       interrupt: () => zellij.interruptPane(this.session, startedPane),
       confirmOutcome: () => settledOutcome,
-      waitForExit: () => waitForLauncherExit(launcher.dir),
+      confirmFailure: () => failureText,
+      waitForExit: () => waitForSeatExit(launcher.dir, this.session, startedPane),
       attach: () => {
         throw new Error(`zellij runtime: attach natively with zellij attach ${this.session}`);
       },

@@ -51,16 +51,32 @@ function run(args: string[], options: RunOptions = { encoding: "utf8" }): string
 
 /** Read the active viewport of a terminal pane; every call shares one deadline so a watch cannot stall the manager. */
 export function dumpScreen(session: string, paneId: string, deadline: number): string | undefined {
-  if (paneState(session, paneId, deadline) === "exited") return undefined;
-  let screen: string | undefined;
   try {
-    screen = run(actionArgs(session, ["dump-screen", "--pane-id", paneId]), { encoding: "utf8", deadline });
+    // zellij 0.45 dumps a held, exited pane's last screen with rc 0, so the pane must be seen running before and after the dump.
+    if (!paneLive(session, paneId, deadline)) return undefined;
+    let screen: string;
+    try {
+      screen = run(actionArgs(session, ["dump-screen", "--pane-id", paneId]), { encoding: "utf8", deadline });
+    } catch (error) {
+      // The pane can exit while zellij dumps it, and zellij then fails the dump. A pane that is no longer live has no screen; any other failure is the dump's own.
+      if (paneLive(session, paneId, deadline)) throw error;
+      return undefined;
+    }
+    // The pane can exit during the dump; its screen is then the last one it held, so it is dropped.
+    return paneLive(session, paneId, deadline) ? screen : undefined;
   } catch (error) {
-    if (Date.now() >= deadline) throw error;
+    if (isNoSessionsError(error)) throw deadSessionError(session);
+    throw error;
   }
-  if (paneState(session, paneId, deadline) === "exited") return undefined;
-  if (screen === undefined) throw new Error(`zellij runtime: could not read pane ${paneId}`);
-  return screen;
+}
+
+function paneLive(session: string, paneId: string, deadline: number): boolean {
+  const pane = readPanes(session, deadline).find((candidate) => candidate.id === paneId && !candidate.is_plugin);
+  return pane !== undefined && !pane.exited && pane.exit_status === null;
+}
+
+function deadSessionError(session: string): Error {
+  return new Error(`zellij runtime: session ${JSON.stringify(session)} is dead-session; its panes cannot be read`);
 }
 
 function actionArgs(session: string, action: string[]): string[] {
@@ -68,6 +84,8 @@ function actionArgs(session: string, action: string[]): string[] {
 }
 
 const NO_SESSIONS = "No active zellij sessions found";
+// zellij's answer for a session name it does not list, printed when the session is named with --session.
+const SESSION_NOT_FOUND = /Session '[^']*' not found\. The following sessions are active:/;
 
 // Dead sessions stay listed (resurrectable) with an EXITED suffix; they are not live.
 export function hasLiveSession(listing: string, session: string): boolean {
@@ -79,7 +97,8 @@ export function hasLiveSession(listing: string, session: string): boolean {
 function isNoSessionsError(error: unknown): boolean {
   if (!error || typeof error !== "object" || !("stderr" in error)) return false;
   const { stderr } = error;
-  return (typeof stderr === "string" || Buffer.isBuffer(stderr)) && String(stderr).includes(NO_SESSIONS);
+  const text = typeof stderr === "string" || Buffer.isBuffer(stderr) ? String(stderr) : "";
+  return text.includes(NO_SESSIONS) || SESSION_NOT_FOUND.test(text);
 }
 
 // Only zellij's own "no sessions" answer means absent; any other probe failure throws, so a
@@ -261,8 +280,8 @@ export function listTabs(session: string): ZellijTab[] {
   });
 }
 
-export function listPanes(session: string, deadline?: number): ZellijPane[] {
-  if (!sessionExists(session, deadline)) return [];
+/** One `list-panes` call, parsed. Callers add their own session probe if they need one. */
+function readPanes(session: string, deadline?: number): ZellijPane[] {
   const rows = parseArray(run(actionArgs(session, ["list-panes", "--json", "--all"]), { encoding: "utf8", deadline }), "pane list");
   return rows.flatMap((row): ZellijPane[] => {
     if (typeof row !== "object" || row === null || Array.isArray(row)) return [];
@@ -279,6 +298,11 @@ export function listPanes(session: string, deadline?: number): ZellijPane[] {
     ) return [];
     return [{ id: `terminal_${id}`, tab_id: tabId, title, is_plugin: isPlugin, exited, exit_status: exitStatus }];
   });
+}
+
+export function listPanes(session: string, deadline?: number): ZellijPane[] {
+  if (!sessionExists(session, deadline)) return [];
+  return readPanes(session, deadline);
 }
 
 // No `-- <cmd>`: zellij ignores OSC titles from command panes, so the agent is typed into a shell pane.
@@ -365,8 +389,10 @@ export function interruptPane(session: string, paneId: string): void {
   writePane(session, paneId, "3");
 }
 
-export function paneState(session: string, paneId: string, deadline?: number): "running" | "exited" {
-  if (!sessionExists(session, deadline)) return "exited";
+export type PaneState = "running" | "exited" | "dead-session";
+
+export function paneState(session: string, paneId: string, deadline?: number): PaneState {
+  if (!sessionExists(session, deadline)) return "dead-session";
   const pane = listPanes(session, deadline).find((candidate) => candidate.id === paneId && !candidate.is_plugin);
   return !pane || pane.exited || pane.exit_status !== null ? "exited" : "running";
 }

@@ -78,14 +78,14 @@ def test_reviewer_is_not_called_unless_requested(monkeypatch):
     assert calls == []
 
 
-def test_reviewer_approve_still_asks_the_human(monkeypatch):
+def test_reviewer_approve_runs_without_asking_the_human(monkeypatch):
+    """Replaces the old 'approve still asks the human': a reviewer APPROVE runs the call, no prompt."""
     seen = _capture_human(monkeypatch)
-    _verdict(monkeypatch, "approve")
+    calls = _verdict(monkeypatch, "approve")
     result = request_tool_approval("terminal", "why", rule_key="k", display="cmd", review=True)
     assert result["approved"] is True
-    assert seen["command"] == "cmd"
-    assert seen["description"].startswith("why\n")
-    assert "passed" in seen["description"]
+    assert calls == ["cmd"]
+    assert seen == {}
 
 
 @pytest.mark.parametrize("verdict, prompts", [("approve", False), ("escalate", False), ("deny", True)])
@@ -114,7 +114,7 @@ def test_vault_metadata_is_in_reviewer_display_and_human_prompt(monkeypatch):
     assert "Production login" in calls[0]
     assert "owner@example.test" in calls[0]
     assert "https://example.test" in calls[0]
-    assert "Production login" in seen["command"]
+    assert seen == {}
 
 def test_reviewer_escalate_still_asks_the_human(monkeypatch):
     seen = _capture_human(monkeypatch)
@@ -344,7 +344,7 @@ def test_a_stale_reason_does_not_leak_into_the_next_prompt(monkeypatch):
 
     approval_smart._last_note.text = "left over from an earlier call"
     seen = _capture_human(monkeypatch)
-    _verdict(monkeypatch, "approve")
+    _verdict(monkeypatch, "escalate")
     request_tool_approval("terminal", "why", rule_key="k", display="cmd", review=True)
     assert "left over" not in seen["description"]
 

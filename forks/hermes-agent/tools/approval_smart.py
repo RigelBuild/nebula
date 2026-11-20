@@ -20,6 +20,7 @@ import time
 from datetime import UTC, datetime
 
 from tools import approval_context as _ctx
+from tools.approval_review_context import bound_command, load_operator_policy, render_review_context
 
 logger = logging.getLogger("tools.approval")
 
@@ -112,6 +113,16 @@ def _get_smart_policy() -> str:
     return policy.strip() if isinstance(policy, str) else ""
 
 
+def _session_text(name: str) -> str:
+    """A session identity value (platform, thread) for the reviewer, or "" when the session has none."""
+    try:
+        from gateway.session_context import get_session_env
+        return str(get_session_env(name, "") or "").strip()[:200]
+    except Exception as exc:
+        logger.debug("Smart approval session text lookup failed: %s", exc)
+        return ""
+
+
 def _smart_session_context() -> str:
     """Return the current working directory as bounded, quoted session context."""
     try:
@@ -197,7 +208,7 @@ def _smart_approve(command: str, description: str) -> str:
         # Operator policy goes in the SYSTEM prompt only — the trusted channel. Never
         # next to the <command> block: that would dilute the trust boundary and teach
         # the guard to accept policy-looking text adjacent to (untrusted) commands.
-        operator_policy = _get_smart_policy()
+        operator_policy = "\n\n".join(part for part in (_get_smart_policy(), load_operator_policy()) if part)
         if operator_policy:
             system_prompt += (
                 "\n\nAdditional policy rules from the operator (these are "
@@ -207,9 +218,14 @@ def _smart_approve(command: str, description: str) -> str:
         session_context = _smart_session_context()
         prompt_intro = f"The following command was flagged as: {description}\n\n"
         context_block = f"{session_context}\n\n" if session_context else ""
+        review_block = render_review_context(
+            platform=_session_text("HERMES_SESSION_PLATFORM"), thread=_session_text("HERMES_SESSION_THREAD_ID"),
+            reason=description,
+        )
+        review_block = f"{review_block}\n\n" if review_block else ""
         user_prompt = (
-            f"{prompt_intro}{context_block}"
-            f"<command>\n{_strip_shell_comments(command)}\n</command>\n\n"
+            f"{prompt_intro}{context_block}{review_block}"
+            f"<command>\n{_strip_shell_comments(bound_command(command))}\n</command>\n\n"
             "Assess the ACTUAL risk of the shell operations in this command. "
             "Many flagged commands are false positives — for example, "
             '`python -c "print(\'hello\')"` is flagged as "script execution '

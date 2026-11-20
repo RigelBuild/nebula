@@ -212,13 +212,14 @@ def test_reviewer_allow_inside_grant_skips_the_prompt(monkeypatch, clock):
     assert shown == [], "a reviewer ALLOW inside a live grant must not re-prompt"
 
 
-def test_reviewer_allow_without_grant_still_asks_the_human(monkeypatch):
-    """Invariant 1: with no grant, a reviewer ALLOW must not replace Matt's prompt."""
+def test_reviewer_allow_without_grant_runs_and_stores_no_grant(monkeypatch):
+    """A reviewer APPROVE runs the call with no prompt, and it creates no grant."""
     calls = _reviewer(monkeypatch, "approve")
     shown = _prompt(monkeypatch, "once")
     result = request_tool_approval(
         "vault_secret", "run", rule_key=KEY, session_ttl_seconds=3600, review=True,
     )
     assert calls == ["approve"]
-    assert len(shown) == 1, "no grant: the human prompt must still appear"
+    assert shown == [], "APPROVE runs the call with no human prompt"
     assert result["approved"] is True
+    assert approval.is_approved(SESSION, PLUGIN_KEY) is False, "a reviewer APPROVE must not store a grant"

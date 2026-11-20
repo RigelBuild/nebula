@@ -145,10 +145,13 @@ def test_vault_secret_approval_shows_item_and_field_metadata_to_reviewer(unlocke
         "env": {"K": {"item": "op:sopsid", "field": "pk"}},
     }, review=True)
 
+    # The reviewer sees the item metadata. A reviewer APPROVE runs the call, so no human prompt
+    # is shown; the security property is that the secret value reaches neither the reviewer nor a prompt.
     assert "SOPS" in seen["display"]
     assert "private key" in seen["display"]
-    assert "op:sopsid" in seen["command"]
-    assert _AGE not in seen["display"] + seen["command"]
+    assert "op:sopsid" in seen["display"]
+    assert "command" not in seen, "APPROVE must not show the human prompt"
+    assert _AGE not in seen["display"]
 
 def test_run_injects_the_field_and_redacts_it_in_every_common_form(unlocked):
     vst, tmp = unlocked

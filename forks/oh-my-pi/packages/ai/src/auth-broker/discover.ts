@@ -25,6 +25,7 @@ import {
 	DEFAULT_USAGE_RESERVE_PCT,
 	SqliteAuthCredentialStore,
 } from "../auth-storage";
+import { isNonEmptyStringArray } from "../auth/policy";
 import * as AIError from "../error";
 import { AuthBrokerClient, AuthBrokerError } from "./client";
 import { type AuthBrokerAccountPool, type AuthBrokerProviderPool, RemoteAuthCredentialStore } from "./remote-store";
@@ -128,7 +129,8 @@ function parseAuthAccountPolicies(value: unknown): AuthAccountPolicies {
 				key !== "priority" &&
 				key !== "reservePct" &&
 				key !== "reclaimAbovePct" &&
-				key !== "drainFirst",
+				key !== "drainFirst" &&
+				key !== "pinModels",
 		);
 		if (unknownPolicyFields.length > 0) {
 			throw new AIError.ConfigurationError(`${path} has unknown fields: ${unknownPolicyFields.join(", ")}`);
@@ -187,6 +189,9 @@ function parseAuthAccountPolicies(value: unknown): AuthAccountPolicies {
 		if (policy.drainFirst !== undefined && typeof policy.drainFirst !== "boolean") {
 			throw new AIError.ConfigurationError(`${path}.drainFirst must be a boolean`);
 		}
+		if (policy.pinModels !== undefined && !isNonEmptyStringArray(policy.pinModels)) {
+			throw new AIError.ConfigurationError(`${path}.pinModels must be an array of non-empty strings`);
+		}
 		return {
 			provider,
 			account: {
@@ -199,6 +204,7 @@ function parseAuthAccountPolicies(value: unknown): AuthAccountPolicies {
 			...(typeof policy.reservePct === "number" ? { reservePct: policy.reservePct } : {}),
 			...(typeof policy.reclaimAbovePct === "number" ? { reclaimAbovePct: policy.reclaimAbovePct } : {}),
 			...(typeof policy.drainFirst === "boolean" ? { drainFirst: policy.drainFirst } : {}),
+			...(isNonEmptyStringArray(policy.pinModels) ? { pinModels: policy.pinModels } : {}),
 		};
 	});
 }

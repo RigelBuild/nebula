@@ -339,8 +339,8 @@ describe("AuthStorage Fable account pinning", () => {
 
 		expect(key).toBe("oat-2");
 	});
-	it("does not pin a Fable row whose window expired, even at 1.0", async () => {
-		const stale = fableReport("b@example.com", 1, Date.now() - HOUR);
+	it("does not pin a Fable row whose window expired, even when it is below the cap", async () => {
+		const stale = fableReport("b@example.com", 0.5, Date.now() - HOUR);
 		stale.fetchedAt = Date.now() - 2 * HOUR;
 		const storage = await setup(policies(FABLE_PIN), {
 			"oat-1": fableReport("a@example.com", 0.4),
@@ -348,7 +348,7 @@ describe("AuthStorage Fable account pinning", () => {
 			"oat-3": fableReport("c@example.com", 0.2),
 		});
 
-		const key = await storage.keys.get("anthropic", "session-fable-stale", { modelId: "claude-fable-5" });
+		const key = await storage.keys.get("anthropic", "session-fable-stale-half", { modelId: "claude-fable-5" });
 
 		expect(key).toBe("oat-1");
 	});

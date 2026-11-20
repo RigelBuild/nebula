@@ -10,9 +10,9 @@ import type {
 } from "./types";
 import { DEFAULT_USAGE_RESERVE_PCT } from "./types";
 
-/** Whether `value` is an array of non-empty strings: the shape `pinModels` and similar lists take. */
+/** Whether `value` is a non-empty array of non-empty strings: the shape `pinModels` takes. */
 export function isNonEmptyStringArray(value: unknown): value is string[] {
-	return Array.isArray(value) && value.every(item => typeof item === "string" && item.length > 0);
+	return Array.isArray(value) && value.length > 0 && value.every(item => typeof item === "string" && item.length > 0);
 }
 
 /** Anchored RegExp per `pinModels` glob, compiled once; a glob is operator config and reused on every selection. */

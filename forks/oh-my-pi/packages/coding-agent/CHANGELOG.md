@@ -7,11 +7,13 @@
 
 - Auto-learn capture can run on a configured model role with `autolearn.captureRole`, skipping capture when the role or its model is unavailable. `autolearn.capturePrompt` swaps in a prompt file. `autolearn.captureMaxInputTokens` sends an oversized replay as a digest, and skips capture when the system prompt and tools alone exceed the cap. `autolearn.journalDir` writes lessons to a journal instead of managed skills. `autolearn.secretPatterns` refuses a journal lesson that matches a secret pattern.
 
-- The Claude auth gateway redeems a Fable launch reset when a Fable-model request hits an exhausted Fable weekly window. A full-week reset is never spent for a Fable block, and a selected grant that is not a Fable grant is logged and skipped.
+- The Claude auth gateway redeems a Fable launch reset when a Fable-model request hits an exhausted Fable weekly window. A full-week reset is never spent for a Fable block, and a selected grant that is not a Fable grant is skipped.
 
 ### Fixed
 
 - Disconnecting a disassembler database now reports it as not connected at once, so a closed reference fails with the reopen hint instead of a host-exited error.
+
+- Shared weekly launch resets now require weekly consent of yes.
 
 ## [18.22.2] - 2026-11-18
 

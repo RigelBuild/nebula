@@ -130,7 +130,7 @@ async function setup(
 	const list = spyOn(storage.resets, "list").mockResolvedValue(statuses);
 	const redeem = spyOn(storage.resets, "redeem").mockResolvedValue({ ok: true, code: "reset", provider: "anthropic" });
 	const hook = createGatewayClaudeResetHook({ storage, settings, coordinator: coordinator() });
-	return { hook, list, redeem, report, credentialId: stored.id };
+	return { hook, list, redeem, report, credentialId: stored.id, settings };
 }
 
 describe("gateway Claude reset hook", () => {
@@ -324,6 +324,21 @@ describe("gateway Claude reset hook", () => {
 			}),
 		).toBe(false);
 		expect(list).not.toHaveBeenCalled();
+		expect(redeem).not.toHaveBeenCalled();
+	});
+
+	it("does not spend a shared weekly reset when weekly consent is unset, even with 5h consent yes", async () => {
+		const { hook, list, redeem, credentialId, settings } = await setup("yes", "anthropic:7d");
+		cfgClaudeResetsAutoRedeemWeekly.set(settings, "unset");
+		expect(
+			await hook({
+				provider: "anthropic",
+				credentialId,
+				modelId: "claude-sonnet",
+				signal: new AbortController().signal,
+			}),
+		).toBe(false);
+		expect(list).toHaveBeenCalledTimes(1);
 		expect(redeem).not.toHaveBeenCalled();
 	});
 

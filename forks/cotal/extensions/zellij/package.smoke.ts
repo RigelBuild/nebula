@@ -46,7 +46,7 @@ async function waitForCalls(logPath: string, done: (calls: string[][]) => boolea
 }
 
 async function withFakeZellij(
-  mode: "missing-session" | "partial-tab" | "confirm" | "no-server" | "probe-error" | "bad-tabs" | "dropped-pane" | "unavailable" | "slow-probe" | "no-client" | "slow-client" | "clients-error" | "clients-flaky" | "handoff",
+  mode: "missing-session" | "partial-tab" | "confirm" | "no-server" | "probe-error" | "bad-tabs" | "dropped-pane" | "unavailable" | "slow-probe" | "no-client" | "slow-client" | "clients-error" | "clients-flaky" | "handoff" | "exited" | "spawn-count",
   run: (logPath: string, session: string) => void | Promise<void>,
 ): Promise<void> {
   // The fake is a shebang script Windows cannot exec, and zellij ships no Windows build.
@@ -126,7 +126,7 @@ if (action === "dump-screen") {
 }
 if (action === "list-panes") {
   const mode = process.env.COTAL_ZELLIJ_TEST_MODE;
-  console.log(JSON.stringify(mode === "partial-tab" ? [] : [{
+  console.log(JSON.stringify(mode === "exited" ? [{ id: 99, tab_id: 77, title: "confirm-agent", is_plugin: false, exited: true, exit_status: 0 }] : mode === "partial-tab" ? [] : [{
     id: 77, tab_id: 77, title: "confirm-agent", is_plugin: false, exited: false, exit_status: null
   }, ...(mode === "dropped-pane" ? [{ id: 78, tab_id: 77, title: "", is_plugin: false, exited: false, exit_status: null }] : [])]));
   process.exit(0);
@@ -505,6 +505,19 @@ await withFakeZellij("slow-probe", (logPath, session) => {
   check("a confirm screen read shares one deadline across its zellij calls", failed && elapsed < 1_500, { elapsed });
   check("a confirm screen read past its deadline starts no headless client",
     !readCalls(logPath).some((args) => args[0] === "attach"));
+});
+await withFakeZellij("spawn-count", (logPath, session) => {
+  // A healthy read must spend one zellij spawn, not seven: the pane state is only checked after a dump fails.
+  process.env.COTAL_ZELLIJ_TEST_SCREEN = "Continue?";
+  zellij.dumpScreen(session, "terminal_77", Date.now() + 1_000);
+  const spawns = readCalls(logPath).length;
+  check("a healthy confirm screen read spends one zellij spawn", spawns === 1, `spawns=${spawns} (want 1)`);
+});
+await withFakeZellij("exited", (_logPath, session) => {
+  // dump-screen on an exited pane prints nothing and fails; it must read as absent, not as a screen.
+  process.env.COTAL_ZELLIJ_TEST_SCREEN = "";
+  const screen = zellij.dumpScreen(session, "terminal_99", Date.now() + 1_000);
+  check("a read of an exited pane returns no screen", screen === undefined, `screen=${JSON.stringify(screen)}`);
 });
 // script(1) runs its command through the login shell, so a stand-in client keeps the fake on PATH.
 const fakeScript = (bin: string): string => {

@@ -6,6 +6,7 @@
 - Interactive omp logs one `memory` line every 30 s (RSS, heap, external, array buffers, Linux RssAnon, live subagents), skipped while RSS moves less than 256 MB unless 10 minutes have passed
 
 - Auto-learn capture can run on a configured model role with `autolearn.captureRole`, skipping capture when the role or its model is unavailable. `autolearn.capturePrompt` swaps in a prompt file. `autolearn.captureMaxInputTokens` sends an oversized replay as a digest, and skips capture when the system prompt and tools alone exceed the cap. `autolearn.journalDir` writes lessons to a journal instead of managed skills. `autolearn.secretPatterns` refuses a journal lesson that matches a secret pattern.
+- Added `ctx.getBackgroundWork()` and the `background_work_changed` event. `jobs` counts running async jobs of every owner on the session's root job manager, and `agents` counts running subagents in the process-wide agent registry that no running job covers, so extensions can react when that count changes. The event fires only on change, and only in the main session; subagent sessions read `ctx.getBackgroundWork()`.
 
 ### Fixed
 

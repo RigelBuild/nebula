@@ -690,12 +690,14 @@ def _file_lock(
                     time.sleep(0.05)
 
         holder.depth = 1
+        _bump_auth_store_generation()
         try:
             if lock_file is not None:
                 _stamp_lock_holder_pid(lock_file)
             yield
         finally:
             holder.depth = 0
+            _bump_auth_store_generation()
             if lock_file is not None:
                 _clear_stamped_lock_holder_pid(lock_file)
                 try:
@@ -724,25 +726,25 @@ def _empty_auth_store() -> dict[str, Any]:
     return {"version": AUTH_STORE_VERSION, "providers": {}}
 
 
-_auth_store_memo: ContextVar[Optional[dict[str, dict]]] = ContextVar("_auth_store_memo", default=None)
+_auth_store_memo: ContextVar[Optional[dict[str, tuple[int, dict]]]] = ContextVar("_auth_store_memo", default=None)
 
 
-def prefetch_auth_store(auth_file: Optional[Path] = None) -> dict[str, Any]:
+def prefetch_auth_store(auth_file: Optional[Path] = None) -> tuple[int, dict[str, Any]]:
     """Read the profile auth store once, for a caller that must not block the loop.
 
-    The result is only a snapshot for the scoped memo (``auth_store_memo``). Call it from a worker
-    thread; ``_load_auth_store`` serves the memo only to a thread that holds no auth lock."""
-    return _load_auth_store(auth_file)
+    Returns ``(generation, store)``: the generation is read BEFORE the file, so any write or lock transition
+    after this point makes the snapshot stale. Call from a worker thread."""
+    generation = _auth_store_generation
+    return generation, _load_auth_store(auth_file)
 
 
 @contextmanager
-def auth_store_memo(store_by_path: dict[str, dict]):
-    """Serve ``_load_auth_store`` from *store_by_path* for the duration of one resolver call.
+def auth_store_memo(snapshots: dict[str, tuple[int, dict]]):
+    """Serve ``_load_auth_store`` from *snapshots* for the duration of one resolver call.
 
-    A reader only sees the memo while its thread holds no auth lock; any read inside
-    ``_auth_store_lock`` (the read-modify-write path) still goes to disk. Cleared on exit so a
-    snapshot never outlives its call."""
-    token = _auth_store_memo.set(store_by_path)
+    A snapshot is served only while the store generation is unchanged and this thread holds no auth lock.
+    Any write or lock transition in the call invalidates it. Cleared on exit so it never outlives its call."""
+    token = _auth_store_memo.set(snapshots)
     try:
         yield
     finally:
@@ -758,7 +760,9 @@ def _load_auth_store(auth_file: Optional[Path] = None) -> dict[str, Any]:
     auth_file = auth_file or _auth_file_path()
     memo = _auth_store_memo.get()
     if memo is not None and str(auth_file) in memo and not _auth_store_lock_held(auth_file):
-        return memo[str(auth_file)]
+        generation, store = memo[str(auth_file)]
+        if generation == _auth_store_generation:
+            return store
     if not auth_file.exists():
         return _empty_auth_store()
     try:
@@ -805,6 +809,17 @@ def _load_auth_store(auth_file: Optional[Path] = None) -> dict[str, Any]:
     return _empty_auth_store()
 
 
+_auth_store_generation = 0
+_auth_store_generation_guard = threading.Lock()
+
+
+def _bump_auth_store_generation() -> None:
+    """Invalidate every scoped auth-store memo: a write or a lock transition may have changed the store."""
+    global _auth_store_generation
+    with _auth_store_generation_guard:
+        _auth_store_generation += 1
+
+
 def _save_private_json(target: Path, data: Any, *, fsync_dir: bool = False, **dump_kwargs: Any) -> None:
     """0600 credential JSON under a 0700 parent (``secure_parent_dir`` refuses ``/``, top-level dirs
     and the install tree). ``atomic_json_write`` creates the temp file 0600 before any byte lands."""
@@ -812,6 +827,7 @@ def _save_private_json(target: Path, data: Any, *, fsync_dir: bool = False, **du
     mkdir_under_hermes_home(target.parent)
     secure_parent_dir(target)
     atomic_json_write(target, data, mode=0o600, fsync_dir=fsync_dir, **dump_kwargs)
+    _bump_auth_store_generation()
 
 
 def _save_auth_store(auth_store: dict[str, Any], target_path: Optional[Path] = None) -> Path:

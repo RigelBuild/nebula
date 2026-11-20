@@ -115,8 +115,8 @@ class GatewayTurnHygieneMixin:
                 # The auth.json read is blocking I/O: take it off the loop, then serve the resolver's
                 # reads from that snapshot. Every resolver state write stays on the loop.
                 auth_path = _auth_file_path()
-                store = await asyncio.to_thread(prefetch_auth_store, auth_path)
-                with auth_store_memo({str(auth_path): store}):
+                snapshot = await asyncio.to_thread(prefetch_auth_store, auth_path)
+                with auth_store_memo({str(auth_path): snapshot}):
                     hs.model, _hyg_runtime = self._resolve_session_agent_runtime(
                         source=source, session_key=session_key,
                         user_config=hs.data if isinstance(hs.data, dict) else None,

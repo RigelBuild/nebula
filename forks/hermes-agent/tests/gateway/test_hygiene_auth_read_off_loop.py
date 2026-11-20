@@ -34,3 +34,18 @@ async def test_auth_store_read_does_not_block_the_loop_during_hygiene_settings(t
     monkeypatch.setattr(auth, "_load_auth_store", slow_load)
     await runner._hmwa_hygiene_settings(source, "agent:main:hygiene-auth")
     assert observed == [True], "the auth store read blocked the event loop during hygiene settings"
+
+
+def test_memo_does_not_serve_a_store_written_after_the_snapshot(tmp_path, monkeypatch):
+    """A write during the memo window must invalidate the snapshot: the next read sees the new store."""
+    from hermes_cli import auth
+
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    auth_path = tmp_path / "auth.json"
+    auth_path.write_text('{"version": 1, "providers": {"before": {}}}', encoding="utf-8")
+    snapshot = auth.prefetch_auth_store(auth_path)
+    auth_path.write_text('{"version": 1, "providers": {"after": {}}}', encoding="utf-8")
+    with auth.auth_store_memo({str(auth_path): snapshot}):
+        auth._bump_auth_store_generation()  # a write happened during the call
+        store = auth._load_auth_store(auth_path)
+    assert "after" in store["providers"], "the memo served the pre-write store after a write"

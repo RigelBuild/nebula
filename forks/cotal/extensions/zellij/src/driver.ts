@@ -54,7 +54,14 @@ export function dumpScreen(session: string, paneId: string, deadline: number): s
   try {
     // zellij 0.45 dumps a held, exited pane's last screen with rc 0, so the pane must be seen running before and after the dump.
     if (!paneLive(session, paneId, deadline)) return undefined;
-    const screen = run(actionArgs(session, ["dump-screen", "--pane-id", paneId]), { encoding: "utf8", deadline });
+    let screen: string;
+    try {
+      screen = run(actionArgs(session, ["dump-screen", "--pane-id", paneId]), { encoding: "utf8", deadline });
+    } catch (error) {
+      // The pane can exit while zellij dumps it, and zellij then fails the dump. A pane that is no longer live has no screen; any other failure is the dump's own.
+      if (paneLive(session, paneId, deadline)) throw error;
+      return undefined;
+    }
     // The pane can exit during the dump; its screen is then the last one it held, so it is dropped.
     return paneLive(session, paneId, deadline) ? screen : undefined;
   } catch (error) {
@@ -77,6 +84,8 @@ function actionArgs(session: string, action: string[]): string[] {
 }
 
 const NO_SESSIONS = "No active zellij sessions found";
+// zellij's answer for a session name it does not list, printed when the session is named with --session.
+const SESSION_NOT_FOUND = /Session '[^']*' not found\. The following sessions are active:/;
 
 // Dead sessions stay listed (resurrectable) with an EXITED suffix; they are not live.
 export function hasLiveSession(listing: string, session: string): boolean {
@@ -88,7 +97,8 @@ export function hasLiveSession(listing: string, session: string): boolean {
 function isNoSessionsError(error: unknown): boolean {
   if (!error || typeof error !== "object" || !("stderr" in error)) return false;
   const { stderr } = error;
-  return (typeof stderr === "string" || Buffer.isBuffer(stderr)) && String(stderr).includes(NO_SESSIONS);
+  const text = typeof stderr === "string" || Buffer.isBuffer(stderr) ? String(stderr) : "";
+  return text.includes(NO_SESSIONS) || SESSION_NOT_FOUND.test(text);
 }
 
 // Only zellij's own "no sessions" answer means absent; any other probe failure throws, so a

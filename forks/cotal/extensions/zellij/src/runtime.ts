@@ -93,21 +93,38 @@ export async function waitForLauncherExit(dir: string, pollMs = 1_000): Promise<
   while (launcherState(dir) === "running") await new Promise<void>((resolve) => setTimeout(resolve, pollMs));
 }
 
-/** A seat whose launcher never wrote a pid or an exit file may never have loaded. Its pane settles it.
- * The probe has a fixed budget; a probe that fails or runs past it reads running, because an unknown pane is not a dead one. */
-export function seatState(dir: string, session: string, paneId: string): "running" | "exited" {
+/** One read of a seat. Its launcher's files answer first, with no zellij call; only a seat whose launcher
+ * never wrote a pid or an exit file asks its pane. A probe that throws is "unknown", not a dead pane. */
+type SeatProbe = "running" | "exited" | "unknown";
+
+function probeSeat(dir: string, session: string, paneId: string): SeatProbe {
   const state = launcherState(dir);
   if (state === "exited" || existsSync(join(dir, "pid"))) return state;
   try {
     // "dead-session" (no session listed) and "exited" (the pane is gone) both end the seat.
     return zellij.paneState(session, paneId, Date.now() + STATUS_BUDGET_MS) === "running" ? "running" : "exited";
-  } catch {
-    return "running";
+  } catch (error) {
+    console.error(`zellij runtime: could not read pane ${paneId} state: ${error instanceof Error ? error.message : String(error)}`);
+    return "unknown";
   }
 }
 
-export async function waitForSeatExit(dir: string, session: string, paneId: string, pollMs = 1_000): Promise<void> {
-  while (seatState(dir, session, paneId) === "running") await new Promise<void>((resolve) => setTimeout(resolve, pollMs));
+/** A seat whose launcher never wrote a pid or an exit file may never have loaded. Its pane settles it.
+ * The probe has a fixed budget; a probe that fails or runs past it reads running, because an unknown pane is not a dead one. */
+export function seatState(dir: string, session: string, paneId: string): "running" | "exited" {
+  return probeSeat(dir, session, paneId) === "exited" ? "exited" : "running";
+}
+
+/** Waits until the seat exits. After maxProbeFailures unknown reads in a row it throws, so a wait on an unreadable pane ends. */
+export async function waitForSeatExit(dir: string, session: string, paneId: string, pollMs = 1_000, maxProbeFailures = 30): Promise<void> {
+  let failures = 0;
+  for (;;) {
+    const state = probeSeat(dir, session, paneId);
+    if (state === "exited") return;
+    failures = state === "unknown" ? failures + 1 : 0;
+    if (failures >= maxProbeFailures) throw new Error(`zellij runtime: pane ${paneId} state unknown after ${failures} failed probes`);
+    await new Promise<void>((resolve) => setTimeout(resolve, pollMs));
+  }
 }
 
 function cleanupLauncher(launcher: PrivateLauncher): void {

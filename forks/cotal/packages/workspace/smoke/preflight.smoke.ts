@@ -678,10 +678,23 @@ check("stale-auth-root copy claims a removal only when one happened", (() => {
   );
   heldRawSrv.close();
 
+  // A port this process just freed: nothing listens there, and loopback refuses it at once.
+  const freedSrv = createServer();
+  const freedPort = await new Promise<number>((resolve, reject) => {
+    freedSrv.once("error", reject);
+    freedSrv.listen(0, "127.0.0.1", () => {
+      const addr = freedSrv.address();
+      if (typeof addr === "object" && addr !== null) resolve(addr.port);
+      else reject(new Error("listen did not bind a TCP port"));
+    });
+  });
+  await new Promise<void>((resolve) => freedSrv.close(() => resolve()));
+  const freedRaw = `nats://127.0.0.1:${freedPort}`;
+
   const t12c0 = Date.now();
   let s12cMsg: string | undefined;
   try {
-    await reachableOrThrow(DEAD, {});
+    await reachableOrThrow(freedRaw, {});
   } catch (e) {
     s12cMsg = e instanceof ConnectRefusal ? e.message : undefined;
   }

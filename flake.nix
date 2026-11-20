@@ -405,7 +405,7 @@
       devShells = forAllSystems (system:
         let
           pkgs = import nixpkgs { inherit system; };
-          basePackages = with pkgs; [ go bun moon rumdl biome cargo rustc clippy rustfmt cargo-nextest golangci-lint jujutsu ];
+          basePackages = with pkgs; [ go bun moon rumdl biome cargo rustc clippy rustfmt cargo-nextest golangci-lint jujutsu nodejs_26 pnpm nats-server ];
           hookPackages = with pkgs; [ pre-commit prek lefthook pkl hk ];
         in
         {

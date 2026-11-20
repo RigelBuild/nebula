@@ -23,6 +23,7 @@ import time
 import webbrowser
 
 from contextlib import ExitStack, contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from functools import partial
 from datetime import datetime, timezone, UTC
@@ -723,8 +724,41 @@ def _empty_auth_store() -> dict[str, Any]:
     return {"version": AUTH_STORE_VERSION, "providers": {}}
 
 
+_auth_store_memo: ContextVar[Optional[dict[str, dict]]] = ContextVar("_auth_store_memo", default=None)
+
+
+def prefetch_auth_store(auth_file: Optional[Path] = None) -> dict[str, Any]:
+    """Read the profile auth store once, for a caller that must not block the loop.
+
+    The result is only a snapshot for the scoped memo (``auth_store_memo``). Call it from a worker
+    thread; ``_load_auth_store`` serves the memo only to a thread that holds no auth lock."""
+    return _load_auth_store(auth_file)
+
+
+@contextmanager
+def auth_store_memo(store_by_path: dict[str, dict]):
+    """Serve ``_load_auth_store`` from *store_by_path* for the duration of one resolver call.
+
+    A reader only sees the memo while its thread holds no auth lock; any read inside
+    ``_auth_store_lock`` (the read-modify-write path) still goes to disk. Cleared on exit so a
+    snapshot never outlives its call."""
+    token = _auth_store_memo.set(store_by_path)
+    try:
+        yield
+    finally:
+        _auth_store_memo.reset(token)
+
+
+def _auth_store_lock_held(auth_file: Path) -> bool:
+    holder = _auth_lock_holder_for(auth_file)
+    return getattr(holder, "depth", 0) > 0
+
+
 def _load_auth_store(auth_file: Optional[Path] = None) -> dict[str, Any]:
     auth_file = auth_file or _auth_file_path()
+    memo = _auth_store_memo.get()
+    if memo is not None and str(auth_file) in memo and not _auth_store_lock_held(auth_file):
+        return memo[str(auth_file)]
     if not auth_file.exists():
         return _empty_auth_store()
     try:

@@ -675,17 +675,28 @@ async def recover_profile_native_sessions(runner, authority):
     """Bind one authority's queued native rows to the adapters connected now."""
     from gateway.session_authorities import owner_scope
     with owner_scope(authority):
-        pending = {row['target_session_id'] for row in authority.db._read_all(
-            "SELECT DISTINCT target_session_id FROM session_admissions WHERE status IN ('queued','unknown')")}
+        pending, owners = await asyncio.to_thread(_pending_native_owners, runner, authority)
         bindings = [(owner, entry.origin, runner._adapter_for_source(entry.origin))
-                    for entry in runner.session_store.list_sessions() if entry.origin is not None
-                    for owner in [authority.logical_owner(entry.session_id)] if owner in pending]
+                    for entry, owner in owners if owner in pending]
         outcome = await authority.recover_native_sessions(bindings)
         from gateway.session_detached import recover_detached_sessions
         outcome.update(dict.fromkeys(recover_detached_sessions(authority, pending - set(outcome)), 'detached'))
     for sid, verdict in outcome.items():
         logger.info('Native session startup recovery %s (%s): %s', sid, authority.profile_id, verdict)
     return outcome
+
+
+def _pending_native_owners(runner, authority):
+    """The authority's queued/unknown target ids, and each routed session paired with its admission owner.
+    Blocking store reads (one SELECT, one lineage read per routed session): a worker thread runs them,
+    so the loop keeps serving the watchdog and heartbeat while a large store is scanned."""
+    from gateway.session_authorities import owner_scope
+    with owner_scope(authority):
+        pending = {row['target_session_id'] for row in authority.db._read_all(
+            "SELECT DISTINCT target_session_id FROM session_admissions WHERE status IN ('queued','unknown')")}
+        owners = [(entry, authority.logical_owner(entry.session_id))
+                  for entry in runner.session_store.list_sessions() if entry.origin is not None]
+    return pending, owners
 
 
 def publish_gateway_runtime_ready(runner):

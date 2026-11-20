@@ -111,10 +111,16 @@ class GatewayTurnHygieneMixin:
             configured_model, configured_provider, configured_base_url = hs.model, hs.provider, hs.base_url
 
             with suppress(Exception):
-                hs.model, _hyg_runtime = self._resolve_session_agent_runtime(
-                    source=source, session_key=session_key,
-                    user_config=hs.data if isinstance(hs.data, dict) else None,
-                )
+                from hermes_cli.auth import _auth_file_path, auth_store_memo, prefetch_auth_store
+                # The auth.json read is blocking I/O: take it off the loop, then serve the resolver's
+                # reads from that snapshot. Every resolver state write stays on the loop.
+                auth_path = _auth_file_path()
+                store = await asyncio.to_thread(prefetch_auth_store, auth_path)
+                with auth_store_memo({str(auth_path): store}):
+                    hs.model, _hyg_runtime = self._resolve_session_agent_runtime(
+                        source=source, session_key=session_key,
+                        user_config=hs.data if isinstance(hs.data, dict) else None,
+                    )
                 hs.provider = _hyg_runtime.get("provider") or hs.provider
                 hs.base_url = _hyg_runtime.get("base_url") or hs.base_url
                 hs.api_key = _hyg_runtime.get("api_key") or hs.api_key

@@ -76,7 +76,13 @@ class TestSmartApprovePolicyInjection(unittest.TestCase):
         _smart_approve("rm -rf /tmp/x", "recursive delete")
         messages_empty = _messages_from(mock_call_llm)
 
-        assert messages_missing == messages_empty
+        import re
+
+        def _unnonced(messages):
+            return [{**m, "content": re.sub(r'nonce="[0-9a-f]+"', 'nonce="N"', m["content"])} for m in messages]
+
+        assert messages_missing[0] == messages_empty[0], "the system prompt must stay byte-identical"
+        assert _unnonced(messages_missing) == _unnonced(messages_empty)
         sys_content = messages_missing[0]["content"]
         assert "Additional policy rules from the operator" not in sys_content
 

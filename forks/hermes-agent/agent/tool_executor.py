@@ -1579,6 +1579,12 @@ def execute_tool_calls_concurrent(agent, assistant_message, messages: list, effe
     """Execute tool calls concurrently; results are appended in original call order.
     ``finalize=False`` skips end-of-batch budget enforcement and /steer injection (the
     segmented dispatcher owns turn-end work)."""
+    with _review_context_for_batch(agent, messages):
+        _execute_tool_calls_concurrent(agent, assistant_message, messages, effective_task_id, api_call_count, finalize=finalize)
+
+
+def _execute_tool_calls_concurrent(agent, assistant_message, messages: list, effective_task_id: str, api_call_count: int = 0, *, finalize: bool = True) -> None:
+    """Concurrent batch body (see :func:`execute_tool_calls_concurrent`)."""
     tool_calls = assistant_message.tool_calls
     num_tools = len(tool_calls)
     _tool_budget = _budget_for_agent(agent)  # once per turn, not per result
@@ -1859,13 +1865,34 @@ def _publish_sequential_result(agent, messages: list, ref: _ToolCallRef, managed
 def execute_tool_calls_sequential(agent, assistant_message, messages: list, effective_task_id: str, api_call_count: int = 0, *, finalize: bool = True) -> None:
     from types import SimpleNamespace
     from agent.terminal_approval_batch import terminal_approval_batch, terminal_approval_runs
-    for calls in terminal_approval_runs(agent, assistant_message.tool_calls):
-        with terminal_approval_batch(agent, calls, messages, effective_task_id):
-            _execute_tool_calls_sequential(agent, SimpleNamespace(tool_calls=calls), messages, effective_task_id, api_call_count, finalize=False)
-        if getattr(agent, "_incremental_persistence_failed", False):
-            return
+    with _review_context_for_batch(agent, messages):
+        for calls in terminal_approval_runs(agent, assistant_message.tool_calls):
+            with terminal_approval_batch(agent, calls, messages, effective_task_id):
+                _execute_tool_calls_sequential(agent, SimpleNamespace(tool_calls=calls), messages, effective_task_id, api_call_count, finalize=False)
+            if getattr(agent, "_incremental_persistence_failed", False):
+                return
     if finalize:
         _finalize_tool_batch(agent, messages, effective_task_id, len(assistant_message.tool_calls), _budget_for_agent(agent))
+
+
+@contextlib.contextmanager
+def _review_context_for_batch(agent, messages: list):
+    """Bind the reviewer context (triggering user message, recent turns, loaded skills) for one tool batch,
+    so a plugin approval's smart reviewer can judge the call against what the session was doing."""
+    from agent.review_engine import collect_parent_loaded_skills
+    from tools.approval_review_context import bind_review_context, reset_review_context
+
+    user_message = next((m.get("content") for m in reversed(messages or [])
+                         if isinstance(m, dict) and m.get("role") == "user"), None)
+    try:
+        skills = collect_parent_loaded_skills(agent, messages or [])
+    except Exception:
+        skills = []
+    token = bind_review_context(messages=messages or [], user_message=user_message, loaded_skills=skills)
+    try:
+        yield
+    finally:
+        reset_review_context(token)
 
 
 def _execute_tool_calls_sequential(agent, assistant_message, messages: list, effective_task_id: str, api_call_count: int = 0, *, finalize: bool = True) -> None:

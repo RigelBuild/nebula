@@ -11,12 +11,12 @@ import * as zellij from "./src/driver.js";
 
 let checks = 0;
 const failures: string[] = [];
-function check(name: string, condition: boolean): void {
+function check(name: string, condition: boolean, detail?: string): void {
   checks++;
   if (condition) console.log(`  ✓ ${name}`);
   else {
     failures.push(name);
-    console.log(`  ✗ FAIL: ${name}`);
+    console.log(`  ✗ FAIL: ${name}${detail === undefined ? "" : ` — ${detail}`}`);
   }
 }
 
@@ -454,6 +454,7 @@ await withFakeZellij("confirm", async (logPath, session) => {
   check(
     "confirm sends one Enter only after the pane displays the prompt",
     enters === 1 && calls.some((args) => args[3] === "dump-screen") && handle.confirmOutcome?.() === "confirmed",
+    `enter writes=${enters} (want 1), dump-screen seen=${calls.some((args) => args[3] === "dump-screen")}, outcome=${String(handle.confirmOutcome?.())} (want confirmed)`,
   );
 });
 await withFakeZellij("confirm", async (logPath, session) => {

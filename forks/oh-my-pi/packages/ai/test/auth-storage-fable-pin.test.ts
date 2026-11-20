@@ -322,6 +322,23 @@ describe("AuthStorage Fable account pinning", () => {
 		expect(key).toBe("oat-1");
 	});
 
+	it("does not keep a pinned account whose shared 7d window is inside the reserve", async () => {
+		const sharedWeeklyFull = fableReport("a@example.com", 0.5);
+		const shared7dAt95 = sharedWeeklyFull.limits.map(limit =>
+			limit.id === "anthropic:7d"
+				? { ...limit, amount: { ...limit.amount, usedFraction: 0.95, remainingFraction: 0.05 } }
+				: limit,
+		);
+		const storage = await setup(policies(FABLE_PIN), {
+			"oat-1": { ...sharedWeeklyFull, limits: shared7dAt95 },
+			"oat-2": fableReport("b@example.com", 0.2),
+			"oat-3": fableReport("c@example.com", 0.1),
+		});
+
+		const key = await storage.keys.get("anthropic", "session-fable-shared7d", { modelId: "claude-fable-5" });
+
+		expect(key).toBe("oat-2");
+	});
 	it("does not pin a Fable row whose window expired, even at 1.0", async () => {
 		const stale = fableReport("b@example.com", 1, Date.now() - HOUR);
 		stale.fetchedAt = Date.now() - 2 * HOUR;
@@ -332,6 +349,20 @@ describe("AuthStorage Fable account pinning", () => {
 		});
 
 		const key = await storage.keys.get("anthropic", "session-fable-stale", { modelId: "claude-fable-5" });
+
+		expect(key).toBe("oat-1");
+	});
+
+	it("does not pin a Fable row at 0.99 whose window has reset, even though it is below the cap", async () => {
+		const stale = fableReport("b@example.com", 0.99, Date.now() - HOUR);
+		stale.fetchedAt = Date.now() - 2 * HOUR;
+		const storage = await setup(policies(FABLE_PIN), {
+			"oat-1": fableReport("a@example.com", 0.4),
+			"oat-2": stale,
+			"oat-3": fableReport("c@example.com", 0.2),
+		});
+
+		const key = await storage.keys.get("anthropic", "session-fable-stale-099", { modelId: "claude-fable-5" });
 
 		expect(key).toBe("oat-1");
 	});

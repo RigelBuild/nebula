@@ -107,17 +107,43 @@ export interface CredentialSelectorDeps {
 /**
  * Used fractions of the request's model-tier weekly windows that are still below
  * their cap, read from the reserve scope so a tier row below 1 stays visible.
- * A row with no measurable fraction is no data, so it does not count.
+ * A row with no measurable fraction, or whose window has already reset, does not count.
  */
 function pinWindowFractions(
 	strategy: CredentialRankingStrategy | undefined,
 	report: UsageReport,
 	rankingContext: CredentialRankingContext,
+	nowMs: number,
 ): number[] {
 	return reserveUsageLimits(strategy, report, rankingContext)
 		.filter(limit => limit.scope.tier !== undefined && limit.scope.shared !== true)
+		.filter(limit => {
+			const resetsAt = limit.window?.resetsAt;
+			return resetsAt === undefined || resetsAt > nowMs || report.fetchedAt >= resetsAt;
+		})
 		.map(limit => resolveUsedFraction(limit))
 		.filter((fraction): fraction is number => fraction !== undefined && fraction < 1);
+}
+
+/**
+ * Remaining fraction for the reserve check. A model-pinned account is judged on
+ * its shared windows only, so its pinned tier row never lifts it out of reserve,
+ * but its shared 5h and 7d windows still do.
+ */
+function reserveRemainingFraction(
+	strategy: CredentialRankingStrategy | undefined,
+	report: UsageReport | null,
+	rankingContext: CredentialRankingContext,
+	nowMs: number,
+	pinned: boolean,
+): number | undefined {
+	if (!report || !pinned) return remainingUsageFraction(strategy, report, rankingContext, nowMs);
+	return remainingUsageFraction(
+		strategy,
+		{ ...report, limits: report.limits.filter(limit => limit.scope.shared === true) },
+		rankingContext,
+		nowMs,
+	);
 }
 
 /** Picks which stored credential serves a request: ordering, usage ranking, OAuth refresh ladder. */
@@ -647,9 +673,11 @@ export class CredentialSelector {
 			const pinned =
 				pinModel !== undefined && (policy?.pinModels?.some(pattern => matchesPinModel(pattern, pinModel)) ?? false);
 			// Pin on the model-scoped weekly window: the most used one still below its cap.
-			const pinUsed = pinned && usage ? pinWindowFractions(strategy, usage, args.rankingContext) : [];
+			const pinUsed = pinned && usage ? pinWindowFractions(strategy, usage, args.rankingContext, nowMs) : [];
 			const pinFraction = pinUsed.length > 0 ? Math.max(...pinUsed) : 0;
 			const isPinned = pinUsed.length > 0;
+			// A pinned account keeps its shared 5h/7d reserve; only its pinned tier row is skipped.
+			const reserveRemaining = reserveRemainingFraction(strategy, usage, args.rankingContext, nowMs, isPinned);
 			const reservePct = policy?.reservePct ?? args.defaultReservePct;
 			const reserveFraction =
 				reservePct === undefined || !Number.isFinite(reservePct)
@@ -682,10 +710,9 @@ export class CredentialSelector {
 				resetBanked,
 				inReserve:
 					!resetBanked &&
-					!isPinned &&
 					reserveFraction !== undefined &&
-					remainingFraction !== undefined &&
-					isWithinUsageReserve(remainingFraction, reserveFraction),
+					reserveRemaining !== undefined &&
+					isWithinUsageReserve(reserveRemaining, reserveFraction),
 				reserveMeasured: reserveFraction !== undefined && remainingFraction !== undefined,
 				drainFirst: policy?.drainFirst === true,
 				pinned: isPinned,

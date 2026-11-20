@@ -253,10 +253,13 @@
             cp ${workspaceStatic.rawCrates.devenv-run-tests.build}/bin/devenv-run-tests $out/bin/
             ${pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isDarwin ''
               # Fail here, not at check-asset, if a dylib comes from the store.
+              # otool is not on runCommand's PATH; capture its output so its failure fails the build.
               for bin in $out/bin/*; do
-                if otool -L "$bin" | tail -n +2 | grep -v -E '^\s+(/usr/lib/|/System/)' | grep -q .; then
+                libs=$(${pkgs.darwin.cctools}/bin/otool -L "$bin")
+                bad=$(printf '%s\n' "$libs" | tail -n +2 | grep -v -E '^[[:space:]]+(/usr/lib/|/System/)' || [ $? -eq 1 ])
+                if [ -n "$bad" ]; then
                   echo "error: $bin links a library outside /usr/lib and /System:" >&2
-                  otool -L "$bin" >&2
+                  printf '%s\n' "$libs" >&2
                   exit 1
                 fi
               done

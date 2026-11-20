@@ -4,7 +4,7 @@ import { getOAuthApiKey, getOAuthProvider } from "../registry/oauth";
 import type { OAuthProvider } from "../registry/oauth/types";
 import type { Provider } from "../types";
 import type { CredentialRankingContext, CredentialRankingStrategy, PlanGate, UsageReport } from "../usage";
-import { isWithinUsageReserve } from "../usage";
+import { isWithinUsageReserve, resolveUsedFraction } from "../usage";
 import type { RankingStrategyResolver } from "../usage/registry";
 import type { SessionAffinity } from "./affinity";
 import { raceSignal } from "./abort";
@@ -15,7 +15,7 @@ import {
 	providerTypeKey,
 	type CredentialBlocks,
 } from "./blocks";
-import type { AccountPolicies } from "./policy";
+import { type AccountPolicies, matchesPinModel } from "./policy";
 import { authCredentialEquals, type CredentialPool } from "./pool";
 import {
 	orderUsageRankedCandidates,
@@ -43,6 +43,7 @@ import {
 	isUsageLimitReached,
 	normalizeUsageFraction,
 	remainingUsageFraction,
+	reserveUsageLimits,
 	scopedUsageLimits,
 	usageResetAtMs,
 	windowRequiredDrain,
@@ -101,6 +102,22 @@ export interface CredentialSelectorDeps {
 	refresher: OAuthRefresher;
 	strategies: RankingStrategyResolver;
 	claudeResetBanking?: { keepCredits: number; drainFirstOnly?: boolean };
+}
+
+/**
+ * Used fractions of the request's model-tier weekly windows that are still below
+ * their cap, read from the reserve scope so a tier row below 1 stays visible.
+ * A row with no measurable fraction is no data, so it does not count.
+ */
+function pinWindowFractions(
+	strategy: CredentialRankingStrategy | undefined,
+	report: UsageReport,
+	rankingContext: CredentialRankingContext,
+): number[] {
+	return reserveUsageLimits(strategy, report, rankingContext)
+		.filter(limit => limit.scope.tier !== undefined && limit.scope.shared !== true)
+		.map(limit => resolveUsedFraction(limit))
+		.filter((fraction): fraction is number => fraction !== undefined && fraction < 1);
 }
 
 /** Picks which stored credential serves a request: ordering, usage ranking, OAuth refresh ladder. */
@@ -353,6 +370,8 @@ export class CredentialSelector {
 				usageMeasured,
 				hasPriorityBoost: strategy.hasPriorityBoost?.(primary, primaryUncapped, args.rankingContext) ?? false,
 				drainFirst: false,
+				pinned: false,
+				pinFraction: 0,
 				planPriority: 0,
 				secondaryUsed: normalizeUsageFraction(secondary),
 				secondaryRequiredDrain: windowRequiredDrain(secondary, nowMs, strategy.windowDefaults.secondaryMs),
@@ -624,6 +643,13 @@ export class CredentialSelector {
 				strategy === undefined ? remainingFraction !== undefined : primary !== undefined || secondary !== undefined;
 			const primaryUncapped = primary === undefined && secondary !== undefined;
 			const policy = this.#deps.policies.forCredential(args.provider, selection.credential);
+			const pinModel = args.rankingContext.modelId;
+			const pinned =
+				pinModel !== undefined && (policy?.pinModels?.some(pattern => matchesPinModel(pattern, pinModel)) ?? false);
+			// Pin on the model-scoped weekly window: the most used one still below its cap.
+			const pinUsed = pinned && usage ? pinWindowFractions(strategy, usage, args.rankingContext) : [];
+			const pinFraction = pinUsed.length > 0 ? Math.max(...pinUsed) : 0;
+			const isPinned = pinUsed.length > 0;
 			const reservePct = policy?.reservePct ?? args.defaultReservePct;
 			const reserveFraction =
 				reservePct === undefined || !Number.isFinite(reservePct)
@@ -656,11 +682,14 @@ export class CredentialSelector {
 				resetBanked,
 				inReserve:
 					!resetBanked &&
+					!isPinned &&
 					reserveFraction !== undefined &&
 					remainingFraction !== undefined &&
 					isWithinUsageReserve(remainingFraction, reserveFraction),
 				reserveMeasured: reserveFraction !== undefined && remainingFraction !== undefined,
 				drainFirst: policy?.drainFirst === true,
+				pinned: isPinned,
+				pinFraction,
 				accountPriority: policy?.priority === undefined || !Number.isFinite(policy.priority) ? 0 : policy.priority,
 				allowanceSpent: remainingFraction === 0,
 				reclaimReady:

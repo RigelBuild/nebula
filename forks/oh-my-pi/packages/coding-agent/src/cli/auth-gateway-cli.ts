@@ -402,15 +402,15 @@ export interface GatewayClaudeResetCoordinator {
 	inFlightByCredential: Map<number, Promise<boolean>>;
 }
 
-function hasUsableExhaustedClaudeWeeklyReset(report: UsageReport | null | undefined): boolean {
-	const weekly = report?.limits.find(limit => limit.id === "anthropic:7d");
+function hasUsableExhaustedClaudeWeeklyReset(report: UsageReport | null | undefined, windowId: string): boolean {
+	const weekly = report?.limits.find(limit => limit.id === windowId);
 	const exhausted = weekly?.status === "exhausted" || (weekly ? (resolveUsedFraction(weekly) ?? 0) >= 0.999 : false);
 	const credits = report?.resetCredits;
 	return (
 		exhausted &&
 		credits?.eligible === true &&
 		(credits.redeemableCount ?? credits.availableCount) >= 1 &&
-		credits.credits?.some(credit => credit.usable === true && credit.clears?.includes("anthropic:7d")) === true
+		credits.credits?.some(credit => credit.usable === true && credit.clears?.includes(windowId)) === true
 	);
 }
 
@@ -447,19 +447,26 @@ export function createGatewayClaudeResetHook(args: {
 				logger.info("auth-gateway Claude usage check failed", { credentialId, error: String(error) });
 				return false;
 			}
-			if (!hasUsableExhaustedClaudeWeeklyReset(report)) return false;
+			// The block is the shared weekly window when that row is exhausted; a Fable-only block is
+			// the Fable row alone. A Fable request blocked by the shared week may redeem a full-week grant.
+			const sharedWeeklyBlocked = hasUsableExhaustedClaudeWeeklyReset(report, "anthropic:7d");
+			const fableOnlyBlocked =
+				!sharedWeeklyBlocked && hasUsableExhaustedClaudeWeeklyReset(report, "anthropic:7d:fable");
+			if (!sharedWeeklyBlocked && !fableOnlyBlocked) return false;
+			const blockedWindow = sharedWeeklyBlocked ? "anthropic:7d" : "anthropic:7d:fable";
 			let actions: ClaudeResetAction[] = [];
 			try {
 				const statuses = await args.storage.resets.list({
 					provider: "anthropic",
 					signal: AbortSignal.any([signal, AbortSignal.timeout(10_000)]),
 				});
+				const planModes = drainFirstRecovery ? { ...modes, weekly: "yes" as const } : modes;
 				const plan = planClaudeResetRedemptions({
 					nowMs: Date.now(),
 					trigger: "blocked",
 					provider,
 					modelId,
-					settings: resetPlanSettings(drainFirstRecovery ? { ...modes, weekly: "yes" } : modes, cfg),
+					settings: resetPlanSettings(planModes, cfg),
 					reports: statuses.flatMap(status => (status.report ? [status.report] : [])),
 					statuses,
 					permitsCredential: id => id === credentialId,
@@ -468,7 +475,13 @@ export function createGatewayClaudeResetHook(args: {
 					lastAttemptAtByAccount: args.coordinator.lastAttemptAtByAccount,
 				});
 				actions = plan.actions.filter(
-					action => action.target.credentialId === credentialId && action.blockedWindows?.includes("anthropic:7d"),
+					action =>
+						action.target.credentialId === credentialId &&
+						action.blockedWindows?.includes(blockedWindow) === true &&
+						// Spends only grants the user has consented to; `unset` asks first, and the gateway has no prompt.
+						planModes[action.window] === "yes" &&
+						// A Fable-only block is restored only by a Fable grant, never a full-week grant.
+						(!fableOnlyBlocked || action.window === "fable"),
 				);
 			} catch (error) {
 				logger.info("auth-gateway Claude reset planning failed", { credentialId, error: String(error) });
@@ -534,7 +547,7 @@ export async function runGatewayClaudeResetSweep(args: {
 	args.signal.throwIfAborted();
 	for (const status of statuses) {
 		args.signal.throwIfAborted();
-		if (!hasUsableExhaustedClaudeWeeklyReset(status.report)) continue;
+		if (!hasUsableExhaustedClaudeWeeklyReset(status.report, "anthropic:7d")) continue;
 		await args.hook({
 			provider: "anthropic",
 			credentialId: status.credentialId,

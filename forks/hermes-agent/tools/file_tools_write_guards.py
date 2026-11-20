@@ -61,6 +61,22 @@ def _hermes_home_real() -> str:
     return os.path.realpath(str(get_hermes_home()))
 
 
+_approval_policy_resolved: str | None = None
+_approval_policy_resolved_loaded = False
+
+
+def _get_approval_policy_resolved() -> str | None:
+    """Resolved path of the operator approval policy file, or None when none is configured or it is refused.
+    Resolved per call (it tracks config and env); a test may pin it via ``_approval_policy_resolved``
+    + ``_approval_policy_resolved_loaded``."""
+    if _approval_policy_resolved_loaded:
+        return _approval_policy_resolved
+    try:
+        from tools.approval_review_context import approval_policy_path
+        return approval_policy_path() or None
+    except Exception:
+        return None
+
 def _get_hermes_config_resolved() -> str | None:
     """Resolved absolute path of the Hermes config file for the ACTIVE profile.
 
@@ -171,6 +187,13 @@ def _check_sensitive_path(filepath: str, task_id: str = "default") -> str | None
             f"Refusing to write to Hermes config file: {filepath}\n"
             "Agent cannot modify security-sensitive configuration. "
             "Edit ~/.hermes/config.yaml directly or use 'hermes config' instead.")
+    # The operator approval policy is trusted reviewer input; a prompt-injected agent that rewrote it could
+    # turn every reviewer verdict into APPROVE. Same hard deny as config.yaml.
+    approval_policy = _get_approval_policy_resolved()
+    if approval_policy and approval_policy in candidates:
+        return (
+            f"Refusing to write to approval policy file: {filepath}\n"
+            "Agent cannot modify the operator approval policy.")
     from tools.skill_lock import path_refusal
     if reason := path_refusal(candidates):
         return f"Refusing to write to {filepath}: {reason}"

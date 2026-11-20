@@ -145,32 +145,78 @@ def test_reviewer_unavailable_verdict_goes_to_the_human(monkeypatch):
 
 # ── Always-human calls never reach the reviewer short-cut ─────────────────────
 
-def test_payment_fill_consent_never_reaches_the_reviewer_or_gate(monkeypatch):
-    """A payment-card fill asks its own consent (``request_elicitation_consent``). The reviewer and
-    the plugin gate are never called, so no reviewer verdict can approve a card fill."""
-    from tools import approval_prompt
-
+def _spy_reviewer_and_gate(monkeypatch):
+    """Record any call to the reviewer or the plugin gate. Both must stay untouched on always-human paths."""
     touched = []
     monkeypatch.setattr(approval, "_smart_verdict", lambda *a, **k: touched.append("reviewer") or "approve")
     monkeypatch.setattr(approval, "_run_approval_gate", lambda *a, **k: touched.append("gate") or {})
-    monkeypatch.setattr(approval_prompt._ctx, "_is_single_query_approval_context", lambda: True)
+    return touched
+
+
+def test_payment_fill_consent_never_reaches_the_reviewer_or_gate(monkeypatch):
+    """A payment-card fill asks its own consent through ``request_elicitation_consent``. This runs the real
+    consent path in a gateway session with a notify callback, so the decision reaches the gateway round-trip.
+    The reviewer and the plugin gate must never be called."""
+    from tools import approval_prompt
+
+    touched = _spy_reviewer_and_gate(monkeypatch)
+    asked = []
+
+    def _await(session_key, notify_cb, approval_data, *, surface="gateway"):
+        asked.append(approval_data)
+        return {"resolved": True, "choice": "once", "cancelled": None}
+
+    monkeypatch.setattr(approval_prompt._gw, "_await_gateway_decision", _await)
+    monkeypatch.setattr(approval_prompt._ctx, "_is_single_query_approval_context", lambda: False)
+    monkeypatch.setattr(approval_prompt._ctx, "_is_gateway_approval_context", lambda: True)
+    monkeypatch.setattr(approval, "_gateway_notify_cb", lambda sk: (lambda data: None))
     result = approval_prompt.request_elicitation_consent(
         "Fill payment card 'Visa' on https://shop.test", "Approve only if you intend to pay here.",
         surface="vault-payment", title="Confirm payment card fill?",
     )
-    assert result == "decline"
+    assert len(asked) == 1, "the payment fill must reach the human decision path"
+    assert result == "accept"
     assert touched == []
 
 
 def test_unlock_never_reaches_the_reviewer_or_gate(monkeypatch):
-    """Unlocking a password manager asks the master password through the unlock prompt callback.
-    It must not call the reviewer or the plugin gate."""
-    from agent.vault_backends import unlock
+    """Drive the real unlock tool: a locked backend asks the master password through the surface's unlock
+    prompt callback. The reviewer and the plugin gate must never be called on that path."""
+    import json
 
-    touched = []
-    monkeypatch.setattr(approval, "_smart_verdict", lambda *a, **k: touched.append("reviewer") or "approve")
-    monkeypatch.setattr(approval, "_run_approval_gate", lambda *a, **k: touched.append("gate") or {})
-    monkeypatch.setattr(unlock, "get_unlock_prompt_callback", lambda: None)
-    monkeypatch.setattr(unlock, "can_prompt_here", lambda: False)
-    assert unlock.can_prompt_here() is False
+    from agent.vault_backends import unlock
+    from tools import browser_vault_tool
+
+    touched = _spy_reviewer_and_gate(monkeypatch)
+    prompted = []
+
+    class _LockedBackend:
+        name = "bitwarden"
+        display_name = "Bitwarden"
+        needs_unlock = True
+        desktop_app = False
+        unlocked = False
+
+        def is_unlocked(self):
+            return self.unlocked
+
+        def unlock(self, master):
+            prompted.append(("unlock", master))
+            self.unlocked = True
+
+    monkeypatch.setattr("agent.vault_backends.enabled_backends", lambda: [_LockedBackend()])
+    monkeypatch.setattr(unlock, "can_prompt_here", lambda: True)
+
+    def _prompt(backend_name, display_name):
+        prompted.append(("prompt", backend_name))
+        return "master-pw"
+
+    unlock.set_unlock_prompt_callback(_prompt)
+    try:
+        result = json.loads(browser_vault_tool.browser_vault_unlock("bitwarden"))
+    finally:
+        unlock.set_unlock_prompt_callback(None)
+
+    assert ("prompt", "bitwarden") in prompted, "the unlock must reach its prompt callback"
+    assert result["success"] is True
     assert touched == []

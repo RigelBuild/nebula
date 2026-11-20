@@ -88,6 +88,22 @@ def test_reviewer_approve_runs_without_asking_the_human(monkeypatch):
     assert seen == {}
 
 
+def test_plugin_origin_turn_with_reviewer_approve_still_prompts_the_human(monkeypatch):
+    """H1: a plugin-injected row never runs on the reviewer's APPROVE alone. ``_smart_gate`` already
+    asks the human for plugin-origin turns; the review-first short-cut must do the same."""
+    from gateway.session_ingress import plugin_origin_turn
+
+    seen = _capture_human(monkeypatch)
+    calls = _verdict(monkeypatch, "approve")
+    token = plugin_origin_turn.set(True)
+    try:
+        request_tool_approval("terminal", "why", rule_key="k", display="cmd", review=True)
+    finally:
+        plugin_origin_turn.reset(token)
+    assert calls == ["cmd"]
+    assert seen.get("command") == "cmd", "plugin-origin APPROVE must reach the human prompt"
+
+
 @pytest.mark.parametrize("verdict, prompts", [("approve", False), ("escalate", False), ("deny", True)])
 def test_review_first_honours_cached_grant_except_deny(monkeypatch, verdict, prompts):
     monkeypatch.setattr(approval, "is_approved", lambda *_: True)

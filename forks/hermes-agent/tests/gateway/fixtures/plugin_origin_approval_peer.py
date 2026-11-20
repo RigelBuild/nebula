@@ -12,7 +12,7 @@ import traceback
 PLUGIN_ID = "approval-fixture"
 PLUGIN_KEYS = ("allow_gateway_injection", "allow_origin_sessions")
 CASES = {
-    "review-approve": {"hook": True, "review": True, "answer": "once"},
+    "review-dangerous-approve": {"hook": True, "review": True, "answer": "once"},
     "review-mixed-queue": {"hook": True, "review": True, "answer": "once"},
     "review-escalate": {"hook": True, "review": True, "verdict": "escalate", "answer": "once"},
     "review-deny": {"hook": True, "review": True, "verdict": "deny", "answer": "once"},

@@ -1263,9 +1263,10 @@ def _run_approval_gate(
 
     if review_first:
         verdict, note = _review_first_verdict(display_target, description, pattern_key, session_key)
-        if verdict == "approve":
+        if verdict == "approve" and not plugin_origin:
             # The reviewer passed the call: run it once. Nothing is recorded, so the next identical call is
-            # reviewed again and no grant outlives this call.
+            # reviewed again and no grant outlives this call. A plugin-origin turn never takes this short-cut
+            # (matches ``_smart_gate``): the human still sees the card.
             return _approved()
         reviewer_denied = verdict == "deny"
         if reviewer_denied:

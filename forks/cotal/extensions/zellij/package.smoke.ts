@@ -6,7 +6,7 @@ import { dirname, join } from "node:path";
 import type { LaunchSpec } from "@cotal-ai/core";
 import { buildNewPaneArgs, buildNewTabArgs } from "./src/driver.js";
 import { parseZellijPlacement } from "./src/placement.js";
-import { launcherState, privateLauncher, waitForLauncherExit, ZellijRuntime, zellijRuntimeProvider } from "./src/runtime.js";
+import { launcherState, privateLauncher, waitForLauncherExit, ZellijRuntime, zellijRuntimeProvider, type ZellijAgentHandle } from "./src/runtime.js";
 import * as zellij from "./src/driver.js";
 
 let checks = 0;
@@ -125,6 +125,14 @@ if (action === "dump-screen") {
   writeFileSync(countPath, String(reads));
   console.log(process.env.COTAL_ZELLIJ_TEST_SCREEN ?? (reads >= 3 ? "Continue?" : "booting"));
   process.exit(0);
+}
+if (action === "list-panes" && process.env.COTAL_ZELLIJ_TEST_MODE === "dead-session") {
+  // The spawn's own pane lookup (the first call) succeeds; the watch's later read finds no session.
+  const lookups = process.env.COTAL_ZELLIJ_TEST_LOG + ".lookups";
+  let seen = 0;
+  try { seen = Number(readFileSync(lookups, "utf8")) || 0; } catch {}
+  writeFileSync(lookups, String(seen + 1));
+  if (seen >= 1) { console.error("No active zellij sessions found."); process.exit(1); }
 }
 if (action === "list-panes") {
   const mode = process.env.COTAL_ZELLIJ_TEST_MODE;
@@ -520,6 +528,29 @@ await withFakeZellij("exited", (logPath, session) => {
   const screen = zellij.dumpScreen(session, "terminal_99", Date.now() + 1_000);
   const dumps = readCalls(logPath).filter((args) => args[3] === "dump-screen").length;
   check("a stale screen of an exited pane is never read", screen === undefined && dumps === 0, `screen=${JSON.stringify(screen)} dumps=${dumps}`);
+});
+await withFakeZellij("dead-session", async (logPath, session) => {
+  // A dead session makes the watch's read throw; the watch must settle failed with a reason, not throw out of confirm.
+  process.env.COTAL_ZELLIJ_TEST_SCREEN = "Continue?";
+  let spawnThrew = false;
+  let handle: ZellijAgentHandle | undefined;
+  try {
+    handle = new ZellijRuntime(session).spawn("dead-agent", { command: "sleep", args: ["600"], confirm: "Continue?" }, process.cwd());
+  } catch {
+    spawnThrew = true;
+  }
+  let waitError = "";
+  try {
+    await waitForCalls(logPath, () => handle?.confirmOutcome?.() !== undefined, 10_000);
+  } catch (error) {
+    waitError = String(error);
+  }
+  const outcome = handle?.confirmOutcome?.();
+  const reason = handle?.confirmFailure?.() ?? "";
+  handle?.stop({ graceful: false });
+  check("a dead session makes the watch settle failed, not throw out of confirm",
+    !spawnThrew && waitError === "" && outcome === "failed" && reason.includes("No active zellij sessions"),
+    `spawnThrew=${spawnThrew} waitError=${JSON.stringify(waitError)} outcome=${String(outcome)} reason=${JSON.stringify(reason)}`);
 });
 // script(1) runs its command through the login shell, so a stand-in client keeps the fake on PATH.
 const fakeScript = (bin: string): string => {

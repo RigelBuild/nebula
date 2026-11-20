@@ -1176,6 +1176,23 @@ def _review_line(verdict: str, note: str) -> str:
     return f"{head}: {note}" if note else head
 
 
+def _review_first_verdict(display_target: str, description: str, pattern_key: str,
+                          session_key: str) -> tuple[str, str]:
+    """The smart reviewer's ``(verdict, note)`` for a plugin-escalated call. A reviewer that raises
+    counts as ``unavailable``: the human decides, so a broken reviewer fails closed, never open."""
+    pop_review_note()  # drop any note a previous review on this thread left behind
+    try:
+        reviewer_description = f"{description} (rule: {pattern_key.removeprefix('plugin_rule:')})" \
+            if pattern_key.startswith("plugin_rule:") else description
+        verdict = _smart_verdict(display_target, reviewer_description, pattern_key, [pattern_key], session_key)
+    except Exception as exc:
+        logger.warning("Plugin approval reviewer raised (%s); asking the human", type(exc).__name__)
+        pop_review_note()
+        return "unavailable", f"error: {type(exc).__name__}"
+    note = pop_review_note()
+    return verdict, note
+
+
 def _run_approval_gate(
     *, pattern_key: str, description: str, display_target: str, approval_callback=None,
     subject: str = "", noun: str = "flagged actions",
@@ -1245,15 +1262,16 @@ def _run_approval_gate(
         return _approved()
 
     if review_first:
-        pop_review_note()  # drop any note a previous review on this thread left behind
-        verdict = _smart_verdict(display_target, description, pattern_key, [pattern_key], session_key)
-        note = pop_review_note()
-        if verdict == "deny":
+        verdict, note = _review_first_verdict(display_target, description, pattern_key, session_key)
+        if verdict == "approve":
+            # The reviewer passed the call: run it once. Nothing is recorded, so the next identical call is
+            # reviewed again and no grant outlives this call.
+            return _approved()
+        reviewer_denied = verdict == "deny"
+        if reviewer_denied:
             _record_denial(session_key)
-            reviewer_denied = True
-        else:
-            reviewer_denied = False
-        if not reviewer_denied and not plugin_origin and is_approved(session_key, pattern_key):
+        elif not plugin_origin and is_approved(session_key, pattern_key):
+            # A human already granted this exact key. An ESCALATE honours that grant; a DENY never does.
             return _approved()
         description = f"{description}\n{_review_line(verdict, note)}"
     else:

@@ -26,6 +26,7 @@ import * as postmortem from "@oh-my-pi/pi-utils/postmortem";
 import { fuzzyFilter } from "@oh-my-pi/pi-tui/fuzzy";
 import chalk from "@oh-my-pi/pi-utils/chalk";
 import { reset as resetCapabilities } from "./capability";
+import { startMemoryLog } from "./debug/memory-log";
 import {
 	type Args,
 	reportInvalidFlagValues,
@@ -2993,6 +2994,8 @@ export async function runRootCommand(
 						process.exit(0);
 					}
 				}
+				const stopMemoryLog = startMemoryLog();
+				postmortem.register("memory-log", stopMemoryLog, { exitOnly: true });
 				const startupLease = takeStartupComposerLease();
 				try {
 					stopStartupWatchdog();

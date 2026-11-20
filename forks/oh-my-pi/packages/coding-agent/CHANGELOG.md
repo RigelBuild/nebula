@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Added
+- Interactive omp logs one `memory` line every 30 s (RSS, heap, external, array buffers, Linux RssAnon, live subagents), skipped while RSS moves less than 256 MB unless 10 minutes have passed
 
 - Auto-learn capture can run on a configured model role with `autolearn.captureRole`, skipping capture when the role or its model is unavailable. `autolearn.capturePrompt` swaps in a prompt file. `autolearn.captureMaxInputTokens` sends an oversized replay as a digest, and skips capture when the system prompt and tools alone exceed the cap. `autolearn.journalDir` writes lessons to a journal instead of managed skills. `autolearn.secretPatterns` refuses a journal lesson that matches a secret pattern.
 

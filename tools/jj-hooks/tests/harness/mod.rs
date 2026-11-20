@@ -641,14 +641,14 @@ repos:
 "#;
 
 /// Records `$PWD` and its pgrp, then waits on a ticking background loop whose PID it records.
-/// The loop stops by itself once its tick directory is removed, its hook shell exits, or after 600 ticks.
+/// The loop stops by itself once its tick directory is removed or after 600 ticks.
 pub const PRE_PUSH_SLEEPER: &str = r#"
 repos:
   - repo: local
     hooks:
       - id: sleeper
         name: sleeper
-        entry: sh -c 'set -- $(cat /proc/$$/stat); printf "%s" "$PWD" > "$JJ_HOOKS_TEST_CWD_OUT"; printf "%s" "$5" > "$JJ_HOOKS_TEST_PGRP_OUT"; (i=0; while [ "$i" -lt 600 ] && [ -d "${JJ_HOOKS_TEST_TICK_OUT%/*}" ] && kill -0 $$ 2>/dev/null; do date > "$JJ_HOOKS_TEST_TICK_OUT"; sleep 0.1; i=$((i + 1)); done) & echo "$!" > "$JJ_HOOKS_TEST_PID_OUT"; wait'
+        entry: sh -c 'set -- $(cat /proc/$$/stat); printf "%s" "$PWD" > "$JJ_HOOKS_TEST_CWD_OUT"; printf "%s" "$5" > "$JJ_HOOKS_TEST_PGRP_OUT"; (i=0; while [ "$i" -lt 600 ] && [ -d "${JJ_HOOKS_TEST_TICK_OUT%/*}" ]; do date > "$JJ_HOOKS_TEST_TICK_OUT"; sleep 0.1; i=$((i + 1)); done) & echo "$!" > "$JJ_HOOKS_TEST_PID_OUT"; wait'
         language: system
         stages: [pre-push]
         always_run: true
@@ -659,17 +659,22 @@ repos:
 ///
 /// Hold it for the whole test: `Drop` also runs when the test panics. The
 /// loop normally stops by itself once its tick directory is removed, so this
-/// is the fast path. The PID is signalled only while its cmdline still names
-/// the sleeper script, so a PID the kernel has reused is left alone.
+/// is the fast path. The PID is signalled only while its environment holds
+/// exactly `JJ_HOOKS_TEST_TICK_OUT=<tick_file>`, so a sibling test's loop, or
+/// a PID the kernel has reused, is left alone.
 #[cfg(target_os = "linux")]
 pub struct TickLoopGuard {
     pid_file: PathBuf,
+    tick_file: PathBuf,
 }
 
 #[cfg(target_os = "linux")]
 impl TickLoopGuard {
-    pub fn new(pid_file: PathBuf) -> Self {
-        Self { pid_file }
+    pub fn new(pid_file: PathBuf, tick_file: PathBuf) -> Self {
+        Self {
+            pid_file,
+            tick_file,
+        }
     }
 }
 
@@ -682,10 +687,12 @@ impl Drop for TickLoopGuard {
         let Ok(pid) = pid.trim().parse::<u32>() else {
             return;
         };
-        let Ok(cmdline) = std::fs::read(format!("/proc/{pid}/cmdline")) else {
+        let Ok(environ) = std::fs::read(format!("/proc/{pid}/environ")) else {
             return;
         };
-        if !String::from_utf8_lossy(&cmdline).contains("JJ_HOOKS_TEST_TICK_OUT") {
+        let mut want = b"JJ_HOOKS_TEST_TICK_OUT=".to_vec();
+        want.extend_from_slice(self.tick_file.as_os_str().as_encoded_bytes());
+        if !environ.split(|byte| *byte == 0).any(|var| var == want) {
             return;
         }
         let _ = Command::new("kill")

@@ -133,7 +133,7 @@ fn next_push_sweeps_worktree_after_owner_is_killed() {
     let pid_out = repo.tmp.path().join("sleeper-pid");
     let tick_out = repo.tmp.path().join("sleeper-tick");
     // Kills the tick loop on any exit, including a failed assertion below.
-    let _tick_guard = TickLoopGuard::new(pid_out.clone());
+    let _tick_guard = TickLoopGuard::new(pid_out.clone(), tick_out.clone());
     let log = repo.tmp.path().join("jj-hp.log");
     let root_env = root.to_str().unwrap();
     let cwd_env = cwd_out.to_str().unwrap();

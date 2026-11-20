@@ -15,7 +15,7 @@ tasks:
   test:
     command: nix
     args: ['develop', '--command', 'cargo', 'test']
-    # A hosted arm runner was killed for memory during the test build.
+    # A hosted arm runner was killed during the test build, probably for memory.
     env:
       CARGO_PROFILE_TEST_DEBUG: '0'
       CARGO_PROFILE_DEV_DEBUG: '0'

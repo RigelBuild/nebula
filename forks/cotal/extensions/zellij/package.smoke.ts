@@ -6,7 +6,7 @@ import { dirname, join } from "node:path";
 import type { LaunchSpec } from "@cotal-ai/core";
 import { buildNewPaneArgs, buildNewTabArgs } from "./src/driver.js";
 import { parseZellijPlacement } from "./src/placement.js";
-import { launcherState, privateLauncher, waitForLauncherExit, ZellijRuntime, zellijRuntimeProvider, type ZellijAgentHandle } from "./src/runtime.js";
+import { launcherState, privateLauncher, seatState, waitForLauncherExit, waitForSeatExit, ZellijRuntime, zellijRuntimeProvider, type ZellijAgentHandle } from "./src/runtime.js";
 import * as zellij from "./src/driver.js";
 
 let checks = 0;
@@ -46,7 +46,7 @@ async function waitForCalls(logPath: string, done: (calls: string[][]) => boolea
 }
 
 async function withFakeZellij(
-  mode: "missing-session" | "partial-tab" | "confirm" | "no-server" | "probe-error" | "bad-tabs" | "dropped-pane" | "unavailable" | "slow-probe" | "no-client" | "slow-client" | "clients-error" | "clients-flaky" | "handoff" | "exited" | "spawn-count" | "exits-mid-read" | "dead-session",
+  mode: "missing-session" | "partial-tab" | "confirm" | "no-server" | "probe-error" | "bad-tabs" | "dropped-pane" | "unavailable" | "slow-probe" | "no-client" | "slow-client" | "clients-error" | "clients-flaky" | "handoff" | "exited" | "spawn-count" | "exits-mid-read" | "dead-session" | "session-not-found" | "vanishes-in-dump" | "probe-fails-then-exited",
   run: (logPath: string, session: string) => void | Promise<void>,
 ): Promise<void> {
   // The fake is a shebang script Windows cannot exec, and zellij ships no Windows build.
@@ -73,6 +73,16 @@ appendFileSync(process.env.COTAL_ZELLIJ_TEST_LOG, JSON.stringify(args) + "\\n");
 if (process.env.COTAL_ZELLIJ_TEST_MODE === "unavailable") process.exit(1);
 if (process.env.COTAL_ZELLIJ_TEST_MODE === "slow-probe") Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 600);
 if (process.env.COTAL_ZELLIJ_TEST_MODE === "hung-probe") Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1500);
+if (process.env.COTAL_ZELLIJ_TEST_MODE === "session-not-found" && args[0] === "--session") { console.error("Session '" + args[1] + "' not found. The following sessions are active:"); process.exit(1); }
+if (process.env.COTAL_ZELLIJ_TEST_MODE === "probe-fails-then-exited" && (args[0] === "list-sessions" || args[3] === "list-panes")) {
+  // The first 100 probes fail; then the pane reads exited, so only the failed probes can keep a wait going.
+  const countPath = process.env.COTAL_ZELLIJ_TEST_LOG + ".probes";
+  let seen = 0;
+  try { seen = Number(readFileSync(countPath, "utf8")) || 0; } catch {}
+  writeFileSync(countPath, String(seen + 1));
+  if (seen < 100) { console.error("Error occurred: timed out"); process.exit(1); }
+  if (args[3] === "list-panes") { console.log(JSON.stringify([{ id: 99, tab_id: 77, title: "probe-agent", is_plugin: false, exited: true, exit_status: 0 }])); process.exit(0); }
+}
 if (args[0] === "list-sessions") {
   const mode = process.env.COTAL_ZELLIJ_TEST_MODE;
   if (mode === "no-server") { console.error("No active zellij sessions found."); process.exit(1); }
@@ -118,6 +128,7 @@ if (action === "list-tabs") {
   console.log(JSON.stringify([{ tab_id: 77, name: "confirm-agent", active: true }]));
   process.exit(0);
 }
+if (action === "dump-screen" && process.env.COTAL_ZELLIJ_TEST_MODE === "vanishes-in-dump") { console.error("Pane not found"); process.exit(1); }
 if (action === "dump-screen") {
   // Real zellij 0.45.1 prints an exited, held pane's last screen with rc 0, so the fake does the same.
   if (process.env.COTAL_ZELLIJ_TEST_MODE === "exited") { console.log("prompt"); process.exit(0); }
@@ -134,6 +145,15 @@ if (action === "list-panes" && process.env.COTAL_ZELLIJ_TEST_MODE === "dead-sess
   try { seen = Number(readFileSync(lookups, "utf8")) || 0; } catch {}
   writeFileSync(lookups, String(seen + 1));
   if (seen >= 1) { console.error("No active zellij sessions found."); process.exit(1); }
+}
+if (action === "list-panes" && process.env.COTAL_ZELLIJ_TEST_MODE === "vanishes-in-dump") {
+  // The first pane listing sees the pane live; every later listing finds it gone.
+  const seenPath = process.env.COTAL_ZELLIJ_TEST_LOG + ".panes";
+  let seen = 0;
+  try { seen = Number(readFileSync(seenPath, "utf8")) || 0; } catch {}
+  writeFileSync(seenPath, String(seen + 1));
+  console.log(JSON.stringify(seen >= 1 ? [] : [{ id: 77, tab_id: 77, title: "confirm-agent", is_plugin: false, exited: false, exit_status: null }]));
+  process.exit(0);
 }
 if (action === "list-panes" && process.env.COTAL_ZELLIJ_TEST_MODE === "exits-mid-read") {
   // The first pane listing sees the pane live; the listing after the dump sees it exited.
@@ -559,10 +579,11 @@ await withFakeZellij("exits-mid-read", (logPath, session) => {
   const calls = readCalls(logPath).map((args) => args[3]);
   check("a screen read is dropped when its pane exits during the dump", screen === undefined, `screen=${JSON.stringify(screen)} calls=${calls.join(",")}`);
 });
-await withFakeZellij("confirm", (_logPath, session) => {
+await withFakeZellij("confirm", (logPath, session) => {
   // A hung zellij must not hold status() past its budget; a probe that times out reads running.
   const handle = new ZellijRuntime(session).spawn("hung-agent", { command: "sleep", args: ["600"] }, process.cwd());
   process.env.COTAL_ZELLIJ_TEST_MODE = "hung-probe";
+  const before = readCalls(logPath).length;
   const started = Date.now();
   let status = "threw";
   try {
@@ -571,21 +592,26 @@ await withFakeZellij("confirm", (_logPath, session) => {
     // The check below names a throw.
   }
   const elapsed = Date.now() - started;
+  const probed = readCalls(logPath).slice(before).some((args) => args[0] === "list-sessions" || args[3] === "list-panes");
   process.env.COTAL_ZELLIJ_TEST_MODE = "confirm";
   handle.stop({ graceful: false });
   check("a hung zellij probe does not hold status past its budget", elapsed < 3_000 && status === "running", `elapsed=${elapsed} status=${status}`);
+  check("a hung seat status reaches zellij before it reads running", probed);
 });
-await withFakeZellij("confirm", (_logPath, session) => {
+await withFakeZellij("confirm", (logPath, session) => {
   // A live seat whose launcher wrote no pid or exit file reads running from its live pane, and never throws.
   const handle = new ZellijRuntime(session).spawn("live-agent", { command: "sleep", args: ["600"] }, process.cwd());
+  const before = readCalls(logPath).length;
   let status = "threw";
   try {
     status = handle.status();
   } catch {
     // The check below names a throw.
   }
+  const probed = readCalls(logPath).slice(before).some((args) => args[0] === "list-sessions" || args[3] === "list-panes");
   handle.stop({ graceful: false });
   check("a live seat with no pid or exit file reads running", status === "running", `status=${status}`);
+  check("a live seat with no pid or exit file reads its pane during status", probed);
 });
 await withFakeZellij("dead-session", async (logPath, session) => {
   // A dead session makes the watch's read throw; the watch must settle failed with a reason, not throw out of confirm.
@@ -609,6 +635,73 @@ await withFakeZellij("dead-session", async (logPath, session) => {
   check("a dead session makes the watch settle failed, not throw out of confirm",
     !spawnThrew && waitError === "" && outcome === "failed" && reason.includes("dead-session"),
     `spawnThrew=${spawnThrew} waitError=${JSON.stringify(waitError)} outcome=${String(outcome)} reason=${JSON.stringify(reason)}`);
+});
+
+await withFakeZellij("session-not-found", (_logPath, session) => {
+  // A session that dies between its listing and a pane read answers with zellij's own not-found text.
+  let message = "";
+  try {
+    zellij.dumpScreen(session, "terminal_77", Date.now() + 1_000);
+  } catch (error) {
+    message = error instanceof Error ? error.message : String(error);
+  }
+  check("a session that vanishes mid-read throws dead-session, not zellij's raw error", message.includes("dead-session"), `message=${JSON.stringify(message)}`);
+});
+
+await withFakeZellij("vanishes-in-dump", (_logPath, session) => {
+  // The pane is live before the dump and gone when zellij fails the dump: that is no screen, not an error.
+  let screen: string | undefined = "unset";
+  let thrown = "";
+  try {
+    screen = zellij.dumpScreen(session, "terminal_77", Date.now() + 1_000);
+  } catch (error) {
+    thrown = error instanceof Error ? error.message : String(error);
+  }
+  check("a pane that vanishes during its dump reads as no screen, not an error", thrown === "" && screen === undefined, `screen=${JSON.stringify(screen)} thrown=${JSON.stringify(thrown)}`);
+});
+
+await withFakeZellij("probe-fails-then-exited", (_logPath, session) => {
+  // A failed probe names its pane on stderr and the seat still reads running.
+  const launcher = privateLauncher({ command: process.execPath, args: ["-e", "0"] }, process.cwd(), "probe-agent");
+  const lines: string[] = [];
+  const savedError = console.error;
+  console.error = (...args: unknown[]) => { lines.push(args.map(String).join(" ")); };
+  let state = "threw";
+  try {
+    state = seatState(launcher.dir, session, "terminal_99");
+  } catch {
+    // The check below names a throw.
+  } finally {
+    console.error = savedError;
+    rmSync(launcher.dir, { recursive: true, force: true });
+  }
+  check(
+    "a failed seat probe reads running and writes a stderr line naming its pane",
+    state === "running" && lines.some((line) => line.includes("could not read pane terminal_99")),
+    `state=${state} lines=${JSON.stringify(lines)}`,
+  );
+});
+
+await withFakeZellij("probe-fails-then-exited", async (_logPath, session) => {
+  // Every probe fails for a long stretch. The wait must reject on its probe bound rather than poll on.
+  const launcher = privateLauncher({ command: process.execPath, args: ["-e", "0"] }, process.cwd(), "probe-agent");
+  const started = Date.now();
+  let outcome = "resolved";
+  let reason = "";
+  try {
+    await waitForSeatExit(launcher.dir, session, "terminal_99", 0, 3);
+  } catch (error) {
+    outcome = "rejected";
+    reason = error instanceof Error ? error.message : String(error);
+  } finally {
+    rmSync(launcher.dir, { recursive: true, force: true });
+  }
+  const elapsed = Date.now() - started;
+  check(
+    "a seat wait whose probes keep failing rejects with a probe error within its bound",
+    outcome === "rejected" && elapsed < 3_000 && reason.includes("probe"),
+    `outcome=${outcome} elapsed=${elapsed} reason=${JSON.stringify(reason)}`,
+  );
 });
 // script(1) runs its command through the login shell, so a stand-in client keeps the fake on PATH.
 const fakeScript = (bin: string): string => {

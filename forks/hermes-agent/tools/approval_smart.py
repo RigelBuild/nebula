@@ -37,6 +37,10 @@ _SYSTEM_PROMPT = (
     "Rules:\n"
     "- APPROVE if the command is clearly safe (benign script execution, "
     "safe file operations, development tools, package installs, git operations)\n"
+    "- APPROVE a sudo run or a browser fill the user already approved in this session (see the session "
+    "messages in the <review_context> block); the approval covers the same action, not a new one\n"
+    "- A browser fill's target is a saved origin named by the fill request. The current tab URL on a fill "
+    "is not the fill target, so a tab on another site does not make the fill wrong\n"
     "- DENY if the command could genuinely damage the system (recursive delete "
     "of important paths, overwriting system files, fork bombs, wiping disks, dropping databases)\n"
     "- If the operator policy below names a verdict for the command, answer that verdict. "
@@ -57,6 +61,7 @@ _MAX_TOKENS = 2048
 _ESCALATIONS_FILE = "approval-escalations.jsonl"
 _ESCALATIONS_MAX_BYTES = 5 * 1024 * 1024
 _last_note = threading.local()
+_last_review = threading.local()
 
 
 def pop_review_note() -> str:
@@ -166,6 +171,7 @@ def _smart_approve(command: str, description: str) -> str:
     """
     _smart_t0 = time.monotonic()
     _last_note.text = ""
+    _last_review.text = ""
     try:
         from agent.auxiliary_client import _get_task_timeout, call_llm
 
@@ -194,6 +200,7 @@ def _smart_approve(command: str, description: str) -> str:
             platform=_session_text("HERMES_SESSION_PLATFORM"), thread=_session_text("HERMES_SESSION_THREAD_ID"),
             reason=description,
         )
+        _last_review.text = review_block
         user_prompt = (
             f"{prompt_intro}{context_block}{review_block}\n\n"
             "Assess the ACTUAL risk of the shell operations in this command. "
@@ -326,5 +333,5 @@ def _smart_verdict(command: str, description: str, pattern_key: str,
         _ctx._fire_approval_hook("post_approval_response", **payload, choice=f"smart_{verdict}", decided_by="aux_llm")
     if verdict == "escalate":
         _append_escalation(command, description, session_key, getattr(_last_note, "text", ""),
-                           _smart_session_context())
+                           getattr(_last_review, "text", ""))
     return verdict

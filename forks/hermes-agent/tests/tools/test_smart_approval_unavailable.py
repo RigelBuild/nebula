@@ -288,3 +288,39 @@ def test_failed_rotation_still_appends_the_record(hermes_home, monkeypatch, capl
 
     records = [json.loads(line) for line in live.read_text().splitlines() if line.startswith("{")]
     assert [r["command"] for r in records] == ["bash kept.sh"]
+
+
+def test_escalation_record_holds_the_review_context_the_reviewer_saw(hermes_home):
+    """The log's ``context`` is the rendered review block the reviewer was sent: the user's go-ahead is in it,
+    a secret in that go-ahead is redacted, and the cwd-only block is no longer the whole record."""
+    from tools.approval_review_context import bind_review_context, reset_review_context
+
+    secret = "sk-test-LIVE-0123456789abcdefghijklmnop"
+    messages = [{"role": "user", "content": f"yes go ahead, the key is {secret}"}]
+    token = bind_review_context(messages=messages, user_message=messages[0]["content"])
+    try:
+        reply = _response("ESCALATE\nRuns a command the user asked for.")
+        with patch("agent.auxiliary_client.call_llm", return_value=reply):
+            approval_smart._smart_verdict("ls -la", "why", "terminal", ["terminal"], "sess-ctx")
+    finally:
+        reset_review_context(token)
+
+    record = json.loads((hermes_home / "logs" / "approval-escalations.jsonl").read_text().splitlines()[0])
+    assert "yes go ahead" in record["context"]
+    assert "Triggering user message" in record["context"]
+    assert secret not in record["context"]
+    assert "Session working directory" not in record["context"]
+
+
+def test_system_prompt_approves_what_matt_already_approved_in_session():
+    """A sudo run or a fill the user already said go-ahead to in this session is APPROVE, not a fresh question."""
+    prompt = approval_smart._SYSTEM_PROMPT
+    assert "already approved" in prompt
+    assert "in this session" in prompt
+
+
+def test_system_prompt_says_the_current_tab_is_not_the_fill_target():
+    """A browser fill's target is the saved origin named in the request, not the tab that happens to be open."""
+    prompt = approval_smart._SYSTEM_PROMPT
+    assert "current tab" in prompt
+    assert "not the fill target" in prompt

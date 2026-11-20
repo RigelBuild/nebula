@@ -1,0 +1,66 @@
+# Self-contained server image: builds the UI and the server from this source tree, with
+# no prebuilt input. The final stage matches Dockerfile.server.multiarch.rootless.
+
+# The UI output does not depend on the target platform, so it builds on the build host.
+FROM --platform=$BUILDPLATFORM docker.io/node:24@sha256:9d266751ca3d7fdbe651c878ffd5ad0a42fed49a18c283509267c97f025b7496 AS web
+
+WORKDIR /src
+COPY . .
+RUN corepack enable && make build-ui
+
+# cgo: build natively for each target platform (CD sets up QEMU for arm64); no C cross toolchain.
+FROM docker.io/golang:1.27@sha256:205c7636d74e0ffbe3d007162df7d74f859f5a8c8322dfb9f907977686c126cf AS build
+
+WORKDIR /src
+COPY . .
+COPY --from=web /src/web/dist ./web/dist
+ARG TARGETOS TARGETARCH CI_COMMIT_SHA CI_COMMIT_TAG CI_COMMIT_BRANCH
+# make derives VERSION and LDFLAGS from CI_COMMIT_TAG. TAGS matches the server tags of
+# release-server-xgo; make adds grpcnotrace itself.
+RUN --mount=type=cache,target=/root/.cache/go-build \
+    --mount=type=cache,target=/go/pkg \
+    mkdir -p dist/server/${TARGETOS}_${TARGETARCH} && \
+    make release-server CGO_ENABLED=1 TARGETOS=${TARGETOS} TARGETARCH=${TARGETARCH} \
+    TAGS='sqlite sqlite_unlock_notify netgo osusergo'
+
+# Certs, zoneinfo and the woodpecker user come from here. They do not depend on the
+# target platform, so this stage also runs on the build host.
+FROM --platform=$BUILDPLATFORM docker.io/golang:1.27@sha256:205c7636d74e0ffbe3d007162df7d74f859f5a8c8322dfb9f907977686c126cf AS system
+
+RUN groupadd -g 1000 woodpecker && \
+  useradd -u 1000 -g 1000 woodpecker && \
+  mkdir -p /var/lib/woodpecker
+
+# add backward compatible timezone names (US/Eastern, Asia/Calcutta, ...) to match alpine images
+RUN apt update && \
+  apt install -y --no-install-recommends tzdata-legacy && \
+  rm -rf /usr/share/zoneinfo/right
+
+FROM scratch AS stage
+
+# collect certs, timezone data, user and data directory from system stage
+COPY --from=system /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+COPY --from=system /usr/share/zoneinfo /usr/share/zoneinfo
+COPY --from=system /etc/passwd /etc/passwd
+COPY --from=system /etc/group /etc/group
+COPY --from=system --chown=woodpecker:woodpecker /var/lib/woodpecker /var/lib/woodpecker
+
+FROM scratch
+ARG TARGETOS TARGETARCH
+ENV GODEBUG=netdns=go
+# Internal setting do NOT change! Signals that woodpecker is running inside a container
+ENV WOODPECKER_IN_CONTAINER=true
+ENV XDG_CACHE_HOME=/var/lib/woodpecker
+ENV XDG_DATA_HOME=/var/lib/woodpecker
+ENV SQLITE_TMPDIR=/var/lib/woodpecker
+EXPOSE 8000 9000 80 443
+
+# copy system files as single layer from stage image
+COPY --from=stage / /
+# copy server binary
+COPY --from=build /src/dist/server/${TARGETOS}_${TARGETARCH}/woodpecker-server /bin/
+
+USER woodpecker
+
+HEALTHCHECK CMD ["/bin/woodpecker-server", "ping"]
+ENTRYPOINT ["/bin/woodpecker-server"]

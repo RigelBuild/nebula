@@ -300,6 +300,26 @@ func TestManifestMergesAndSortsHeldPackagesAndImages(t *testing.T) {
 	}
 }
 
+func TestManifestListsAHeldNameOnceWhenPackageAndImageShareIt(t *testing.T) {
+	// woodpecker-agent is both a binary package and an image. Both are held, so
+	// the name reaches held twice before the dedupe in build.
+	p := Plan{Source: "s", Binaries: []Binary{{Package: "woodpecker-agent", Version: "1.2.0"}},
+		Images: []ImageSpec{{Name: "woodpecker-agent", Repository: "ghcr.io/x/woodpecker-agent"}}}
+	in := &manifestInput{planPath: writePlan(t, p), tag: "nebula-20261117-9", baseURL: "https://x/",
+		systems: []string{"x86_64-linux"}, held: []string{"woodpecker-agent"}}
+	data, err := in.build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m Manifest
+	if err := json.Unmarshal(data, &m); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(m.Held, []string{"woodpecker-agent"}) {
+		t.Fatalf("held = %v, want [woodpecker-agent]", m.Held)
+	}
+}
+
 func TestManifestCommandRecordsImageDigests(t *testing.T) {
 	p := imagePlan(t, []string{"omp"})
 	in := &manifestInput{planPath: writePlan(t, p), tag: "nebula-20261117-7", baseURL: "https://x/",

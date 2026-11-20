@@ -1,5 +1,6 @@
 import type { Effort } from "@oh-my-pi/pi-catalog/effort";
 import { THINKING_EFFORTS } from "@oh-my-pi/pi-catalog/effort";
+import { clampThinkingLevelForModel } from "@oh-my-pi/pi-catalog/model-thinking";
 import type { Api, Model } from "@oh-my-pi/pi-catalog/types";
 import { logger } from "@oh-my-pi/pi-utils";
 import type { ConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
@@ -41,8 +42,11 @@ export function resolveAutolearnCaptureTarget(
 }
 
 /**
- * A role's level. `off` stays `off`. A concrete level passes through. `auto` takes the role model's provisional
- * level, as the session does (`resolveProvisionalAutoLevel`). A role that names no level takes `fallbackLevel`.
+ * A role's level, clamped to the role model's own ladder. `off` stays `off`. A concrete level passes through
+ * when the model runs it, otherwise it climbs down. `auto` takes the model's provisional level, as the session
+ * does (`resolveProvisionalAutoLevel`). A role that names no level, or whose `auto` has no provisional level,
+ * takes `fallbackLevel`. Every non-`off` result is clamped, so the seat's level never reaches a model that
+ * cannot run it.
  */
 function roleLevel(
 	model: Model<Api>,
@@ -50,6 +54,9 @@ function roleLevel(
 	fallbackLevel: Effort | undefined,
 ): Effort | "off" | undefined {
 	if (level === "off") return "off";
-	if (level === AUTO_THINKING) return resolveProvisionalAutoLevel(model) ?? fallbackLevel;
-	return THINKING_EFFORTS.find(effort => effort === level) ?? fallbackLevel;
+	if (level === AUTO_THINKING) {
+		return clampThinkingLevelForModel(model, resolveProvisionalAutoLevel(model) ?? fallbackLevel);
+	}
+	const concrete = THINKING_EFFORTS.find(effort => effort === level);
+	return clampThinkingLevelForModel(model, concrete ?? fallbackLevel);
 }

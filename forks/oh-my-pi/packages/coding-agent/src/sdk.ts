@@ -2019,9 +2019,9 @@ export function createAutoLearnCaptureRunner(
 				tokenizer.countTokens(
 					sourceTools.map(tool => `${tool.name}\n${tool.description}\n${JSON.stringify(tool.parameters)}`),
 				);
-			// A fixed part over the cap leaves no room for any replay: skip rather than send the capture with no history.
-			if (fixed > maxInputTokens) {
-				logger.warn("auto-learn capture skipped: system prompt and tools exceed autolearn.captureMaxInputTokens", {
+			// A fixed part at or over the cap leaves no room for any replay: skip rather than send the capture with no history.
+			if (fixed >= maxInputTokens) {
+				logger.warn("auto-learn capture skipped: system prompt and tools reach autolearn.captureMaxInputTokens", {
 					fixed,
 					maxInputTokens,
 				});

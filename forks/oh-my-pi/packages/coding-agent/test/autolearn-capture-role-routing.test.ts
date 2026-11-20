@@ -1,12 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import { Effort } from "@oh-my-pi/pi-catalog/effort";
 import { type } from "@oh-my-pi/omptype";
-import { Agent, type AgentTool } from "@oh-my-pi/pi-agent-core";
+import { Agent, type AgentTool, Tokenizer } from "@oh-my-pi/pi-agent-core";
 import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
 import { resolveAutolearnCaptureTarget } from "@oh-my-pi/pi-coding-agent/autolearn/capture-target";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { createAutoLearnCaptureRunner } from "@oh-my-pi/pi-coding-agent/sdk";
-import { convertToLlm } from "@oh-my-pi/pi-coding-agent/session/messages";
+import { type CustomMessage, convertToLlm } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { logger } from "@oh-my-pi/pi-utils";
 
 const manageSkill: AgentTool = {
@@ -17,8 +17,11 @@ const manageSkill: AgentTool = {
 	execute: async () => ({ content: [{ type: "text", text: "captured" }] }),
 };
 
-/** A seat that already has history and reasons off, so a capture that forces reasoning on is visible. */
-async function reasoningOffSeat() {
+/**
+ * A seat with history. `reasoningOn` false reasons off, so a capture that forces reasoning on is visible; true
+ * reasons at High, so a role that turns reasoning off is visible against a seat that had it on.
+ */
+async function seatWithHistory(reasoningOn: boolean) {
 	const seat = createMockModel({ id: "seat-model", provider: "anthropic", responses: [{ content: ["Answer."] }] });
 	const sourceAgent = new Agent({
 		initialState: {
@@ -26,7 +29,7 @@ async function reasoningOffSeat() {
 			systemPrompt: ["Primary system prompt"],
 			tools: [manageSkill],
 			thinkingLevel: Effort.High,
-			disableReasoning: true,
+			disableReasoning: !reasoningOn,
 		},
 		convertToLlm,
 		streamFn: seat.stream,
@@ -57,11 +60,20 @@ describe("autolearn capture role thinking selectors (M1)", () => {
 		const target = resolveAutolearnCaptureTarget(roleSettings("luna/luna:auto"), [luna], Effort.Low);
 		expect(target?.thinkingLevel).toBe(Effort.High);
 	});
+
+	it("clamps a fallback level the role model cannot run, instead of passing the seat's max through", () => {
+		const luna = createMockModel({ id: "luna", provider: "luna", reasoning: true });
+		// The ladder stops at xhigh: a seat at max must not reach the role model as max.
+		Object.assign(luna, { thinking: { efforts: [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh] } });
+		const target = resolveAutolearnCaptureTarget(roleSettings("luna/luna"), [luna], Effort.Max);
+		expect(target?.thinkingLevel).not.toBe(Effort.Max);
+		expect(target?.thinkingLevel).toBe(Effort.XHigh);
+	});
 });
 
 describe("autolearn capture routing and forced reasoning (M2)", () => {
 	it("runs the capture on the role's model, not the seat's", async () => {
-		const { seat, sourceAgent } = await reasoningOffSeat();
+		const { seat, sourceAgent } = await seatWithHistory(false);
 		const role = createMockModel({ id: "luna", provider: "luna", responses: [{ content: ["Kept."] }] });
 		const built: Array<{ id: string | undefined }> = [];
 		const run = createAutoLearnCaptureRunner({
@@ -80,7 +92,7 @@ describe("autolearn capture routing and forced reasoning (M2)", () => {
 	});
 
 	it("forces reasoning on for a role that names a level, even when the seat has it off", async () => {
-		const { sourceAgent } = await reasoningOffSeat();
+		const { sourceAgent } = await seatWithHistory(false);
 		const role = createMockModel({ id: "luna", provider: "luna", responses: [{ content: ["Kept."] }] });
 		const run = createAutoLearnCaptureRunner({
 			sourceAgent,
@@ -94,7 +106,7 @@ describe("autolearn capture routing and forced reasoning (M2)", () => {
 	});
 
 	it("keeps reasoning off for a role set to off, on a seat that has it on", async () => {
-		const { sourceAgent } = await reasoningOffSeat();
+		const { sourceAgent } = await seatWithHistory(true);
 		const role = createMockModel({ id: "luna", provider: "luna", responses: [{ content: ["Kept."] }] });
 		const run = createAutoLearnCaptureRunner({
 			sourceAgent,
@@ -109,13 +121,42 @@ describe("autolearn capture routing and forced reasoning (M2)", () => {
 
 describe("autolearn capture digest guard (L2)", () => {
 	it("skips the capture and warns when the system prompt alone exceeds captureMaxInputTokens", async () => {
-		const { seat, sourceAgent } = await reasoningOffSeat();
+		const { seat, sourceAgent } = await seatWithHistory(false);
 		const warned = vi.spyOn(logger, "warn").mockImplementation(() => {});
 		const run = createAutoLearnCaptureRunner({
 			sourceAgent,
 			captureTools: () => [manageSkill],
 			createAgent: options => new Agent({ ...options, convertToLlm, streamFn: seat.stream }),
 			maxInputTokens: 1,
+		});
+		await run("Automated capture prompt");
+		expect(seat.calls).toHaveLength(1);
+		expect(warned).toHaveBeenCalledWith(expect.stringContaining("captureMaxInputTokens"), expect.any(Object));
+	});
+
+	it("skips the capture when the fixed prompt is exactly at the cap, leaving no replay budget", async () => {
+		const { seat, sourceAgent } = await seatWithHistory(false);
+		const warned = vi.spyOn(logger, "warn").mockImplementation(() => {});
+		// Measure the fixed part (system prompt and tools) with the runner's own tokenizer, then cap at exactly that.
+		const tokenizer = new Tokenizer(seat);
+		const fixed =
+			tokenizer.countTokens(["Primary system prompt"]) +
+			tokenizer.countTokens(
+				[manageSkill].map(tool => `${tool.name}\n${tool.description}\n${JSON.stringify(tool.parameters)}`),
+			) +
+			tokenizer.countMessage({
+				role: "custom",
+				customType: "autolearn-nudge",
+				content: "Automated capture prompt",
+				display: false,
+				attribution: "agent",
+				timestamp: 0,
+			} as CustomMessage);
+		const run = createAutoLearnCaptureRunner({
+			sourceAgent,
+			captureTools: () => [manageSkill],
+			createAgent: options => new Agent({ ...options, convertToLlm, streamFn: seat.stream }),
+			maxInputTokens: fixed,
 		});
 		await run("Automated capture prompt");
 		expect(seat.calls).toHaveLength(1);

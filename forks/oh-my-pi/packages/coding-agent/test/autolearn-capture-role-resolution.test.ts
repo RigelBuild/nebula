@@ -29,7 +29,8 @@ describe("autolearn capture role resolution", () => {
 	});
 
 	it("uses the thinking level the role names over the seat's level", () => {
-		const luna = createMockModel({ id: "luna", provider: "luna" });
+		const luna = createMockModel({ id: "luna", provider: "luna", reasoning: true });
+		Object.assign(luna, { thinking: { efforts: [Effort.Low, Effort.Medium, Effort.High] } });
 		const settings = Settings.isolated({ "autolearn.captureRole": "judge" });
 		settings.setModelRole("judge", "luna/luna:high");
 		const target = resolveAutolearnCaptureTarget(settings, [luna], Effort.Low);
@@ -38,7 +39,8 @@ describe("autolearn capture role resolution", () => {
 	});
 
 	it("falls back to the seat's thinking level when the role names none", () => {
-		const luna = createMockModel({ id: "luna", provider: "luna" });
+		const luna = createMockModel({ id: "luna", provider: "luna", reasoning: true });
+		Object.assign(luna, { thinking: { efforts: [Effort.Low, Effort.Medium, Effort.High] } });
 		const settings = Settings.isolated({ "autolearn.captureRole": "judge" });
 		settings.setModelRole("judge", "luna/luna");
 		const target = resolveAutolearnCaptureTarget(settings, [luna], Effort.Medium);

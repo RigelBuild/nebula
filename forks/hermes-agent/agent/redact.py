@@ -749,6 +749,9 @@ _SIGNAL_PHONE_RE = re.compile(r"(\+[1-9]\d{6,14})(?![A-Za-z0-9])")
 _URL_WITH_QUERY_RE = re.compile(r"(https?|wss?|ftp)://([^\s/?#]+)([^\s?#]*)\?([^\s#]+)(#\S*)?")
 _URL_USERINFO_RE = re.compile(r"(https?|wss?|ftp)://([^/\s:@]+):([^/\s@]+)@")
 
+# Log formatter only: keep scheme://host[:port] of an http(s) URL; path, query and fragment may carry credentials.
+_HTTP_URL_PATH_RE = re.compile(r"(https?://(?:\[[^\]\s]*\][^\s/?#\"'<>)\],]*|[^\s/?#\"'<>)\],]+))[/?#][^\s\"'<>)\],]*", re.IGNORECASE)
+
 # Strict provider-egress URL redaction: delimiters stay in capture groups so the
 # query/fragment layout is preserved byte-for-byte; the key is decoded
 # separately for classification. Values stop at ``&``/``;`` (both valid).
@@ -1997,4 +2000,7 @@ class RedactingFormatter(logging.Formatter):
     """Log formatter that redacts secrets from all log messages."""
 
     def format(self, record: logging.LogRecord) -> str:
-        return redact_sensitive_text(super().format(record))
+        text = redact_sensitive_text(super().format(record))
+        if "://" in text:
+            text = _HTTP_URL_PATH_RE.sub(r"\1/<redacted>", text)
+        return text

@@ -243,6 +243,25 @@
           # execs the payload by absolute store path. Expose the raw binary too,
           # for consumers that ship devenv as a relocatable tarball.
           devenv-static-unwrapped = workspaceStatic.rawCrates.devenv.build;
+          # The release bundle CD ships as the devenv asset: each binary the
+          # wrapper puts on PATH, as a raw static build. The wrapper execs its
+          # payload by /nix/store path, so a tarball of it would not run off-store.
+          devenv-static-bundle = pkgs.runCommand "devenv-static-bundle" { } ''
+            mkdir -p $out/bin
+            cp ${workspaceStatic.rawCrates.devenv.build}/bin/devenv $out/bin/
+            cp ${workspaceStatic.rawCrates.devenv.build}/bin/secretspec $out/bin/
+            cp ${workspaceStatic.rawCrates.devenv-run-tests.build}/bin/devenv-run-tests $out/bin/
+            ${pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isDarwin ''
+              # Fail here, not at check-asset, if a dylib comes from the store.
+              for bin in $out/bin/*; do
+                if otool -L "$bin" | tail -n +2 | grep -v -E '^\s+(/usr/lib/|/System/)' | grep -q .; then
+                  echo "error: $bin links a library outside /usr/lib and /System:" >&2
+                  otool -L "$bin" >&2
+                  exit 1
+                fi
+              done
+            ''}
+          '';
           default = self.packages.${system}.devenv;
           crate2nix = pkgs.crate2nix;
           # Tools and shell helpers that `devenv-run-tests` runs `.test.sh` in.

@@ -22,6 +22,10 @@
 }:
 
 let
+  # openssl's static archives, for darwin static only. The shared openssl's
+  # `out` lib is a dylib, which check-asset refuses in a release asset.
+  opensslStatic = openssl.override { static = true; };
+
   nixLibs = [
     nix.libs.nix-expr-c
     nix.libs.nix-store-c
@@ -131,9 +135,11 @@ let
     }
     # Unset, openssl-sys falls back to probing Homebrew on darwin (the nix
     # sandbox is off there) and links its dylibs into the static binary.
+    # On darwin static, link the static archives of openssl: the shared
+    # openssl is a /nix/store dylib that check-asset refuses.
     // lib.optionalAttrs (stdenv.hostPlatform.isStatic && stdenv.hostPlatform.isDarwin) {
-      OPENSSL_LIB_DIR = "${lib.getLib openssl}/lib";
-      OPENSSL_INCLUDE_DIR = "${lib.getDev openssl}/include";
+      OPENSSL_LIB_DIR = "${lib.getLib opensslStatic}/lib";
+      OPENSSL_INCLUDE_DIR = "${lib.getDev opensslStatic}/include";
       OPENSSL_STATIC = "1";
     };
 

@@ -778,12 +778,19 @@ class TurnRunner(GatewayTurnProgressMixin, GatewaySessionAgentMixin):
                 if outcome == "ambiguous":
                     # Timeout ≠ failure: the card may have posted with a late ack. The prompt
                     # registration stays alive so a tap still resolves; re-sending made duplicate
-                    # cards + orphaned "/approve: nothing pending".
+                    # cards + orphaned "/approve: nothing pending". An adapter that bounds its own
+                    # card send (Discord) posts the text prompt and arms the withdrawal itself when
+                    # the send never confirms, so the wait cannot hang to the approval timeout.
                     logger.warning(
                         "Button-based approval send timed out — treating "
                         "as possibly-delivered (no re-send; the prompt "
                         "stays armed for a late tap)"
                     )
+                    return
+                raw = getattr(fut.result(timeout=0), "raw_response", None) if fut.exception(timeout=0) is None else None
+                if outcome == "failed" and isinstance(raw, dict) and raw.get("approval_text_fallback_posted"):
+                    # The adapter already posted the text prompt in the approval's thread and owns its deadline.
+                    register_timeout_notice(self, approval_data, command=cmd, card_message_id=None)
                     return
                 if outcome == "declined":
                     # P5(b): the connector AUTHORIZED this destination and

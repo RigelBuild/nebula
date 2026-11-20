@@ -643,7 +643,7 @@ def test_exec_approval_view_registry_prunes_finished_then_oldest_past_cap():
 
 
 @pytest.mark.asyncio
-async def test_failed_card_send_is_not_registered(monkeypatch):
+async def test_failed_card_send_is_kept_as_undelivered(monkeypatch):
     adapter = DiscordAdapter(PlatformConfig(enabled=True, token="test-token"))
     created: list[_FakeBot] = []
     await _connect(adapter, monkeypatch, created)
@@ -659,7 +659,9 @@ async def test_failed_card_send_is_not_registered(monkeypatch):
         chat_id="555", command="rm x", session_key=session, request_id=request_id)
 
     assert result.success is False
-    assert request_id not in adapter._exec_approval_views
+    # Kept, marked undelivered: the reconnect re-post and the text-answer gate find a failed card by request id.
+    assert adapter._exec_approval_views[request_id].undelivered is True
+    assert adapter._exec_approval_views[request_id]._message is None
     await adapter.disconnect()
 
 @pytest.mark.asyncio
@@ -1520,3 +1522,237 @@ async def test_card_carried_across_reconnect_is_disabled_when_its_wait_times_out
     response.send_message.assert_awaited_once()
     assert response.send_message.await_args.args[0] == t("platform.discord.approval.no_longer_pending")
     await rebuilt.disconnect()
+
+
+def _channel_for(channel_id: int, message_id: int, *, send_error=None, hang_cards: bool = False):
+    """A channel whose sends return a message that carries this channel. ``send_error`` makes every send raise.
+    ``hang_cards`` makes card sends (kwargs with a ``view``) never return; plain-text sends still succeed."""
+    async def send(**kwargs):
+        if send_error is not None:
+            raise send_error
+        if hang_cards and "view" in kwargs:
+            await asyncio.Event().wait()
+        return SimpleNamespace(id=message_id, channel=SimpleNamespace(id=channel_id), edit=AsyncMock(),
+                               embeds=[kwargs["embed"]] if "embed" in kwargs else [])
+    return SimpleNamespace(id=channel_id, send=AsyncMock(side_effect=send))
+
+
+def _text(content: str, author_id: str, channel_id: int):
+    """A plain Discord message from ``author_id`` in channel ``channel_id`` (a thread, or its parent)."""
+    return SimpleNamespace(id=uuid.uuid4().int % 10**15, content=content,
+                           author=SimpleNamespace(id=author_id), channel=SimpleNamespace(id=channel_id))
+
+
+async def _answer(adapter, monkeypatch, message) -> AsyncMock:
+    """Deliver ``message`` through the adapter's live inbound path, admitted, and return the normal-turn handler:
+    a text answer the approval gate does not take reaches it unchanged."""
+    monkeypatch.setattr(adapter, "_discord_message_admission", lambda _m, *, claim: (True, False))
+    handle = AsyncMock(return_value=True)
+    monkeypatch.setattr(adapter, "_handle_message", handle)
+    await adapter._dispatch_discord_message(message)
+    return handle
+
+
+async def _until(predicate, timeout: float = 5.0) -> bool:
+    """Poll ``predicate`` on the loop until it holds or ``timeout`` passes."""
+    deadline = time.monotonic() + timeout
+    while not predicate():
+        if time.monotonic() > deadline:
+            return False
+        await asyncio.sleep(0.01)
+    return True
+
+
+@pytest.mark.asyncio
+async def test_card_undelivered_before_drop_is_posted_again_in_its_thread_after_reconnect(monkeypatch):
+    # The connection drops before the card reaches Discord: the send fails, the request stays pending. On reconnect
+    # the card is posted again in its own thread, with the approval mention, and is tracked as sent.
+    monkeypatch.setenv("DISCORD_ALLOWED_USERS", "11111")
+    adapter = DiscordAdapter(PlatformConfig(enabled=True, token="test-token",
+                                            extra={"approval_mentions": True, "approval_card_confirm_timeout": 5}))
+    created: list[_FakeBot] = []
+    dropped = _channel_for(777, 1, send_error=ConnectionError("gateway connection dropped"))
+    thread = _channel_for(777, 2)
+    monkeypatch.setattr(_FakeBot, "get_channel", lambda self, _cid: dropped if self is created[0] else thread)
+    await _connect(adapter, monkeypatch, created)
+
+    session = "agent:other:discord:555"
+    request_id = uuid.uuid4().hex
+    entry = _queue_entry(monkeypatch, session, request_id)
+    result = await adapter.send_exec_approval(
+        chat_id="555", command="rm x", session_key=session, request_id=request_id, metadata={"thread_id": "777"})
+    assert result.success is False
+    assert entry.result is None and not entry.event.is_set()
+
+    await _connect(adapter, monkeypatch, created)
+    assert await _until(lambda: thread.send.await_count == 1)
+    kwargs = thread.send.await_args.kwargs
+    assert "<@11111>" in kwargs["content"]
+    assert adapter._exec_approval_views[request_id] is kwargs["view"]
+    assert kwargs["view"]._message is not None
+    assert entry.result is None and not entry.event.is_set()
+    await adapter.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_card_not_confirmed_in_time_ends_the_wait_and_posts_the_fallback_in_the_thread(monkeypatch):
+    # The card send never confirms within the configured window. The turn must see "card not delivered" at once
+    # instead of hanging to the approval timeout, and the plain-text fallback goes to the approval's thread.
+    from tools import approval_context
+    from tools.approval_gateway_wait import _await_gateway_decision
+
+    monkeypatch.setenv("DISCORD_ALLOWED_USERS", "11111")
+    adapter = DiscordAdapter(PlatformConfig(enabled=True, token="test-token",
+                                            extra={"approval_card_confirm_timeout": 0.2}))
+    created: list[_FakeBot] = []
+    thread = _channel_for(777, 1, hang_cards=True)
+    monkeypatch.setattr(_FakeBot, "get_channel", lambda self, _cid: thread)
+    await _connect(adapter, monkeypatch, created)
+    monkeypatch.setattr(approval_context, "_get_approval_timeout", lambda: 30)
+    monkeypatch.setattr(approval, "_gateway_queues", {})
+    session = "agent:a:discord:555"
+    loop = asyncio.get_running_loop()
+
+    def notify(data):
+        # Non-blocking, as the runner's notify: the turn keeps waiting while the card send is in flight.
+        asyncio.run_coroutine_threadsafe(
+            adapter.send_exec_approval(chat_id="555", command="rm x", session_key=session,
+                                       request_id=data["request_id"], metadata={"thread_id": "777"}),
+            loop)
+
+    decision = await asyncio.wait_for(asyncio.to_thread(
+        _await_gateway_decision, session, notify, {"command": "rm x", "pattern_keys": ["k"]}), 10)
+
+    # A withdrawal, not an answer: no choice, and the cause names the undelivered card.
+    assert decision["choice"] is None
+    assert decision.get("cancelled") == "the approval card was not delivered"
+    fallback = [call.kwargs for call in thread.send.await_args_list if "view" not in call.kwargs]
+    assert len(fallback) == 1 and "rm x" in fallback[0]["content"]
+    await adapter.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_text_approve_from_a_non_approver_or_another_thread_resolves_nothing(monkeypatch):
+    monkeypatch.setenv("DISCORD_ALLOWED_USERS", "11111")
+    adapter = DiscordAdapter(PlatformConfig(enabled=True, token="test-token",
+                                            extra={"approval_text_approver_id": "22222"}))
+    created: list[_FakeBot] = []
+    monkeypatch.setattr(_FakeBot, "get_channel", lambda self, cid: _channel_for(cid, 1))
+    await _connect(adapter, monkeypatch, created)
+    session = "agent:other:discord:555"
+    request_id = uuid.uuid4().hex
+    entry = _queue_entry(monkeypatch, session, request_id)
+    result = await adapter.send_exec_approval(
+        chat_id="555", command="rm x", session_key=session, request_id=request_id, metadata={"thread_id": "777"})
+    assert result.success is True
+
+    # The requester is not the configured approver; the approver's word in another thread matches no approval.
+    assert (await _answer(adapter, monkeypatch, _text("approve", "11111", 777))).await_count == 1
+    assert (await _answer(adapter, monkeypatch, _text("approve", "22222", 888))).await_count == 1
+    assert entry.result is None and not entry.event.is_set()
+    await adapter.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_text_approve_from_the_approver_in_the_approval_thread_resolves_it(monkeypatch):
+    monkeypatch.setenv("DISCORD_ALLOWED_USERS", "11111")
+    adapter = DiscordAdapter(PlatformConfig(enabled=True, token="test-token",
+                                            extra={"approval_text_approver_id": "22222"}))
+    created: list[_FakeBot] = []
+    monkeypatch.setattr(_FakeBot, "get_channel", lambda self, cid: _channel_for(cid, 1))
+    await _connect(adapter, monkeypatch, created)
+    session = "agent:other:discord:555"
+    request_id = uuid.uuid4().hex
+    entry = _queue_entry(monkeypatch, session, request_id)
+    result = await adapter.send_exec_approval(
+        chat_id="555", command="rm x", session_key=session, request_id=request_id, metadata={"thread_id": "777"})
+    assert result.success is True
+
+    handle = await _answer(adapter, monkeypatch, _text("approve", "22222", 777))
+    handle.assert_not_awaited()
+    assert entry.result == "once"
+    assert entry.event.is_set()
+    await adapter.disconnect()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("extra", [{}, {"approval_text_approver_id": ""}])
+async def test_text_answers_are_disabled_when_no_approver_is_configured(monkeypatch, extra):
+    # Fail closed: with no configured approver, no author may answer by text, not even the requester.
+    monkeypatch.setenv("DISCORD_ALLOWED_USERS", "11111")
+    adapter = DiscordAdapter(PlatformConfig(enabled=True, token="test-token", extra=extra))
+    created: list[_FakeBot] = []
+    monkeypatch.setattr(_FakeBot, "get_channel", lambda self, cid: _channel_for(cid, 1))
+    await _connect(adapter, monkeypatch, created)
+    session = "agent:other:discord:555"
+    request_id = uuid.uuid4().hex
+    entry = _queue_entry(monkeypatch, session, request_id)
+    result = await adapter.send_exec_approval(
+        chat_id="555", command="rm x", session_key=session, request_id=request_id, metadata={"thread_id": "777"})
+    assert result.success is True
+
+    assert (await _answer(adapter, monkeypatch, _text("approve", "22222", 777))).await_count == 1
+    assert (await _answer(adapter, monkeypatch, _text("approve", "11111", 777))).await_count == 1
+    assert entry.result is None and not entry.event.is_set()
+    await adapter.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_text_answer_in_a_thread_with_two_pending_approvals_resolves_nothing(monkeypatch):
+    # Exactly one pending request must match the thread; with two, the text answer is ignored.
+    monkeypatch.setenv("DISCORD_ALLOWED_USERS", "11111")
+    adapter = DiscordAdapter(PlatformConfig(enabled=True, token="test-token",
+                                            extra={"approval_text_approver_id": "22222"}))
+    created: list[_FakeBot] = []
+    monkeypatch.setattr(_FakeBot, "get_channel", lambda self, cid: _channel_for(cid, 1))
+    await _connect(adapter, monkeypatch, created)
+    session = "agent:other:discord:555"
+    first_id, second_id = uuid.uuid4().hex, uuid.uuid4().hex
+    first = _ApprovalEntry({"request_id": first_id, "command": "rm a"})
+    first.authority = {"requester_id": "11111"}
+    second = _ApprovalEntry({"request_id": second_id, "command": "rm b"})
+    second.authority = {"requester_id": "11111"}
+    monkeypatch.setitem(approval._gateway_queues, session, [first, second])
+    for request_id, command in ((first_id, "rm a"), (second_id, "rm b")):
+        result = await adapter.send_exec_approval(
+            chat_id="555", command=command, session_key=session, request_id=request_id, metadata={"thread_id": "777"})
+        assert result.success is True
+
+    assert (await _answer(adapter, monkeypatch, _text("approve", "22222", 777))).await_count == 1
+    assert first.result is None and second.result is None
+    await adapter.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_card_not_confirmed_in_time_is_answered_by_the_approver_in_the_thread_within_the_window(monkeypatch):
+    # The card never confirms, the fallback goes to the thread, and the approver's "approve" there within N resolves.
+    from tools import approval_context
+    from tools.approval_gateway_wait import _await_gateway_decision
+
+    monkeypatch.setenv("DISCORD_ALLOWED_USERS", "11111")
+    adapter = DiscordAdapter(PlatformConfig(enabled=True, token="test-token", extra={
+        "approval_card_confirm_timeout": 2, "approval_text_approver_id": "22222"}))
+    created: list[_FakeBot] = []
+    thread = _channel_for(777, 1, hang_cards=True)
+    monkeypatch.setattr(_FakeBot, "get_channel", lambda self, _cid: thread)
+    await _connect(adapter, monkeypatch, created)
+    monkeypatch.setattr(approval_context, "_get_approval_timeout", lambda: 30)
+    monkeypatch.setattr(approval, "_gateway_queues", {})
+    session = "agent:a:discord:555"
+    loop = asyncio.get_running_loop()
+
+    def notify(data):
+        asyncio.run_coroutine_threadsafe(
+            adapter.send_exec_approval(chat_id="555", command="rm x", session_key=session,
+                                       request_id=data["request_id"], metadata={"thread_id": "777"}),
+            loop)
+
+    wait = asyncio.ensure_future(asyncio.to_thread(
+        _await_gateway_decision, session, notify, {"command": "rm x", "pattern_keys": ["k"]}))
+    assert await _until(lambda: any("view" not in c.kwargs for c in thread.send.await_args_list))
+    handle = await _answer(adapter, monkeypatch, _text("approve", "22222", 777))
+    handle.assert_not_awaited()
+
+    decision = await asyncio.wait_for(wait, 10)
+    assert decision["resolved"] is True and decision["choice"] == "once"
+    await adapter.disconnect()

@@ -82,3 +82,24 @@ def _resolve_exec_approval_admin_gate(config_extra: Optional[dict]) -> tuple[boo
     except Exception:
         admin_ids = set()
     return (True, admin_ids)
+
+
+_APPROVAL_CARD_CONFIRM_TIMEOUT_DEFAULT = 30
+
+
+def _read_approval_card_confirm_timeout(config_extra: Optional[dict]) -> float:
+    """Seconds from ``extra["approval_card_confirm_timeout"]`` (default 30): how long a card send may take to
+    confirm, and how long the plain-text fallback then waits for an answer before the request is withdrawn."""
+    extra = config_extra if isinstance(config_extra, dict) else {}
+    try:
+        seconds = float(extra.get("approval_card_confirm_timeout", _APPROVAL_CARD_CONFIRM_TIMEOUT_DEFAULT))
+    except (TypeError, ValueError):
+        return _APPROVAL_CARD_CONFIRM_TIMEOUT_DEFAULT
+    return seconds if seconds > 0 else _APPROVAL_CARD_CONFIRM_TIMEOUT_DEFAULT
+
+
+def _read_approval_text_approver_id(config_extra: Optional[dict]) -> str:
+    """The one user id whose typed ``approve`` / ``deny`` in an approval's thread answers it. Empty (the default)
+    disables text answers: fail closed."""
+    extra = config_extra if isinstance(config_extra, dict) else {}
+    return str(extra.get("approval_text_approver_id") or "").strip()

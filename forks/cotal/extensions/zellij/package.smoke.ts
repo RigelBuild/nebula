@@ -319,6 +319,17 @@ try {
   }
 }
 
+// A seat whose launcher cannot load has no pid and no exit file. Its pane is the only signal, so the
+// seat must settle exited from the dead pane, not read "running" from its files. No timeout is used.
+await withFakeZellij("exited", (_logPath, session) => {
+  const handle = new ZellijRuntime(session).spawn(
+    "unloadable-agent",
+    { command: process.execPath, args: ["-e", "process.exit(0)"] },
+    process.cwd(),
+  );
+  check("a seat whose launcher never loads reads as exited from its dead pane", handle.status() === "exited");
+});
+
 await withFakeZellij("missing-session", (logPath, session) => {
   let state = "error";
   try {

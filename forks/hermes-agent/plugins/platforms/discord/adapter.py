@@ -1460,6 +1460,7 @@ class DiscordAdapter(DiscordAuthorizationMixin, DiscordMediaMixin, DiscordThread
                 allowed_mentions=_build_allowed_mentions(getattr(self.config, "extra", None)),
                 **proxy_kwargs_for_bot(proxy_url),
             )
+            self._rebind_carried_exec_approval_cards()
             # Fresh connection, fresh dispatch-side silence window: the previous client's last
             # DISPATCH stamp must not leak into this connection's liveness samples (#109521).
             # READY itself is a DISPATCH event, so a healthy connection stamps almost immediately.
@@ -5801,6 +5802,20 @@ class DiscordAdapter(DiscordAuthorizationMixin, DiscordMediaMixin, DiscordThread
             # this adapter as its policy source, so each press reads the allowlist, roles and admin gate connect() sets.
             view.policy_source = self
             self._exec_approval_views[request_id] = view
+
+    def _rebind_carried_exec_approval_cards(self) -> None:
+        """Re-bind each carried card's message handle to this adapter's new client. A carried handle belongs to the
+        replaced client, whose HTTP session is closed, so an edit through it would fail and leave the buttons live.
+        Runs once the client exists, before connect() opens its session."""
+        for view in self._exec_approval_views.values():
+            message = view._message
+            channel_id = getattr(getattr(message, "channel", None), "id", None)
+            message_id = getattr(message, "id", None)
+            if channel_id is None or message_id is None:
+                continue
+            channel = self._client.get_channel(int(channel_id))
+            if channel is not None:
+                view._message = channel.get_partial_message(int(message_id))
 
     async def _on_platform_interaction(self, interaction) -> None:
         """Answer component presses that the live view store cannot route (a view sent before a

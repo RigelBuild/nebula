@@ -73,6 +73,9 @@ class _FakeBot:
         self._events[fn.__name__] = fn
         return fn
 
+    def get_channel(self, _channel_id):
+        return None
+
     async def start(self, token):
         # A live websocket runs until closed. Returning early would make the adapter's gateway task exit and
         # be treated as a post-startup fatal, which re-queues the reconnected adapter.
@@ -1425,3 +1428,85 @@ async def test_adopted_card_takes_the_rebuilt_admin_list_for_a_non_requester(mon
     assert entry.event.is_set()
     await old.disconnect()
     await new.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_card_carried_across_reconnect_is_disabled_when_its_wait_times_out(monkeypatch):
+    """A card sent before a reconnect is carried to the rebuilt adapter. When its wait then ends by timeout, the
+    card's buttons must be disabled through the rebuilt client, and a later press must get the expired reply."""
+    from tools import approval_context
+    from tools.approval_gateway_wait import _await_gateway_decision
+
+    adapter = DiscordAdapter(PlatformConfig(enabled=True, token="test-token"))
+    created: list[_FakeBot] = []
+    await _connect(adapter, monkeypatch, created)
+    adapter._allowed_user_ids = {"11111"}
+    monkeypatch.setattr(approval_context, "_get_approval_timeout", lambda: 1)
+    monkeypatch.setattr(approval, "_gateway_queues", {})
+
+    session = "agent:a:discord:555"
+    card = _capture_card(created[0], message_id=3333)
+    loop = asyncio.get_running_loop()
+
+    def notify(data):
+        future = asyncio.run_coroutine_threadsafe(
+            adapter.send_exec_approval(chat_id="555", command="rm x", session_key=session,
+                                       request_id=data["request_id"]),
+            loop)
+        assert future.result(5).success is True
+
+    wait = asyncio.create_task(asyncio.to_thread(
+        _await_gateway_decision, session, notify, {"command": "rm x", "pattern_keys": ["k"]}))
+    while "view" not in card:
+        await asyncio.sleep(0.01)
+    view = card["view"]
+    request_id = view.request_id
+
+    # Reconnect: the old client's session closes, so an edit through the old message handle fails from now on.
+    # Each client serves the card's channel and hands back a message bound to its own session.
+    old_session_open = {"open": True}
+    landed: list[dict] = []
+    old_message = card["message"]
+    old_message.channel = SimpleNamespace(id=555)  # a real discord.Message carries its channel
+
+    async def old_edit(**kwargs):
+        if not old_session_open["open"]:
+            raise RuntimeError("Session is closed")
+        landed.append({"client": "old", **kwargs})
+
+    old_message.edit = AsyncMock(side_effect=old_edit)
+
+    rebuilt = DiscordAdapter(PlatformConfig(enabled=True, token="test-token"))
+    rebuilt.adopt_exec_approval_views(adapter)
+    await adapter.disconnect()
+    old_session_open["open"] = False
+
+    new_message = SimpleNamespace(id=3333, embeds=old_message.embeds, edit=AsyncMock())
+
+    async def new_edit(**kwargs):
+        landed.append({"client": "new", **kwargs})
+
+    new_message.edit.side_effect = new_edit
+    channel = SimpleNamespace(id=555, get_partial_message=lambda _id: new_message)
+    # The rebuilt client already knows the card's channel when it connects, as a real client does after READY.
+    monkeypatch.setattr(_FakeBot, "get_channel", lambda self, _channel_id: channel, raising=False)
+    await _connect(rebuilt, monkeypatch, created)
+    rebuilt._allowed_user_ids = {"11111"}
+
+    decision = await asyncio.wait_for(wait, 10)
+    assert decision["resolved"] is False
+    await asyncio.sleep(0)
+    await asyncio.gather(*rebuilt._background_tasks)
+
+    # The card's buttons are disabled through the rebuilt client: an edit with no view lands there.
+    assert view.is_finished()
+    assert any(e["client"] == "new" and e.get("view") is None for e in landed)
+
+    # A late press on that card now gets the expired reply.
+    custom_id = f"hermes:exec:{request_id}:once"
+    on_interaction = created[-1]._events["on_interaction"]
+    interaction, response = _press(custom_id, message=new_message)
+    await on_interaction(interaction)
+    response.send_message.assert_awaited_once()
+    assert response.send_message.await_args.args[0] == t("platform.discord.approval.no_longer_pending")
+    await rebuilt.disconnect()

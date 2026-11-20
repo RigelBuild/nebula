@@ -454,7 +454,7 @@ await withFakeZellij("confirm", async (logPath, session) => {
   check(
     "confirm sends one Enter only after the pane displays the prompt",
     enters === 1 && calls.some((args) => args[3] === "dump-screen") && handle.confirmOutcome?.() === "confirmed",
-    `enter writes=${enters} (want 1), dump-screen seen=${calls.some((args) => args[3] === "dump-screen")}, outcome=${String(handle.confirmOutcome?.())} (want confirmed)`,
+    `enter writes=${enters} (want 1), dump-screen seen=${calls.some((args) => args[3] === "dump-screen")}, outcome=${String(handle.confirmOutcome?.())} (want confirmed), reason=${String(handle.confirmFailure?.())}`,
   );
 });
 await withFakeZellij("confirm", async (logPath, session) => {

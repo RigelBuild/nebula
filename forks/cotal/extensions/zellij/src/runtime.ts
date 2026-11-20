@@ -117,6 +117,8 @@ function paneForTab(session: string, tabId: number): string {
  * undefined until the watch settles, so a caller waits on that event rather than on a timer. */
 export interface ZellijAgentHandle extends AgentHandle {
   confirmOutcome(): string | undefined;
+  /** The failure text of a watch that ended `failed`, or undefined. */
+  confirmFailure(): string | undefined;
 }
 
 export class ZellijRuntime implements Runtime {
@@ -187,11 +189,13 @@ export class ZellijRuntime implements Runtime {
     // The watch reports how it ended through `settled`. The handle exposes that outcome, so a caller
     // waits on the event itself rather than on a timer.
     let settledOutcome: string | undefined;
+    let failureText: string | undefined;
     watch?.({
       read: () => zellij.dumpScreen(this.session, startedPane, Date.now() + CONFIRM_BUDGET_MS),
       enter: () => zellij.writePane(this.session, startedPane, "13", Date.now() + CONFIRM_BUDGET_MS),
       down: () => zellij.writeKeyDown(this.session, startedPane, Date.now() + CONFIRM_BUDGET_MS),
       fail: (message) => {
+        failureText = message;
         console.error(`zellij runtime: "${name}": ${message}`);
         try {
           zellij.closePane(this.session, startedPane, Date.now() + CONFIRM_BUDGET_MS);
@@ -216,6 +220,7 @@ export class ZellijRuntime implements Runtime {
       },
       interrupt: () => zellij.interruptPane(this.session, startedPane),
       confirmOutcome: () => settledOutcome,
+      confirmFailure: () => failureText,
       waitForExit: () => waitForLauncherExit(launcher.dir),
       attach: () => {
         throw new Error(`zellij runtime: attach natively with zellij attach ${this.session}`);

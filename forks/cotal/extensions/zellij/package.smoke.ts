@@ -118,6 +118,8 @@ if (action === "list-tabs") {
   process.exit(0);
 }
 if (action === "dump-screen") {
+  // Real zellij 0.45.1 prints an exited, held pane's last screen with rc 0, so the fake does the same.
+  if (process.env.COTAL_ZELLIJ_TEST_MODE === "exited") { console.log("prompt"); process.exit(0); }
   const countPath = process.env.COTAL_ZELLIJ_TEST_SCREEN_COUNT;
   const reads = Number(readFileSync(countPath, "utf8") || "0") + 1;
   writeFileSync(countPath, String(reads));
@@ -507,17 +509,17 @@ await withFakeZellij("slow-probe", (logPath, session) => {
     !readCalls(logPath).some((args) => args[0] === "attach"));
 });
 await withFakeZellij("spawn-count", (logPath, session) => {
-  // A healthy read must spend one zellij spawn, not seven: the pane state is only checked after a dump fails.
+  // A live read is one pane-state probe and one dump: two zellij spawns, not seven.
   process.env.COTAL_ZELLIJ_TEST_SCREEN = "Continue?";
   zellij.dumpScreen(session, "terminal_77", Date.now() + 1_000);
-  const spawns = readCalls(logPath).length;
-  check("a healthy confirm screen read spends one zellij spawn", spawns === 1, `spawns=${spawns} (want 1)`);
+  const calls = readCalls(logPath).map((args) => args[3]);
+  check("a live confirm screen read spends two zellij spawns", calls.length === 2, `spawns=${calls.length} (want 2)`);
 });
-await withFakeZellij("exited", (_logPath, session) => {
-  // dump-screen on an exited pane prints nothing and fails; it must read as absent, not as a screen.
-  process.env.COTAL_ZELLIJ_TEST_SCREEN = "";
+await withFakeZellij("exited", (logPath, session) => {
+  // Real zellij prints a held, exited pane's last screen with rc 0. The read must see the exit first and dump nothing.
   const screen = zellij.dumpScreen(session, "terminal_99", Date.now() + 1_000);
-  check("a read of an exited pane returns no screen", screen === undefined, `screen=${JSON.stringify(screen)}`);
+  const dumps = readCalls(logPath).filter((args) => args[3] === "dump-screen").length;
+  check("a stale screen of an exited pane is never read", screen === undefined && dumps === 0, `screen=${JSON.stringify(screen)} dumps=${dumps}`);
 });
 // script(1) runs its command through the login shell, so a stand-in client keeps the fake on PATH.
 const fakeScript = (bin: string): string => {

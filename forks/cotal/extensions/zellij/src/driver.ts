@@ -51,16 +51,11 @@ function run(args: string[], options: RunOptions = { encoding: "utf8" }): string
 
 /** Read the active viewport of a terminal pane; every call shares one deadline so a watch cannot stall the manager. */
 export function dumpScreen(session: string, paneId: string, deadline: number): string | undefined {
-  if (paneState(session, paneId, deadline) === "exited") return undefined;
-  let screen: string | undefined;
-  try {
-    screen = run(actionArgs(session, ["dump-screen", "--pane-id", paneId]), { encoding: "utf8", deadline });
-  } catch (error) {
-    if (Date.now() >= deadline) throw error;
-  }
-  if (paneState(session, paneId, deadline) === "exited") return undefined;
-  if (screen === undefined) throw new Error(`zellij runtime: could not read pane ${paneId}`);
-  return screen;
+  // zellij 0.45 dumps a held, exited pane's last screen with rc 0, so the pane must be seen running before any dump.
+  // The pane can exit between this list and the dump; the next Enter to it fails and the watch retries.
+  const pane = readPanes(session, deadline).find((candidate) => candidate.id === paneId && !candidate.is_plugin);
+  if (!pane || pane.exited || pane.exit_status !== null) return undefined;
+  return run(actionArgs(session, ["dump-screen", "--pane-id", paneId]), { encoding: "utf8", deadline });
 }
 
 function actionArgs(session: string, action: string[]): string[] {
@@ -261,8 +256,8 @@ export function listTabs(session: string): ZellijTab[] {
   });
 }
 
-export function listPanes(session: string, deadline?: number): ZellijPane[] {
-  if (!sessionExists(session, deadline)) return [];
+/** One `list-panes` call, parsed. Callers add their own session probe if they need one. */
+function readPanes(session: string, deadline?: number): ZellijPane[] {
   const rows = parseArray(run(actionArgs(session, ["list-panes", "--json", "--all"]), { encoding: "utf8", deadline }), "pane list");
   return rows.flatMap((row): ZellijPane[] => {
     if (typeof row !== "object" || row === null || Array.isArray(row)) return [];
@@ -279,6 +274,11 @@ export function listPanes(session: string, deadline?: number): ZellijPane[] {
     ) return [];
     return [{ id: `terminal_${id}`, tab_id: tabId, title, is_plugin: isPlugin, exited, exit_status: exitStatus }];
   });
+}
+
+export function listPanes(session: string, deadline?: number): ZellijPane[] {
+  if (!sessionExists(session, deadline)) return [];
+  return readPanes(session, deadline);
 }
 
 // No `-- <cmd>`: zellij ignores OSC titles from command panes, so the agent is typed into a shell pane.

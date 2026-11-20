@@ -6696,7 +6696,7 @@ def _define_discord_view_classes() -> None:
                         embed.set_footer(text=footer)
                     await msg.edit(embed=embed, view=self if keep_controls else None)
                 except Exception:
-                    logger.warning("[Discord] Could not stamp prompt card", exc_info=True)  # deleted / too old
+                    logger.warning("[Discord] Could not stamp prompt card", exc_info=True)
 
         async def _finalize_embed(self, interaction: discord.Interaction, color, footer: str) -> None:
             """Mark resolved, stamp the embed (color + footer), disable buttons, edit in place, then

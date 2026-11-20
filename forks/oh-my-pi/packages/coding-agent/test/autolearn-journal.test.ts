@@ -342,6 +342,10 @@ describe("manage_skill journal mode", () => {
 	});
 	for (const [label, secret, pattern] of [
 		["GitHub token", `ghp_${"A".repeat(36)}`, "ghp_"],
+		["GitHub OAuth token", `gho_${"A".repeat(36)}`, "gho_"],
+		["GitHub server token", `ghs_${"A".repeat(36)}`, "ghs_"],
+		["GitHub user-to-server token", `ghu_${"A".repeat(36)}`, "ghu_"],
+		["GitHub refresh token", `ghr_${"A".repeat(36)}`, "ghr_"],
 		["JWT", "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.c2ln", "eyJ"],
 	] as const) {
 		it(`writes no file for a body containing a fake ${label} and names the class, not the value`, async () => {

@@ -1877,7 +1877,7 @@ export interface AutoLearnCaptureRunnerOptions {
 	 * The model and thinking level the capture runs on (`autolearn.captureRole`). `null` skips the capture;
 	 * `undefined` (no role configured) keeps the seat's model. A role never falls back to the seat's model.
 	 */
-	resolveCaptureTarget?: () => { model: Model; thinkingLevel?: Effort } | null | undefined;
+	resolveCaptureTarget?: () => { model: Model; thinkingLevel?: Effort | "off" } | null | undefined;
 	/** Replay above this many tokens is sent as a digest that fits it (`autolearn.captureMaxInputTokens`). */
 	maxInputTokens?: number;
 }
@@ -1953,9 +1953,10 @@ export function createAutoLearnCaptureRunner(
 		if (target === null) return;
 		const sourceModel = target?.model ?? seatModel;
 		const sourceSystemPrompt = [...source.systemPrompt];
-		const sourceThinkingLevel: Effort | undefined = target?.thinkingLevel ?? source.thinkingLevel;
-		// A capture role always reasons at its own level; the seat keeps its own setting.
-		const sourceDisableReasoning = target ? false : source.disableReasoning;
+		// A role's `off` turns reasoning off; a role level reasons at that level; the seat keeps its own setting.
+		const sourceThinkingLevel: Effort | undefined =
+			target?.thinkingLevel === "off" ? undefined : (target?.thinkingLevel ?? source.thinkingLevel);
+		const sourceDisableReasoning = target ? target.thinkingLevel === "off" : source.disableReasoning;
 		const sourceTools = [...source.tools];
 		const sourceMessages = [...source.messages];
 		const sourceSentToolDefinitions = options.sourceAgent.copySentToolDefinitions();
@@ -2018,6 +2019,14 @@ export function createAutoLearnCaptureRunner(
 				tokenizer.countTokens(
 					sourceTools.map(tool => `${tool.name}\n${tool.description}\n${JSON.stringify(tool.parameters)}`),
 				);
+			// A fixed part over the cap leaves no room for any replay: skip rather than send the capture with no history.
+			if (fixed > maxInputTokens) {
+				logger.warn("auto-learn capture skipped: system prompt and tools exceed autolearn.captureMaxInputTokens", {
+					fixed,
+					maxInputTokens,
+				});
+				return;
+			}
 			if (fixed + tokenizer.countMessages(replayMessages) > maxInputTokens) {
 				captureMessages = buildCaptureDigest(replayMessages, maxInputTokens - fixed, message =>
 					tokenizer.countMessage(message),

@@ -209,4 +209,17 @@ describe("auto-learn capture target", () => {
 		const digest = buildCaptureDigest(messages, 5, () => 1);
 		expect(digest.map(message => message.timestamp)).toEqual([1, 3, 6, 7]);
 	});
+
+	it("digest never starts the tail with an orphan tool result, even when the budget would fit it", () => {
+		const messages = [
+			{ role: "user", content: "first", timestamp: 1 },
+			{ role: "toolResult", toolCallId: "orphan", content: [], timestamp: 2 },
+			{ role: "assistant", content: [], timestamp: 3 },
+			{ role: "toolResult", toolCallId: "b", content: [], timestamp: 4 },
+		] as unknown as AgentMessage[];
+		// Budget 10 fits every group, so only the leading-toolResult guard keeps the orphan out of the tail.
+		const digest = buildCaptureDigest(messages, 10, () => 1);
+		expect(digest.map(message => message.timestamp)).toEqual([1, 3, 4]);
+		expect(digest.some(message => message.role === "toolResult" && message.timestamp === 2)).toBe(false);
+	});
 });

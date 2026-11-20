@@ -68,6 +68,10 @@ export function resolveAutolearnPath(value: string): string {
 
 export const DEFAULT_AUTOLEARN_SECRET_PATTERNS: readonly string[] = [
 	"ghp_",
+	"gho_",
+	"ghs_",
+	"ghu_",
+	"ghr_",
 	"github_pat_",
 	"glpat-",
 	"lin_api_",

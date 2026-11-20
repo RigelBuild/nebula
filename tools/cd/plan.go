@@ -32,6 +32,8 @@ var (
 	errNixAttr       = errors.New("nix artifact needs an attr")
 	errNixFlake      = errors.New("nix artifact project has no flake.nix")
 	errRuntimeNotNix = errors.New("runtimeDeps needs a nix artifact")
+	errNameClash     = errors.New("image and package share a name")
+	errVersionDrift  = errors.New("rigel-version differs from release.base")
 )
 
 // Binary is one releasable binary package declared by a tool's component.cue.
@@ -104,6 +106,9 @@ func makePlan(ctx context.Context, repo string) (Plan, error) {
 	if p.Images, err = listImages(repo); err != nil {
 		return Plan{}, err
 	}
+	if err = checkNameClash(listed, p.Images); err != nil {
+		return Plan{}, err
+	}
 	all = slices.DeleteFunc(all, func(project string) bool { return notBuiltProjects[project] })
 
 	tag, prev, raw, err := newestRelease(ctx, repo)
@@ -163,6 +168,17 @@ func makePlan(ctx context.Context, repo string) (Plan, error) {
 		p.Images = []ImageSpec{}
 	}
 	return p, nil
+}
+
+// checkNameClash fails when an image shares a name with a binary package. The
+// Release keeps both kinds of name in one held list, so a shared name is ambiguous.
+func checkNameClash(binaries []Binary, images []ImageSpec) error {
+	for _, i := range images {
+		if slices.ContainsFunc(binaries, func(b Binary) bool { return b.Package == i.Name }) {
+			return fmt.Errorf("%w: %s", errNameClash, i.Name)
+		}
+	}
+	return nil
 }
 
 // projectOf maps a repository path to its tools/<name> or forks/<name> project.
@@ -240,6 +256,9 @@ func listBinaries(repo string) ([]Binary, error) {
 			return nil, fmt.Errorf("decode %s: %w", m, err)
 		}
 		project := path.Join(filepath.Base(filepath.Dir(filepath.Dir(m))), filepath.Base(filepath.Dir(m)))
+		if err := checkRigelVersion(filepath.Dir(m), project, c.Release.Base); err != nil {
+			return nil, err
+		}
 		upstreamRev := ""
 		if strings.HasPrefix(project, "forks/") {
 			if upstreamRev, err = readUpstreamRev(filepath.Join(filepath.Dir(m), "upstream.json")); err != nil {

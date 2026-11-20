@@ -300,6 +300,46 @@ func TestManifestMergesAndSortsHeldPackagesAndImages(t *testing.T) {
 	}
 }
 
+func TestPlanRefusesAnImageNamedLikeAPackage(t *testing.T) {
+	dir := newRepo(t)
+	writeFile(t, dir, "forks/pi/moon.yml", "layer: application\n")
+	writeFile(t, dir, "forks/pi/upstream.json", `{"commit":"abc"}`)
+	writeFile(t, dir, "forks/pi/component.cue", `images: {alpha: {
+	repository: "ghcr.io/x/alpha", dockerfile: "Dockerfile.pi", platforms: ["linux/amd64"]
+}}
+`)
+	commitAll(t, dir, "image named like a package")
+	_, err := makePlan(t.Context(), dir)
+	if !errors.Is(err, errNameClash) {
+		t.Fatalf("err = %v, want errNameClash", err)
+	}
+}
+
+func TestPlanRefusesARigelVersionThatDiffersFromReleaseBase(t *testing.T) {
+	dir := newRepo(t)
+	writeFile(t, dir, "forks/pi/moon.yml", "layer: application\n")
+	writeFile(t, dir, "forks/pi/upstream.json", `{"commit":"abc"}`)
+	writeFile(t, dir, "forks/pi/component.cue", `release: {base: "1.0.0"}`+"\n")
+	writeFile(t, dir, "forks/pi/.github/rigel-version", "1.1.0\n")
+	commitAll(t, dir, "drifted version")
+	_, err := makePlan(t.Context(), dir)
+	if !errors.Is(err, errVersionDrift) {
+		t.Fatalf("err = %v, want errVersionDrift", err)
+	}
+}
+
+func TestPlanAcceptsARigelVersionThatMatchesReleaseBase(t *testing.T) {
+	dir := newRepo(t)
+	writeFile(t, dir, "forks/pi/moon.yml", "layer: application\n")
+	writeFile(t, dir, "forks/pi/upstream.json", `{"commit":"abc"}`)
+	writeFile(t, dir, "forks/pi/component.cue", `release: {base: "1.0.0"}`+"\n")
+	writeFile(t, dir, "forks/pi/.github/rigel-version", "1.0.0\n")
+	commitAll(t, dir, "matching version")
+	if _, err := makePlan(t.Context(), dir); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestManifestCommandRecordsImageDigests(t *testing.T) {
 	p := imagePlan(t, []string{"omp"})
 	in := &manifestInput{planPath: writePlan(t, p), tag: "nebula-20261117-7", baseURL: "https://x/",

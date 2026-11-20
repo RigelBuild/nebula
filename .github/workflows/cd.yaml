@@ -309,6 +309,15 @@ jobs:
                   docker run --rm "$2" --version > /dev/null &&
                   docker run --rm --entrypoint /bin/sh "$2" -c "grep -rqsF -- '$SOURCE' /headlamp/frontend"
                 ;;
+              woodpecker-agent-image)
+                # The agent must report the fork version it was built with. CI_COMMIT_TAG
+                # carries a leading v, which the Makefile strips, so the expectation drops it.
+                test -n "$3" && docker run --rm "$2" --version | grep -Fqx "woodpecker-agent version ${3#v}"
+                ;;
+              woodpecker-server-image)
+                # Same check for the server. An empty expectation fails, never passes.
+                test -n "$3" && docker run --rm "$2" --version | grep -Fqx "woodpecker-server version ${3#v}"
+                ;;
             esac
           }
           mkdir -p "$RUNNER_TEMP/images/held"

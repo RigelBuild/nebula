@@ -120,6 +120,25 @@ func readRigelVersion(file string) (string, error) {
 	return v, nil
 }
 
+// checkRigelVersion fails when a project's .github/rigel-version and its
+// release.base both exist and differ. With only one of them there is nothing to compare.
+func checkRigelVersion(dir, project, base string) error {
+	if base == "" {
+		return nil
+	}
+	v, err := readRigelVersion(filepath.Join(dir, ".github", "rigel-version"))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if v != base {
+		return fmt.Errorf("%w: %s", errVersionDrift, project)
+	}
+	return nil
+}
+
 // listImages reads every tools/*/component.cue and forks/*/component.cue images entry.
 func listImages(repo string) ([]ImageSpec, error) {
 	var matches []string

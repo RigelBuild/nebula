@@ -46,7 +46,7 @@ async function waitForCalls(logPath: string, done: (calls: string[][]) => boolea
 }
 
 async function withFakeZellij(
-  mode: "missing-session" | "partial-tab" | "confirm" | "no-server" | "probe-error" | "bad-tabs" | "dropped-pane" | "unavailable" | "slow-probe" | "no-client" | "slow-client" | "clients-error" | "clients-flaky" | "handoff" | "exited" | "spawn-count" | "exits-mid-read",
+  mode: "missing-session" | "partial-tab" | "confirm" | "no-server" | "probe-error" | "bad-tabs" | "dropped-pane" | "unavailable" | "slow-probe" | "no-client" | "slow-client" | "clients-error" | "clients-flaky" | "handoff" | "exited" | "spawn-count" | "exits-mid-read" | "dead-session",
   run: (logPath: string, session: string) => void | Promise<void>,
 ): Promise<void> {
   // The fake is a shebang script Windows cannot exec, and zellij ships no Windows build.
@@ -539,11 +539,12 @@ await withFakeZellij("slow-probe", (logPath, session) => {
     !readCalls(logPath).some((args) => args[0] === "attach"));
 });
 await withFakeZellij("spawn-count", (logPath, session) => {
-  // A live read is one pane-state probe and one dump: two zellij spawns, not seven.
+  // A live read is one pane listing, one dump, and one pane listing after the dump: three zellij spawns. The
+  // second listing drops a screen whose pane exited during the dump, since zellij would print its last screen.
   process.env.COTAL_ZELLIJ_TEST_SCREEN = "Continue?";
   zellij.dumpScreen(session, "terminal_77", Date.now() + 1_000);
   const calls = readCalls(logPath).map((args) => args[3]);
-  check("a live confirm screen read spends two zellij spawns", calls.length === 2, `spawns=${calls.length} (want 2)`);
+  check("a live confirm screen read spends three zellij spawns", calls.length === 3, `spawns=${calls.length} (want 3)`);
 });
 await withFakeZellij("exited", (logPath, session) => {
   // Real zellij prints a held, exited pane's last screen with rc 0. The read must see the exit first and dump nothing.

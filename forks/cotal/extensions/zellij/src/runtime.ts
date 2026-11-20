@@ -16,6 +16,7 @@ import {
 import * as zellij from "./driver.js";
 import { readZellijPlacement, type AgentPlacement } from "./placement.js";
 const CONFIRM_BUDGET_MS = 1_000;
+const STATUS_BUDGET_MS = 1_000;
 
 export interface PrivateLauncher {
   /** Runs the launcher script from `cwd`, so zellij's fallback pane title reads `./<agent>.cjs`. */
@@ -92,11 +93,17 @@ export async function waitForLauncherExit(dir: string, pollMs = 1_000): Promise<
   while (launcherState(dir) === "running") await new Promise<void>((resolve) => setTimeout(resolve, pollMs));
 }
 
-/** A seat whose launcher never wrote a pid or an exit file may never have loaded. Its pane settles it. */
+/** A seat whose launcher never wrote a pid or an exit file may never have loaded. Its pane settles it.
+ * The probe has a fixed budget; a probe that fails or runs past it reads running, because an unknown pane is not a dead one. */
 export function seatState(dir: string, session: string, paneId: string): "running" | "exited" {
   const state = launcherState(dir);
   if (state === "exited" || existsSync(join(dir, "pid"))) return state;
-  return zellij.paneState(session, paneId) === "exited" ? "exited" : "running";
+  try {
+    // "dead-session" (no session listed) and "exited" (the pane is gone) both end the seat.
+    return zellij.paneState(session, paneId, Date.now() + STATUS_BUDGET_MS) === "running" ? "running" : "exited";
+  } catch {
+    return "running";
+  }
 }
 
 export async function waitForSeatExit(dir: string, session: string, paneId: string, pollMs = 1_000): Promise<void> {

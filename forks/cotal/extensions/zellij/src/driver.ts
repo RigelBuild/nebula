@@ -51,11 +51,25 @@ function run(args: string[], options: RunOptions = { encoding: "utf8" }): string
 
 /** Read the active viewport of a terminal pane; every call shares one deadline so a watch cannot stall the manager. */
 export function dumpScreen(session: string, paneId: string, deadline: number): string | undefined {
-  // zellij 0.45 dumps a held, exited pane's last screen with rc 0, so the pane must be seen running before any dump.
-  // The pane can exit between this list and the dump; the next Enter to it fails and the watch retries.
+  try {
+    // zellij 0.45 dumps a held, exited pane's last screen with rc 0, so the pane must be seen running before and after the dump.
+    if (!paneLive(session, paneId, deadline)) return undefined;
+    const screen = run(actionArgs(session, ["dump-screen", "--pane-id", paneId]), { encoding: "utf8", deadline });
+    // The pane can exit during the dump; its screen is then the last one it held, so it is dropped.
+    return paneLive(session, paneId, deadline) ? screen : undefined;
+  } catch (error) {
+    if (isNoSessionsError(error)) throw deadSessionError(session);
+    throw error;
+  }
+}
+
+function paneLive(session: string, paneId: string, deadline: number): boolean {
   const pane = readPanes(session, deadline).find((candidate) => candidate.id === paneId && !candidate.is_plugin);
-  if (!pane || pane.exited || pane.exit_status !== null) return undefined;
-  return run(actionArgs(session, ["dump-screen", "--pane-id", paneId]), { encoding: "utf8", deadline });
+  return pane !== undefined && !pane.exited && pane.exit_status === null;
+}
+
+function deadSessionError(session: string): Error {
+  return new Error(`zellij runtime: session ${JSON.stringify(session)} is dead-session; its panes cannot be read`);
 }
 
 function actionArgs(session: string, action: string[]): string[] {
@@ -365,8 +379,10 @@ export function interruptPane(session: string, paneId: string): void {
   writePane(session, paneId, "3");
 }
 
-export function paneState(session: string, paneId: string, deadline?: number): "running" | "exited" {
-  if (!sessionExists(session, deadline)) return "exited";
+export type PaneState = "running" | "exited" | "dead-session";
+
+export function paneState(session: string, paneId: string, deadline?: number): PaneState {
+  if (!sessionExists(session, deadline)) return "dead-session";
   const pane = listPanes(session, deadline).find((candidate) => candidate.id === paneId && !candidate.is_plugin);
   return !pane || pane.exited || pane.exit_status !== null ? "exited" : "running";
 }

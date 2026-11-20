@@ -120,11 +120,7 @@
           meta.mainProgram = "woodpecker-agent";
         };
 
-        # The portable release build nebula CD ships as the woodpecker-agent
-        # asset. A release asset must run without this build's /nix/store: on
-        # Linux, pkgsStatic makes a static musl ELF; on darwin, which cannot link
-        # fully static, it links only the system libSystem under /usr/lib. CD's
-        # check-asset gate enforces both rules. The agent is pure Go with cgo off.
+        # The portable release build nebula CD ships as the woodpecker-agent asset.
         woodpecker-agent-static =
           let
             target = if pkgs.stdenv.hostPlatform.isLinux then pkgs.pkgsStatic else pkgs;

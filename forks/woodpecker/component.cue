@@ -1,4 +1,4 @@
-id: "woodpecker-agent"
+id: "woodpecker"
 release: {
 	base: "3.17.0-rigel.27"
 	artifacts: {

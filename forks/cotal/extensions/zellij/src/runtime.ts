@@ -92,6 +92,17 @@ export async function waitForLauncherExit(dir: string, pollMs = 1_000): Promise<
   while (launcherState(dir) === "running") await new Promise<void>((resolve) => setTimeout(resolve, pollMs));
 }
 
+/** A seat whose launcher never wrote a pid or an exit file may never have loaded. Its pane settles it. */
+export function seatState(dir: string, session: string, paneId: string): "running" | "exited" {
+  const state = launcherState(dir);
+  if (state === "exited" || existsSync(join(dir, "pid"))) return state;
+  return zellij.paneState(session, paneId) === "exited" ? "exited" : "running";
+}
+
+export async function waitForSeatExit(dir: string, session: string, paneId: string, pollMs = 1_000): Promise<void> {
+  while (seatState(dir, session, paneId) === "running") await new Promise<void>((resolve) => setTimeout(resolve, pollMs));
+}
+
 function cleanupLauncher(launcher: PrivateLauncher): void {
   try {
     rmSync(launcher.dir, { recursive: true, force: true });
@@ -210,7 +221,7 @@ export class ZellijRuntime implements Runtime {
     return {
       name,
       kind: "zellij",
-      status: () => launcherState(launcher.dir),
+      status: () => seatState(launcher.dir, this.session, startedPane),
       stop: () => {
         try {
           zellij.closePane(this.session, startedPane);
@@ -221,7 +232,7 @@ export class ZellijRuntime implements Runtime {
       interrupt: () => zellij.interruptPane(this.session, startedPane),
       confirmOutcome: () => settledOutcome,
       confirmFailure: () => failureText,
-      waitForExit: () => waitForLauncherExit(launcher.dir),
+      waitForExit: () => waitForSeatExit(launcher.dir, this.session, startedPane),
       attach: () => {
         throw new Error(`zellij runtime: attach natively with zellij attach ${this.session}`);
       },

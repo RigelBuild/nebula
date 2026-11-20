@@ -74,7 +74,10 @@ class _FakeBot:
         return fn
 
     def get_channel(self, _channel_id):
-        return None
+        return None  # a real client has no cached channels until READY
+
+    def get_partial_messageable(self, _channel_id, **_kw):
+        raise AssertionError("set per test")
 
     async def start(self, token):
         # A live websocket runs until closed. Returning early would make the adapter's gateway task exit and
@@ -1481,15 +1484,16 @@ async def test_card_carried_across_reconnect_is_disabled_when_its_wait_times_out
     await adapter.disconnect()
     old_session_open["open"] = False
 
-    new_message = SimpleNamespace(id=3333, embeds=old_message.embeds, edit=AsyncMock())
+    # A real PartialMessage has channel and id, and no embeds. A real client has no cached channels before READY,
+    # so get_channel returns None while get_partial_messageable still works.
+    new_message = SimpleNamespace(id=3333, channel=SimpleNamespace(id=555), edit=AsyncMock())
 
     async def new_edit(**kwargs):
         landed.append({"client": "new", **kwargs})
 
     new_message.edit.side_effect = new_edit
-    channel = SimpleNamespace(id=555, get_partial_message=lambda _id: new_message)
-    # The rebuilt client already knows the card's channel when it connects, as a real client does after READY.
-    monkeypatch.setattr(_FakeBot, "get_channel", lambda self, _channel_id: channel, raising=False)
+    partial = SimpleNamespace(get_partial_message=lambda _id: new_message)
+    monkeypatch.setattr(_FakeBot, "get_partial_messageable", lambda self, _channel_id, **_kw: partial, raising=False)
     await _connect(rebuilt, monkeypatch, created)
     rebuilt._allowed_user_ids = {"11111"}
 

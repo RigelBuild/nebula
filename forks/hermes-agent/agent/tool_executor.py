@@ -1880,10 +1880,9 @@ def _review_context_for_batch(agent, messages: list):
     """Bind the reviewer context (triggering user message, recent turns, loaded skills) for one tool batch,
     so a plugin approval's smart reviewer can judge the call against what the session was doing."""
     from agent.review_engine import collect_parent_loaded_skills
-    from tools.approval_review_context import bind_review_context, reset_review_context
+    from tools.approval_review_context import bind_review_context, is_human_user_turn, reset_review_context
 
-    user_message = next((m.get("content") for m in reversed(messages or [])
-                         if isinstance(m, dict) and m.get("role") == "user"), None)
+    user_message = next((m.get("content") for m in reversed(messages or []) if is_human_user_turn(m)), None)
     try:
         skills = collect_parent_loaded_skills(agent, messages or [])
     except Exception:

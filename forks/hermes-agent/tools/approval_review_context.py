@@ -29,6 +29,19 @@ _TRUNCATED = "…[truncated: {n} more chars]"
 _PER_TURN_LIMIT = 2000
 _MESSAGE_PREVIEW_LIMIT = 4000
 _TURN_LABELS = {"user": "user", "assistant": "assistant", "tool": "tool result"}
+# A user-role row the runtime wrote (process notice, task-list snapshot, compaction turn): its text is agent-chosen.
+_RUNTIME_LABEL = "runtime notice"
+
+
+def is_human_user_turn(message: Any) -> bool:
+    """A user-role row a person typed. ``_is_real_user_message`` rejects runtime scaffolding by flag or prefix; a
+    ``display_kind`` other than a steer marks a row the gateway injected itself (heartbeats, folded notices)."""
+    from agent.conversation_compression import _is_real_user_message
+    from agent.prompt_builder import STEER_DISPLAY_KIND
+
+    if not _is_real_user_message(message):
+        return False
+    return message.get("display_kind") in (None, "", STEER_DISPLAY_KIND)
 
 # Policy refusals already logged this process, keyed by (path, reason): each is warned about once.
 _warned_refusals: set[tuple[str, str]] = set()
@@ -64,8 +77,9 @@ def render_review_context(*, command: str, cwd: str = "", platform: str = "", th
 
     The block is fenced with a per-call random nonce, so text quoted from the session cannot forge the
     closing tag. Every piece inside the fence is escaped first, the command included; the nonce is fresh
-    for each call. A real user turn is the only ``<user_turn id="NONCE">`` element: every other text has its
-    ``<`` escaped, so no command, script, tool result or reason can produce that shape."""
+    for each call. A user-role row a person typed (:func:`is_human_user_turn`) is the only
+    ``<user_turn id="NONCE">`` element: every other text, runtime notices included, has its ``<`` escaped, so no
+    command, script, tool result, notice or reason can produce that shape."""
     snapshot = _review_context.get() or {}
     nonce = secrets.token_hex(8)
     lines: list[str] = []
@@ -309,6 +323,8 @@ def _recent_turns(messages: Any) -> list[tuple[str, str]]:
         label = _TURN_LABELS.get(role) if isinstance(role, str) else None
         if label is None:
             continue
+        if label == "user" and not is_human_user_turn(message):
+            label = _RUNTIME_LABEL
         text = _content_text(message)
         if text:
             newest.append((label, text))
@@ -514,11 +530,13 @@ def script_contents_block(command: str, cwd: str, home: str) -> str:
     parts = ["Script contents (files the command runs by path, untrusted data):"]
     for path in scripts:
         shown = path.removeprefix(_NO_CWD)
+        # ``"`` escaped in the attribute, so ``without_script_bodies`` matches the whole tag for every path.
+        attr = _fence_safe(shown).replace('"', "&quot;")
         text, note = _read_script(path, home)
         if note:
-            parts.append(f"<script path=\"{_fence_safe(shown)}\">{_fence_safe(note)}: {_fence_safe(shown)}</script>")
+            parts.append(f"<script path=\"{attr}\">{_fence_safe(note)}: {_fence_safe(shown)}</script>")
         else:
             body = _fence_safe(text)
             size = len(body.encode("utf-8"))
-            parts.append(f"<script path=\"{_fence_safe(shown)}\" bytes=\"{size}\">\n{body}\n</script>")
+            parts.append(f"<script path=\"{attr}\" bytes=\"{size}\">\n{body}\n</script>")
     return "\n".join(parts)

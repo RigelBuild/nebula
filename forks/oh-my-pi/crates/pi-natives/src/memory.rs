@@ -111,6 +111,8 @@ impl<T: napi::bindgen_prelude::ToNapiValue> napi::bindgen_prelude::ToNapiValue f
 
 #[cfg(any(all(target_os = "linux", target_env = "gnu"), test))]
 mod allocator {
+	#[cfg(test)]
+	use std::sync::atomic::{AtomicUsize, Ordering};
 	use std::time::Duration;
 
 	use parking_lot::{Condvar, Mutex, MutexGuard};
@@ -143,13 +145,17 @@ mod allocator {
 	struct Trimmer {
 		activity: Mutex<Activity>,
 		idle:     Condvar,
+		#[cfg(test)]
+		parks:    AtomicUsize,
 	}
 
 	impl Trimmer {
 		const fn new() -> Self {
 			Self {
-				activity: Mutex::new(Activity { running: 0, finished: 0, trimmed: 0 }),
-				idle:     Condvar::new(),
+				activity:           Mutex::new(Activity { running: 0, finished: 0, trimmed: 0 }),
+				idle:               Condvar::new(),
+				#[cfg(test)]
+				parks:              AtomicUsize::new(0),
 			}
 		}
 
@@ -176,6 +182,13 @@ mod allocator {
 			}
 		}
 
+		/// Times the trimmer has parked; tests wait on this to see it react to
+		/// work.
+		#[cfg(test)]
+		fn parks(&self) -> usize {
+			self.parks.load(Ordering::Acquire)
+		}
+
 		/// Trim after each quiet period that follows finished work; never
 		/// returns.
 		///
@@ -185,6 +198,8 @@ mod allocator {
 			let mut activity = self.activity.lock();
 			loop {
 				let Some(generation) = activity.pending() else {
+					#[cfg(test)]
+					self.parks.fetch_add(1, Ordering::Release);
 					self.idle.wait(&mut activity);
 					continue;
 				};
@@ -239,7 +254,10 @@ mod allocator {
 
 	#[cfg(test)]
 	mod tests {
-		use std::sync::{Arc, mpsc};
+		use std::{
+			sync::{Arc, mpsc},
+			time::Instant,
+		};
 
 		use super::*;
 
@@ -335,6 +353,47 @@ mod allocator {
 			trimmed
 				.recv_timeout(Duration::from_secs(10))
 				.expect("trim once the job ends");
+		}
+
+		#[test]
+		fn a_counted_job_past_the_quiet_period_defers_the_trim() {
+			const QUIET: Duration = Duration::from_millis(1);
+			// Hang guard only: a trimmer that neither parks nor trims fails here.
+			const HANG: Duration = Duration::from_secs(10);
+			let (trimmed_tx, trimmed) = mpsc::channel();
+			let trimmer = spawn_trimmer(QUIET, move || trimmed_tx.send(()).unwrap());
+
+			// The first park comes before any work, so the wake below is the only
+			// one.
+			let started = Instant::now();
+			while trimmer.parks() == 0 {
+				assert!(started.elapsed() < HANG, "trimmer never parked");
+				std::thread::yield_now();
+			}
+
+			// Under the lock: a job is counted and finished work is pending. The
+			// woken trimmer cannot read the state until the lock drops.
+			let parks_before = {
+				let mut activity = trimmer.activity.lock();
+				activity.running += 1;
+				activity.finished += 1;
+				let before = trimmer.parks();
+				trimmer.idle.notify_one();
+				before
+			};
+
+			// A correct trimmer wakes, sees the counted job, and parks again. A
+			// trimmer that ignores the job trims instead, and that fails here.
+			let started = Instant::now();
+			while trimmer.parks() == parks_before {
+				assert!(trimmed.try_recv().is_err(), "trimmed while a counted job ran");
+				assert!(started.elapsed() < HANG, "trimmer neither parked nor trimmed");
+				std::thread::yield_now();
+			}
+			assert!(trimmed.try_recv().is_err(), "trimmed while a counted job ran");
+
+			trimmer.end();
+			trimmed.recv_timeout(HANG).expect("trim once the job ends");
 		}
 	}
 }

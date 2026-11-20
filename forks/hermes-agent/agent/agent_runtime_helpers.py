@@ -33,7 +33,7 @@ from agent.credential_pool import (
 )
 from agent.error_classifier import USAGE_LIMIT_TEXT, FailoverReason
 from agent.retry_utils import parse_retry_after_seconds, reset_delay_from_message
-from agent.message_metadata import MERGED_TURN_PREFIX
+from agent.message_metadata import MERGED_RUNTIME_ROW, MERGED_TURN_PREFIX
 from agent.turn_context import drop_stale_api_content
 from agent.agent_runtime_helpers_placeholders import _INTERRUPTED_PLACEHOLDER
 from agent.primary_runtime_snapshot import _build_primary_runtime_snapshot
@@ -720,6 +720,8 @@ def _merge_consecutive_users(messages: list[dict]) -> tuple[list[dict], int]:
             if prev.get("display_kind") and not msg.get("display_kind"):
                 marker_row_id = prev.get("_row_id")
                 prev.pop("display_kind", None)
+                # The runtime text stays in the row: keep it untrusted for the approval reviewer.
+                prev[MERGED_RUNTIME_ROW] = True
                 if msg.get("_row_id") is not None:
                     if isinstance(marker_row_id, int) and not isinstance(marker_row_id, bool):
                         absorbed_ids = prev.setdefault("_absorbed_row_ids", [])

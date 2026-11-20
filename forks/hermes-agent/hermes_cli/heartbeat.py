@@ -21,8 +21,10 @@ logger = logging.getLogger(__name__)
 MIN_INTERVAL_SECONDS = 60  # floor: re-entering more often than once a minute is a busy-loop, not a heartbeat
 POLL_SECONDS = 5.0  # how often drivers poll for due heartbeats; not user-facing
 
+# The rendered prompt's opening: the approval reviewer reads it as an agent-set instruction, never a person's turn.
+HEARTBEAT_PROMPT_PREFIX = "[Heartbeat — recurring instruction, "
 HEARTBEAT_PROMPT_TEMPLATE = (
-    "[Heartbeat — recurring instruction, {interval}]\n{prompt}\n\n"
+    HEARTBEAT_PROMPT_PREFIX + "{interval}]\n{prompt}\n\n"
     "If there is nothing meaningful to do or report for this instruction "
     "right now, reply briefly that nothing has changed and stop — do not invent work."
 )

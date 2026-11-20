@@ -29,19 +29,31 @@ _TRUNCATED = "…[truncated: {n} more chars]"
 _PER_TURN_LIMIT = 2000
 _MESSAGE_PREVIEW_LIMIT = 4000
 _TURN_LABELS = {"user": "user", "assistant": "assistant", "tool": "tool result"}
-# A user-role row the runtime wrote (process notice, task-list snapshot, compaction turn): its text is agent-chosen.
+# A user-role row the runtime or another agent wrote (process notice, task-list snapshot, steer, heartbeat prompt,
+# delegated goal): its text is agent-chosen.
 _RUNTIME_LABEL = "runtime notice"
 
 
-def is_human_user_turn(message: Any) -> bool:
-    """A user-role row a person typed. ``_is_real_user_message`` rejects runtime scaffolding by flag or prefix; a
-    ``display_kind`` other than a steer marks a row the gateway injected itself (heartbeats, folded notices)."""
-    from agent.conversation_compression import _is_real_user_message
-    from agent.prompt_builder import STEER_DISPLAY_KIND
+def is_human_user_turn(message: Any, *, delegated: bool = False) -> bool:
+    """A user-role row a person typed at the top level. Fails closed on every row another writer can shape:
 
-    if not _is_real_user_message(message):
+    - ``delegated`` (or a delegate_task child context): the parent agent wrote every user-role row, goal included.
+    - ``_is_real_user_message`` rejects runtime scaffolding by flag or prefix.
+    - any ``display_kind`` marks a typed runtime row: steers (a parent agent, a heartbeat, a kanban comment) and
+      gateway-injected notices alike, so a person's own ``/steer`` escalates too.
+    - :data:`MERGED_RUNTIME_ROW` marks a plain row that absorbed a runtime row in the alternation repair.
+    - the heartbeat template's header marks a heartbeat prompt delivered as a plain row (CLI watchdog, TUI)."""
+    from agent.conversation_compression import _is_real_user_message
+    from agent.delegation_context import is_delegated_child_context
+    from agent.message_metadata import MERGED_RUNTIME_ROW
+    from hermes_cli.heartbeat import HEARTBEAT_PROMPT_PREFIX
+
+    if delegated or is_delegated_child_context() or not _is_real_user_message(message):
         return False
-    return message.get("display_kind") in (None, "", STEER_DISPLAY_KIND)
+    if message.get("display_kind") or message.get(MERGED_RUNTIME_ROW):
+        return False
+    return not _content_text(message).startswith(HEARTBEAT_PROMPT_PREFIX)
+
 
 # Policy refusals already logged this process, keyed by (path, reason): each is warned about once.
 _warned_refusals: set[tuple[str, str]] = set()
@@ -51,12 +63,14 @@ _review_context: contextvars.ContextVar[Optional[dict[str, Any]]] = contextvars.
     "hermes_approval_review_context", default=None)
 
 
-def bind_review_context(*, messages: Any, user_message: Any = None, loaded_skills: Any = None) -> contextvars.Token:
+def bind_review_context(*, messages: Any, user_message: Any = None, loaded_skills: Any = None,
+                        delegated: bool = False) -> contextvars.Token:
     """Bind the reviewer context for the current tool batch. ``messages`` is the live transcript
-    (any role/content shape; malformed rows are skipped). Returns a token for :func:`reset_review_context`."""
+    (any role/content shape; malformed rows are skipped). ``delegated`` marks a delegate agent, whose user-role
+    rows the parent wrote. Returns a token for :func:`reset_review_context`."""
     snapshot = {
         "user_message": _text(user_message),
-        "recent": _recent_turns(messages),
+        "recent": _recent_turns(messages, delegated=delegated),
         "skills": _skill_names(loaded_skills),
     }
     return _review_context.set(snapshot)
@@ -304,7 +318,7 @@ def _one_line(text: str) -> str:
     return re.sub(r"\r\n|[\r\n\u2028\u2029\x0b\x0c\x1c\x1d\x1e\x85]", "⏎", text)
 
 
-def _recent_turns(messages: Any) -> list[tuple[str, str]]:
+def _recent_turns(messages: Any, *, delegated: bool = False) -> list[tuple[str, str]]:
     """The last ``RECENT_TURNS`` user/assistant/tool entries, oldest first, within ``RECENT_BYTES``.
 
     Only that window is read and redacted, so the cost does not grow with the transcript. Each entry is capped
@@ -323,7 +337,7 @@ def _recent_turns(messages: Any) -> list[tuple[str, str]]:
         label = _TURN_LABELS.get(role) if isinstance(role, str) else None
         if label is None:
             continue
-        if label == "user" and not is_human_user_turn(message):
+        if label == "user" and not is_human_user_turn(message, delegated=delegated):
             label = _RUNTIME_LABEL
         text = _content_text(message)
         if text:

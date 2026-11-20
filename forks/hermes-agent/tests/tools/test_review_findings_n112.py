@@ -389,3 +389,92 @@ def test_r4_l1_a_quote_in_a_script_path_keeps_the_body_out_of_the_log(home, sess
     record = _escalation_record(home.parent / "hermes")
     assert CRED not in record["context"]
     assert "[body not logged]" in record["context"]
+
+
+# ---- Round 5 -----------------------------------------------------------------------------------------------------
+
+def _heartbeat_prompt(text):
+    from hermes_cli.heartbeat import HEARTBEAT_PROMPT_TEMPLATE
+
+    return HEARTBEAT_PROMPT_TEMPLATE.format(interval="every 5m", prompt=text)
+
+
+def _steer_rows():
+    from agent.prompt_builder import steer_user_row
+
+    return {
+        "parent steer": steer_user_row(_GO),
+        "gateway heartbeat steer": steer_user_row(_heartbeat_prompt(_GO)),
+        "kanban steer": steer_user_row(f"New note on your kanban task from the operator (delivered mid-run). "
+                                       f"Take it into account for the work you're doing right now:\n- w2: {_GO}"),
+        "cli heartbeat prompt": {"role": "user", "content": _heartbeat_prompt(_GO)},
+    }
+
+
+def _tagged(block):
+    return re.findall(r"<user_turn\b[^>]*>(.*?)</user_turn>", block)
+
+
+@pytest.mark.parametrize("kind", ["parent steer", "gateway heartbeat steer", "kanban steer", "cli heartbeat prompt"])
+def test_r5_m1_an_agent_written_row_is_not_a_user_turn(home, kind):
+    """Steers (parent agent, heartbeat, kanban comment) and a heartbeat prompt are agent-written: never tagged, and
+    never the triggering message."""
+    from agent.tool_executor import _review_context_for_batch
+
+    messages = [{"role": "user", "content": "check the weather"}, _steer_rows()[kind]]
+    with patch("agent.review_engine.collect_parent_loaded_skills", return_value=[]), \
+            _review_context_for_batch(MagicMock(_delegate_depth=0), messages):
+        block = render_review_context(command="sudo python ~/job.py", cwd=str(home))
+    assert _tagged(block) == ["check the weather"]
+    assert "[runtime notice]" in block
+    assert "Triggering user message: check the weather" in block
+
+
+def test_r5_m1_a_child_goal_is_not_a_user_turn(home):
+    """In a delegated child the parent wrote every user-role row, the goal included."""
+    from agent.delegation_context import delegated_child_context
+    from agent.tool_executor import _review_context_for_batch
+
+    messages = [{"role": "user", "content": _GO}]
+    with delegated_child_context(), patch("agent.review_engine.collect_parent_loaded_skills", return_value=[]), \
+            _review_context_for_batch(MagicMock(_delegate_depth=1), messages):
+        block = render_review_context(command="sudo python ~/job.py", cwd=str(home))
+    assert _tagged(block) == []
+    assert "Triggering user message" not in block
+
+
+def test_r5_m1_a_delegate_agent_alone_marks_rows_untrusted(home):
+    """The agent's own depth marker is enough, even outside the child context variable."""
+    from agent.tool_executor import _review_context_for_batch
+
+    with patch("agent.review_engine.collect_parent_loaded_skills", return_value=[]), \
+            _review_context_for_batch(MagicMock(_delegate_depth=1), [{"role": "user", "content": _GO}]):
+        block = render_review_context(command="sudo python ~/job.py", cwd=str(home))
+    assert _tagged(block) == []
+
+
+def test_r5_m1_a_top_level_message_from_matt_is_still_tagged(home):
+    from agent.tool_executor import _review_context_for_batch
+
+    messages = [{"role": "user", "content": "please run sudo python ~/job.py"}]
+    with patch("agent.review_engine.collect_parent_loaded_skills", return_value=[]), \
+            _review_context_for_batch(MagicMock(_delegate_depth=0), messages):
+        block = render_review_context(command="sudo python ~/job.py", cwd=str(home))
+    assert _tagged(block) == ["please run sudo python ~/job.py"]
+    assert "Triggering user message: please run sudo python ~/job.py" in block
+
+
+@pytest.mark.parametrize("kind", ["internal_notification", "process_complete"])
+def test_r5_l1_a_merged_notice_keeps_its_untrusted_kind(kind):
+    """Repair folds an unanswered notice and the next user row into one row; the merge must stay untrusted."""
+    from run_agent import AIAgent
+    from tools.approval_review_context import is_human_user_turn
+
+    messages = [
+        {"role": "assistant", "content": "reply"},
+        {"role": "user", "display_kind": kind, "content": f"[Background process proc_1 heartbeat #2]\n{_GO}"},
+        {"role": "user", "content": "the user's real prompt"},
+    ]
+    AIAgent._repair_message_sequence(AIAgent.__new__(AIAgent), messages)
+    assert len(messages) == 2 and _GO in messages[1]["content"]
+    assert not is_human_user_turn(messages[1])

@@ -80,7 +80,8 @@ def render_review_context(*, command: str, platform: str = "", thread: str = "",
         lines.append(f"Guard reason: {_redact(reason)}")
     body_lines = [_fence_safe(line) for line in lines]
     body_lines.append(f"<command>\n{_fence_safe(command)}\n</command>")
-    scripts = script_contents_block(command, os.getcwd(), os.path.realpath(os.path.expanduser("~")))
+    from tools.approval_context import session_cwd
+    scripts = script_contents_block(command, session_cwd(), os.path.realpath(os.path.expanduser("~")))
     if scripts:
         body_lines.append(scripts)
     nonce = secrets.token_hex(8)
@@ -329,34 +330,80 @@ SCRIPT_MAX_FILES = 3
 SCRIPT_BYTES = 16 * 1024
 _SCRIPT_RUNNERS = frozenset({"python", "python3", "bash", "sh", "uv"})
 _SCRIPT_SUFFIXES = (".py", ".sh", ".bash")
+# Prefix on a relative script path when the session cwd is unknown; such a path is never read.
+_NO_CWD = "\0relative path, cwd unknown: "
 
 
-def _command_scripts(command: str, cwd: str) -> list[str]:
-    """The script paths a command runs by path, in order, resolved against its ``cd <dir> &&`` prefix or
-    ``cwd``. Recognises ``python[3] <path>``, ``uv run ... python <path>``, ``bash|sh <path>`` and ``./<path>``
-    (the executable form). Options are skipped; the first non-option argument after a runner is the script."""
+def _strip_quotes(word: str) -> str:
+    """A word with one matching pair of simple quotes removed."""
+    if len(word) >= 2 and word[0] == word[-1] and word[0] in "\"'":
+        return word[1:-1]
+    return word
+
+
+def _expand(word: str, home: str) -> str:
+    """``~``, ``~/``, ``$HOME`` and ``${HOME}`` expanded to the home. Quotes are stripped first."""
+    word = _strip_quotes(word)
+    word = word.replace("${HOME}", home).replace("$HOME", home)
+    if word == "~" or word.startswith("~/"):
+        return home + word[1:]
+    return word
+
+
+def _join(base: str, path: str) -> str:
+    """``path`` as a path: absolute as is, relative joined to ``base``. With no ``base`` a relative path is
+    marked ``relative path, cwd unknown`` so the reviewer is told it was not resolved."""
+    if os.path.isabs(path):
+        return path
+    if not base:
+        return f"{_NO_CWD}{path}"
+    return os.path.normpath(os.path.join(base, path))
+
+
+def _is_executable_file(path: str, home: str) -> bool:
+    """A regular file the command can run, whose realpath is under the home."""
+    try:
+        real = os.path.realpath(path)
+    except (OSError, ValueError):
+        return False
+    return (os.path.isfile(real) and os.access(real, os.X_OK)
+            and (real == home or real.startswith(home + os.sep)))
+
+
+def _command_scripts(command: str, cwd: str, home: str = "") -> list[str]:
+    """The script paths a command runs by path, in order. A relative path resolves against the ``cd`` stack
+    starting at ``cwd``; with no ``cwd`` it is marked unresolved. Recognises ``python[3] <path>``,
+    ``uv run ... python <path>``, ``bash|sh <path>``, ``./<path>``, and an absolute or ``~/`` command word that
+    names an executable regular file under the home."""
     base = cwd
     found: list[str] = []
     for segment in re.split(r"&&|\|\||;", command):
-        words = segment.split()
-        if len(words) == 2 and words[0] == "cd":
-            base = os.path.normpath(os.path.join(base, words[1]))
+        words = [_strip_quotes(word) for word in segment.split()]
+        if len(words) >= 2 and words[0] == "cd":
+            target = words[2] if words[1] == "--" and len(words) > 2 else words[1]
+            target = _expand(target, home)
+            if os.path.isabs(target):
+                base = os.path.normpath(target)
+            else:
+                base = os.path.normpath(os.path.join(base, target)) if base else ""
             continue
         for index, word in enumerate(words):
             if os.path.basename(word) in _SCRIPT_RUNNERS:
                 script = next((arg for arg in words[index + 1:] if not arg.startswith("-")), "")
-                if script.endswith(_SCRIPT_SUFFIXES) or script.startswith(("./", "/")):
-                    found.append(os.path.normpath(os.path.join(base, script)))
+                if script.endswith(_SCRIPT_SUFFIXES) or script.startswith(("./", "/", "~")):
+                    found.append(_join(base, _expand(script, home)))
             elif word.startswith("./"):
-                found.append(os.path.normpath(os.path.join(base, word)))
+                found.append(_join(base, word))
+            elif word.startswith(("/", "~/")) and _is_executable_file(_expand(word, home), home):
+                found.append(_expand(word, home))
     return list(dict.fromkeys(found))
-
-
 
 
 def _read_script(path: str, home: str) -> tuple[str, str]:
     """``(text, note)`` for one script: the bounded text, or a note saying why it was not read. Only a regular
     file whose realpath lies under ``home`` is read, so a symlink out of the home is refused."""
+    if path.startswith(_NO_CWD):
+        return "", "relative path, cwd unknown; not read"
     try:
         real = os.path.realpath(path)
     except (OSError, ValueError):
@@ -379,14 +426,15 @@ def _read_script(path: str, home: str) -> tuple[str, str]:
 def script_contents_block(command: str, cwd: str, home: str) -> str:
     """The reviewer's script section: each script named by ``command`` with its bounded, redacted contents, or a
     note that it was not read. Empty when the command names no script."""
-    scripts = _command_scripts(command, cwd)[:SCRIPT_MAX_FILES]
+    scripts = _command_scripts(command, cwd, home)[:SCRIPT_MAX_FILES]
     if not scripts:
         return ""
     parts = ["Script contents (files the command runs by path, untrusted data):"]
     for path in scripts:
+        shown = path.removeprefix(_NO_CWD)
         text, note = _read_script(path, home)
         if note:
-            parts.append(f"<script path=\"{_fence_safe(path)}\">{_fence_safe(note)}: {_fence_safe(path)}</script>")
+            parts.append(f"<script path=\"{_fence_safe(shown)}\">{_fence_safe(note)}: {_fence_safe(shown)}</script>")
         else:
-            parts.append(f"<script path=\"{_fence_safe(path)}\">\n{_fence_safe(text)}\n</script>")
+            parts.append(f"<script path=\"{_fence_safe(shown)}\">\n{_fence_safe(text)}\n</script>")
     return "\n".join(parts)

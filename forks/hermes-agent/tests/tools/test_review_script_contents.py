@@ -83,18 +83,22 @@ def test_script_block_is_fenced_and_escaped(home, reviewer, monkeypatch):
     "sh {p}",
     "./{p}",
 ])
-def test_each_script_form_is_read(home, reviewer, monkeypatch, command):
-    """Every form the brief names reads the named script."""
+def test_each_script_form_is_read(home, reviewer, session, command):
+    """Every form the brief names reads the named script, resolved against the session's cwd."""
+    from tools.terminal_tool import record_session_cwd
+
     skill = _skill(home, body="print('FORM-MARKER')\n")
-    monkeypatch.chdir(skill)
+    record_session_cwd(session, str(skill))
     shell = command.format(p="scripts/x.py")
     approval_smart._smart_approve(shell, "script execution")
     assert "FORM-MARKER" in reviewer["user"], shell
 
 
-def test_relative_path_resolves_against_the_session_cwd(home, reviewer, monkeypatch):
+def test_relative_path_resolves_against_the_session_cwd(home, reviewer, session):
+    from tools.terminal_tool import record_session_cwd
+
     skill = _skill(home, body="print('CWD-MARKER')\n")
-    monkeypatch.chdir(skill)
+    record_session_cwd(session, str(skill))
     approval_smart._smart_approve("python3 scripts/x.py", "script execution")
     assert "CWD-MARKER" in reviewer["user"]
 
@@ -148,8 +152,10 @@ def test_at_most_three_scripts_are_read(home, reviewer, monkeypatch):
     assert len(shown) == 3, shown
 
 
-def test_a_missing_script_is_noted_not_fatal(home, reviewer, monkeypatch):
-    monkeypatch.chdir(home)
+def test_a_missing_script_is_noted_not_fatal(home, reviewer, session):
+    from tools.terminal_tool import record_session_cwd
+
+    record_session_cwd(session, str(home))
     approval_smart._smart_approve("python3 scripts/does-not-exist.py", "script execution")
     user = reviewer["user"]
     assert "does-not-exist.py" in user
@@ -167,3 +173,79 @@ def test_a_command_without_a_script_adds_no_block(home, reviewer, monkeypatch):
     monkeypatch.chdir(home)
     approval_smart._smart_approve("ls -la", "why")
     assert "Script contents" not in reviewer["user"]
+
+
+@pytest.fixture
+def session(monkeypatch):
+    """A bound session key, with its recorded cwd cleared on exit so records do not leak between tests."""
+    from tools import approval_context
+    from tools.terminal_tool import clear_session_cwd
+
+    key = "rig-11477-session"
+    token = approval_context.set_current_session_key(key)
+    yield key
+    approval_context.reset_current_session_key(token)
+    clear_session_cwd(key)
+
+
+def test_a_relative_script_resolves_against_the_session_cwd_not_the_process_cwd(
+        home, reviewer, session, monkeypatch, tmp_path):
+    """Item 1: the reviewer resolves ``python scripts/x.py`` against the session's recorded cwd. The process cwd
+    is elsewhere and holds a different script, which must not be read."""
+    from tools.terminal_tool import record_session_cwd
+
+    skill = _skill(home, body="print('SESSION-CWD-MARKER')\n")
+    decoy = tmp_path / "elsewhere" / "scripts"
+    decoy.mkdir(parents=True)
+    (decoy / "x.py").write_text("print('PROCESS-CWD-DECOY')\n", encoding="utf-8")
+    record_session_cwd(session, str(skill))
+    monkeypatch.chdir(tmp_path / "elsewhere")
+    approval_smart._smart_approve("python scripts/x.py", "why")
+    assert "SESSION-CWD-MARKER" in reviewer["user"]
+    assert "PROCESS-CWD-DECOY" not in reviewer["user"]
+
+
+def test_a_relative_script_with_no_session_cwd_is_noted_not_resolved_against_the_process_cwd(
+        home, reviewer, monkeypatch, tmp_path):
+    """Item 1: with no session cwd recorded, the reviewer is told the cwd is unknown and does not read the script
+    from the gateway process's cwd."""
+    decoy = tmp_path / "gateway" / "scripts"
+    decoy.mkdir(parents=True)
+    (decoy / "x.py").write_text("print('PROCESS-CWD-DECOY')\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path / "gateway")
+    approval_smart._smart_approve("python scripts/x.py", "why")
+    assert "PROCESS-CWD-DECOY" not in reviewer["user"]
+    assert "relative path, cwd unknown" in reviewer["user"]
+
+
+def test_cd_forms_resolve_the_script_they_lead_to(home, reviewer, monkeypatch):
+    """Item 2: ``~``, ``$HOME``, a quoted directory, ``cd --`` and stacked relative ``cd`` each lead to the script."""
+    skill = _skill(home, body="print('CD-MARKER')\n")
+    rel = skill.relative_to(home)
+    forms = [
+        f"cd ~/{rel} && python scripts/x.py",
+        f"cd $HOME/{rel} && python scripts/x.py",
+        f'cd "{skill}" && python scripts/x.py',
+        f"cd -- {skill} && python scripts/x.py",
+        f"cd {home} && cd {rel} && python scripts/x.py",
+    ]
+    for command in forms:
+        reviewer.clear()
+        approval_smart._smart_approve(command, "why")
+        assert "CD-MARKER" in reviewer["user"], command
+
+
+def test_an_absolute_or_home_relative_command_word_that_is_an_executable_under_home_is_read(
+        home, reviewer, monkeypatch):
+    """Item 3: a command word that is an absolute or ``~/`` path to an executable regular file under home has its
+    contents sent, as the brief asks. A missing or non-executable path is not a script."""
+    tool = home / "bin" / "vendor-check"
+    tool.parent.mkdir(parents=True)
+    tool.write_text("#!/bin/sh\necho EXEC-CMD-MARKER\n", encoding="utf-8")
+    tool.chmod(0o755)
+    monkeypatch.chdir(home)
+    approval_smart._smart_approve(f"{tool}", "why")
+    assert "EXEC-CMD-MARKER" in reviewer["user"]
+    reviewer.clear()
+    approval_smart._smart_approve("~/bin/vendor-check --json", "why")
+    assert "EXEC-CMD-MARKER" in reviewer["user"]

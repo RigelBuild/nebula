@@ -108,15 +108,7 @@ def _smart_session_context() -> str:
         if agent is None:
             return ""
 
-        from tools.terminal_tool import get_session_cwd
-        session_key = _ctx.get_current_session_key(default="")
-        task_id = getattr(agent, "_current_task_id", None)
-        cwd = get_session_cwd(session_key or task_id)
-        if not cwd:
-            cwd = getattr(agent, "session_cwd", None)
-        if not cwd:
-            from agent.runtime_cwd import scope_terminal_cwd, scoped_session_cwd
-            cwd = scoped_session_cwd() or scope_terminal_cwd()
+        cwd = _ctx.session_cwd(agent)
         cwd = str(cwd)[:300]
 
         quoted_cwd = json.dumps(cwd, ensure_ascii=True).replace("<", r"\u003c")

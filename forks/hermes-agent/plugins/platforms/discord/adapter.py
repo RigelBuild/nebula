@@ -1460,6 +1460,7 @@ class DiscordAdapter(DiscordAuthorizationMixin, DiscordMediaMixin, DiscordThread
                 allowed_mentions=_build_allowed_mentions(getattr(self.config, "extra", None)),
                 **proxy_kwargs_for_bot(proxy_url),
             )
+            self._rebind_carried_exec_approval_cards()
             # Fresh connection, fresh dispatch-side silence window: the previous client's last
             # DISPATCH stamp must not leak into this connection's liveness samples (#109521).
             # READY itself is a DISPATCH event, so a healthy connection stamps almost immediately.
@@ -5732,6 +5733,7 @@ class DiscordAdapter(DiscordAuthorizationMixin, DiscordMediaMixin, DiscordThread
             msg = await channel.send(**send_kwargs)
             if view is not None:
                 view._message = msg
+                view._card_embed = msg.embeds[0] if getattr(msg, "embeds", None) else None
                 view.bound_client = client
             return SendResult(success=True, message_id=str(msg.id))
         except Exception as e:
@@ -5801,6 +5803,22 @@ class DiscordAdapter(DiscordAuthorizationMixin, DiscordMediaMixin, DiscordThread
             # this adapter as its policy source, so each press reads the allowlist, roles and admin gate connect() sets.
             view.policy_source = self
             self._exec_approval_views[request_id] = view
+
+    def _rebind_carried_exec_approval_cards(self) -> None:
+        """Point each carried card at this adapter's new client. A carried handle belongs to the replaced client, whose
+        HTTP session is closed, so an edit through it would fail and leave the buttons live. Runs before connect()
+        opens the session, so it resolves channels without the cache: a partial messageable needs only the id."""
+        for view in self._exec_approval_views.values():
+            message = view._message
+            channel_id = getattr(getattr(message, "channel", None), "id", None)
+            message_id = getattr(message, "id", None)
+            if channel_id is None or message_id is None:
+                continue
+            try:
+                view._message = self._client.get_partial_messageable(int(channel_id)).get_partial_message(int(message_id))
+            except Exception:
+                logger.warning("[Discord] could not re-bind carried approval card: request_id=%s", view.request_id,
+                               exc_info=True)
 
     async def _on_platform_interaction(self, interaction) -> None:
         """Answer component presses that the live view store cannot route (a view sent before a
@@ -6630,6 +6648,8 @@ def _define_discord_view_classes() -> None:
             self.policy_source = None
             self.resolved = False
             self._message = None
+            # The card's embed as first sent. A handle from a rebuilt client has no embeds to read, so expiry uses this.
+            self._card_embed = None
             # The client whose view store holds this view's buttons (set when the view is sent).
             self.bound_client = None
 
@@ -6662,7 +6682,7 @@ def _define_discord_view_classes() -> None:
 
         @staticmethod
         def _first_embed(message):
-            return message.embeds[0] if message.embeds else None
+            return message.embeds[0] if getattr(message, "embeds", None) else None
 
         async def _expire_embed(self, footer: str, *, keep_controls: bool = True) -> None:
             """Grey out the original message's embed and stamp ``footer`` (best effort). The disabled
@@ -6670,13 +6690,13 @@ def _define_discord_view_classes() -> None:
             msg = self._message
             if msg:
                 try:
-                    embed = self._first_embed(msg)
+                    embed = self._first_embed(msg) or self._card_embed
                     if embed:
                         embed.color = discord.Color.greyple()
                         embed.set_footer(text=footer)
                     await msg.edit(embed=embed, view=self if keep_controls else None)
                 except Exception:
-                    logger.debug("[Discord] Could not stamp prompt card", exc_info=True)  # deleted / too old
+                    logger.warning("[Discord] Could not stamp prompt card", exc_info=True)
 
         async def _finalize_embed(self, interaction: discord.Interaction, color, footer: str) -> None:
             """Mark resolved, stamp the embed (color + footer), disable buttons, edit in place, then

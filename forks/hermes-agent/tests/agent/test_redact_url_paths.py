@@ -61,3 +61,32 @@ def test_mcp_connect_failure_logs_ha_host_without_secret_path():
 def test_plain_text_without_urls_is_unchanged():
     line = _format("tools.mcp_tool", "MCP server '%s' connected in %.1fs", ("ha", 1.5))
     assert line == "tools.mcp_tool: MCP server 'ha' connected in 1.5s"
+
+
+@pytest.mark.parametrize(
+    "url, secret",
+    [
+        ("https://h.example/sse?fields=a,b&access_token=S3CRETtokenVALUE99", "S3CRETtokenVALUE99"),
+        ("https://h.example/sse?filter=(x)&key=PARENSECRET99", "PARENSECRET99"),
+        ("https://h.example/api/mcp/abc,COMMASECRET99", "COMMASECRET99"),
+        ("https://h.example/a)BRACKETSECRET99", "BRACKETSECRET99"),
+        ("https://h.example/a]BRACKETSECRET99", "BRACKETSECRET99"),
+        ("https://h.example/a'QUOTESECRET99", "QUOTESECRET99"),
+    ],
+)
+def test_path_or_query_with_delimiter_char_loses_secret(url, secret):
+    line = _format("httpx2", "HTTP Request: GET %s", (url,))
+    assert secret not in line
+    assert "h.example" in line
+
+
+def test_wrapped_url_keeps_closing_delimiter():
+    line = _format("httpx2", "see (%s) now", ("https://h.example/api/SECRETPATH99",))
+    assert "SECRETPATH99" not in line
+    assert line.endswith("(https://h.example/<redacted>) now")
+
+
+def test_websocket_url_path_redacted():
+    line = _format("mcp", "connecting %s", ("wss://ha.example:8123/api/mcp/WSSECRET99",))
+    assert "WSSECRET99" not in line
+    assert "wss://ha.example:8123/<redacted>" in line

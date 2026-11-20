@@ -164,7 +164,8 @@ def session_cwd(agent: object = None) -> str:
     from agent.runtime_cwd import scope_terminal_cwd, scoped_session_cwd
     key = get_current_session_key(default="")
     task_id = getattr(agent, "_current_task_id", None)
-    cwd = get_session_cwd(key or task_id) or getattr(agent, "session_cwd", None)
+    recorded = get_session_cwd(key or task_id) if (key or task_id) else None
+    cwd = recorded or getattr(agent, "session_cwd", None)
     return str(cwd or scoped_session_cwd() or scope_terminal_cwd() or "")
 
 

@@ -58,7 +58,8 @@ def _fence_safe(text: str) -> str:
     return text.replace("<", "&lt;").replace(">", "&gt;")
 
 
-def render_review_context(*, command: str, platform: str = "", thread: str = "", reason: str = "") -> str:
+def render_review_context(*, command: str, cwd: str = "", platform: str = "", thread: str = "",
+                           reason: str = "") -> str:
     """The reviewer's fenced block: the session context, then the ``<command>`` block.
 
     The block is fenced with a per-call random nonce, so text quoted from the session cannot forge the
@@ -80,8 +81,7 @@ def render_review_context(*, command: str, platform: str = "", thread: str = "",
         lines.append(f"Guard reason: {_redact(reason)}")
     body_lines = [_fence_safe(line) for line in lines]
     body_lines.append(f"<command>\n{_fence_safe(command)}\n</command>")
-    from tools.approval_context import session_cwd
-    scripts = script_contents_block(command, session_cwd(), os.path.realpath(os.path.expanduser("~")))
+    scripts = script_contents_block(command, cwd, os.path.realpath(os.path.expanduser("~")))
     if scripts:
         body_lines.append(scripts)
     nonce = secrets.token_hex(8)
@@ -278,6 +278,11 @@ def _content_text(message: dict) -> str:
     return content.strip()
 
 
+def _one_line(text: str) -> str:
+    """``text`` with every line separator replaced by ``⏎``, so a turn stays on one line and cannot start one."""
+    return re.sub(r"\r\n|[\r\n\u2028\u2029\x0b\x0c\x1c\x1d\x1e\x85]", "⏎", text)
+
+
 def _recent_turns(messages: Any) -> list[str]:
     """The last ``RECENT_TURNS`` user/assistant/tool entries, oldest first, within ``RECENT_BYTES``.
 
@@ -302,7 +307,7 @@ def _recent_turns(messages: Any) -> list[str]:
     kept: list[str] = []
     budget = RECENT_BYTES
     for label, text in newest:
-        row = f"[{label}] {_redact(text[:RECENT_BYTES])[:_PER_TURN_LIMIT]}"
+        row = f"[{label}] {_one_line(_redact(text[:RECENT_BYTES])[:_PER_TURN_LIMIT])}"
         size = len(row.encode("utf-8"))
         if size > budget:
             break
@@ -370,53 +375,101 @@ def _is_executable_file(path: str, home: str) -> bool:
             and (real == home or real.startswith(home + os.sep)))
 
 
+def _command_word_index(words: list[str]) -> int:
+    """Index of the command word in a segment, past any ``sudo``/``env`` prefix, their ``-`` options, and the
+    ``run`` of ``uv run``. ``-1`` when no command word is left."""
+    index = 0
+    while index < len(words):
+        word = os.path.basename(words[index])
+        if word in ("sudo", "env") or words[index].startswith("-"):
+            index += 1
+        elif word == "uv" and index + 1 < len(words) and words[index + 1] == "run":
+            index += 2
+        else:
+            return index
+    return -1
+
+
 def _command_scripts(command: str, cwd: str, home: str = "") -> list[str]:
     """The script paths a command runs by path, in order. A relative path resolves against the ``cd`` stack
     starting at ``cwd``; with no ``cwd`` it is marked unresolved. Recognises ``python[3] <path>``,
     ``uv run ... python <path>``, ``bash|sh <path>``, ``./<path>``, and an absolute or ``~/`` command word that
-    names an executable regular file under the home."""
-    base = cwd
+    names an executable regular file under the home. A runner word counts only in command position."""
+    base = cwd if os.path.isabs(cwd) else ""
     found: list[str] = []
-    for segment in re.split(r"&&|\|\||;", command):
+    for segment in re.split(r"&&|\|\||;|\||\n", command):
         words = [_strip_quotes(word) for word in segment.split()]
-        if len(words) >= 2 and words[0] == "cd":
-            target = words[2] if words[1] == "--" and len(words) > 2 else words[1]
+        head = _command_word_index(words)
+        if head < 0:
+            continue
+        if len(words) > head + 1 and words[head] == "cd":
+            target = words[head + 2] if words[head + 1] == "--" and len(words) > head + 2 else words[head + 1]
             target = _expand(target, home)
             if os.path.isabs(target):
                 base = os.path.normpath(target)
             else:
                 base = os.path.normpath(os.path.join(base, target)) if base else ""
             continue
-        for index, word in enumerate(words):
-            if os.path.basename(word) in _SCRIPT_RUNNERS:
-                script = next((arg for arg in words[index + 1:] if not arg.startswith("-")), "")
-                if script.endswith(_SCRIPT_SUFFIXES) or script.startswith(("./", "/", "~")):
-                    found.append(_join(base, _expand(script, home)))
-            elif word.startswith("./"):
-                found.append(_join(base, word))
-            elif word.startswith(("/", "~/")) and _is_executable_file(_expand(word, home), home):
-                found.append(_expand(word, home))
+        runner = os.path.basename(words[head])
+        if runner in _SCRIPT_RUNNERS:
+            script = next((arg for arg in words[head + 1:] if not arg.startswith("-")), "")
+            if script.endswith(_SCRIPT_SUFFIXES) or script.startswith(("./", "/", "~")):
+                found.append(_join(base, _expand(script, home)))
+        elif words[head].startswith("./"):
+            found.append(_join(base, words[head]))
+        elif words[head].startswith(("/", "~/")) and _is_executable_file(_expand(words[head], home), home):
+            found.append(_expand(words[head], home))
     return list(dict.fromkeys(found))
 
 
+def _refused_home_file(real: str, home: str) -> str:
+    """Why a resolved path is a credential store the reviewer must not read, or ``""``. Uses the fork's own deny
+    lists (``get_read_block_error``, ``HOME_CREDENTIAL_DIRS``, ``_SENSITIVE_HOME_FILES``) and ``~/.config/sops``."""
+    from agent.context_references import _SENSITIVE_HOME_FILES
+    from agent.file_safety import HOME_CREDENTIAL_DIRS, get_read_block_error
+
+    if get_read_block_error(real):
+        return "is a credential store, not read"
+    for sub in (*HOME_CREDENTIAL_DIRS, ".config/sops"):
+        blocked = os.path.realpath(os.path.join(home, *sub.split("/")))
+        if real == blocked or real.startswith(blocked + os.sep):
+            return "is a credential store, not read"
+    for sensitive in _SENSITIVE_HOME_FILES:
+        if real == os.path.realpath(os.path.join(home, str(sensitive))):
+            return "is a credential store, not read"
+    return ""
+
+
 def _read_script(path: str, home: str) -> tuple[str, str]:
-    """``(text, note)`` for one script: the bounded text, or a note saying why it was not read. Only a regular
-    file whose realpath lies under ``home`` is read, so a symlink out of the home is refused."""
+    """``(text, note)`` for one script: the bounded text, or a note saying why it was not read.
+
+    Only a regular file whose realpath lies under ``home`` is read, and only when it is script-shaped (a script
+    suffix or a ``#!`` first line) and not a credential store. The type is checked before the file is opened, and
+    the open is non-blocking and does not follow a final symlink, so a FIFO cannot hold up the gate."""
     if path.startswith(_NO_CWD):
         return "", "relative path, cwd unknown; not read"
     try:
         real = os.path.realpath(path)
+        before = os.lstat(real)
     except (OSError, ValueError):
         return "", "could not be read"
     if real != home and not real.startswith(home + os.sep):
         return "", "is outside the home, not read"
+    if not stat.S_ISREG(before.st_mode):
+        return "", "is not a regular file, not read"
+    refused = _refused_home_file(real, home)
+    if refused:
+        return "", refused
     try:
-        with open(real, "rb") as handle:
-            if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
-                return "", "is not a regular file, not read"
-            raw = handle.read(SCRIPT_BYTES + 1)
+        fd = os.open(real, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0))
     except OSError:
         return "", "could not be read"
+    with os.fdopen(fd, "rb") as handle:
+        if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+            return "", "is not a regular file, not read"
+        raw = handle.read(SCRIPT_BYTES + 1)
+    if not (real.endswith(_SCRIPT_SUFFIXES) or raw.startswith(b"#!")):
+        return "", "is not a script, not read"
     text = raw[:SCRIPT_BYTES].decode("utf-8", errors="replace")
     if len(raw) > SCRIPT_BYTES:
         text += f"\n…[truncated: script is over {SCRIPT_BYTES} bytes]"

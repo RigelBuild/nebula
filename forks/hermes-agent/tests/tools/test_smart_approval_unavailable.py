@@ -313,10 +313,11 @@ def test_escalation_record_holds_the_review_context_the_reviewer_saw(hermes_home
 
 
 def test_system_prompt_approves_what_matt_already_approved_in_session():
-    """A sudo run or a fill the user already said go-ahead to in this session is APPROVE, not a fresh question."""
+    """A sudo run or a fill the user approved in this session is APPROVE, but only for a real user turn that
+    names the same command (round-2 H3 tightened the wording from "already approved")."""
     prompt = approval_smart._SYSTEM_PROMPT
-    assert "already approved" in prompt
-    assert "in this session" in prompt
+    assert "a user turn" in prompt
+    assert "names the same command" in prompt
 
 
 def test_system_prompt_says_the_current_tab_is_not_the_fill_target():

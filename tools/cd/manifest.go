@@ -174,7 +174,6 @@ func (in *manifestInput) build() ([]byte, error) {
 	}
 	m.Held = append(m.Held, heldImages...)
 	sort.Strings(m.Held)
-	m.Held = slices.Compact(m.Held)
 	out, err := json.MarshalIndent(m, "", "  ")
 	if err != nil {
 		return nil, err

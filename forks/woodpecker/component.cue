@@ -1,6 +1,6 @@
 id: "woodpecker"
 images: {
-	"woodpecker-agent": {
+	"woodpecker-agent-image": {
 		repository: "ghcr.io/rigelbuild/woodpecker-agent"
 		dockerfile: "docker/Dockerfile.agent.multiarch"
 		platforms: ["linux/amd64", "linux/arm64"]
@@ -13,7 +13,7 @@ images: {
 			CI_COMMIT_BRANCH: "rigel-release"
 		}
 	}
-	"woodpecker-server": {
+	"woodpecker-server-image": {
 		repository: "ghcr.io/rigelbuild/woodpecker-server"
 		dockerfile: "docker/Dockerfile.server.nebula"
 		platforms: ["linux/amd64", "linux/arm64"]

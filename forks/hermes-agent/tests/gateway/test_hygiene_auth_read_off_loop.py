@@ -36,16 +36,33 @@ async def test_auth_store_read_does_not_block_the_loop_during_hygiene_settings(t
     assert observed == [True], "the auth store read blocked the event loop during hygiene settings"
 
 
+
 def test_memo_does_not_serve_a_store_written_after_the_snapshot(tmp_path, monkeypatch):
-    """A write during the memo window must invalidate the snapshot: the next read sees the new store."""
+    """A real write (``_save_auth_store``) during the memo window invalidates the snapshot."""
     from hermes_cli import auth
 
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     auth_path = tmp_path / "auth.json"
-    auth_path.write_text('{"version": 1, "providers": {"before": {}}}', encoding="utf-8")
+    auth._save_auth_store({"providers": {"before": {}}}, target_path=auth_path)
+    snapshot = auth.prefetch_auth_store(auth_path)
+    with auth.auth_store_memo({str(auth_path): snapshot}):
+        # No surrounding lock: only the write's own generation bump can invalidate the snapshot.
+        auth._save_auth_store({"providers": {"after": {}}}, target_path=auth_path)
+        store = auth._load_auth_store(auth_path)
+    assert "after" in store["providers"], "the memo served the pre-write store after a write"
+
+
+def test_memo_does_not_serve_a_store_read_across_an_auth_lock(tmp_path, monkeypatch):
+    """Entering and leaving an auth-store lock invalidates the snapshot, as the heal path does."""
+    from hermes_cli import auth
+
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    auth_path = tmp_path / "auth.json"
+    auth._save_auth_store({"providers": {"before": {}}}, target_path=auth_path)
     snapshot = auth.prefetch_auth_store(auth_path)
     auth_path.write_text('{"version": 1, "providers": {"after": {}}}', encoding="utf-8")
     with auth.auth_store_memo({str(auth_path): snapshot}):
-        auth._bump_auth_store_generation()  # a write happened during the call
+        with auth._auth_store_lock(target_path=auth_path):
+            pass
         store = auth._load_auth_store(auth_path)
-    assert "after" in store["providers"], "the memo served the pre-write store after a write"
+    assert "after" in store["providers"], "the memo served a pre-lock store after an auth lock"

@@ -690,14 +690,12 @@ def _file_lock(
                     time.sleep(0.05)
 
         holder.depth = 1
-        _bump_auth_store_generation()
         try:
             if lock_file is not None:
                 _stamp_lock_holder_pid(lock_file)
             yield
         finally:
             holder.depth = 0
-            _bump_auth_store_generation()
             if lock_file is not None:
                 _clear_stamped_lock_holder_pid(lock_file)
                 try:
@@ -719,7 +717,11 @@ def _auth_store_lock(
     with _file_lock(
         lock_path, _auth_lock_holder_for(auth_path), timeout_seconds,
         f"Timed out waiting for auth store lock ({lock_path})"):
-        yield
+        _bump_auth_store_generation()
+        try:
+            yield
+        finally:
+            _bump_auth_store_generation()
 
 
 def _empty_auth_store() -> dict[str, Any]:

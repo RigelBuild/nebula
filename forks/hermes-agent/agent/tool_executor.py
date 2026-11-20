@@ -1880,15 +1880,19 @@ def _review_context_for_batch(agent, messages: list):
     """Bind the reviewer context (triggering user message, recent turns, loaded skills) for one tool batch,
     so a plugin approval's smart reviewer can judge the call against what the session was doing."""
     from agent.review_engine import collect_parent_loaded_skills
-    from tools.approval_review_context import bind_review_context, reset_review_context
+    from tools.approval_review_context import bind_review_context, is_human_user_turn, reset_review_context
 
+    # A delegate agent's user-role rows (its goal included) are written by its parent, never by a person.
+    depth = getattr(agent, "_delegate_depth", 0)
+    delegated = isinstance(depth, int) and depth > 0
     user_message = next((m.get("content") for m in reversed(messages or [])
-                         if isinstance(m, dict) and m.get("role") == "user"), None)
+                         if is_human_user_turn(m, delegated=delegated)), None)
     try:
         skills = collect_parent_loaded_skills(agent, messages or [])
     except Exception:
         skills = []
-    token = bind_review_context(messages=messages or [], user_message=user_message, loaded_skills=skills)
+    token = bind_review_context(messages=messages or [], user_message=user_message, loaded_skills=skills,
+                                delegated=delegated)
     try:
         yield
     finally:

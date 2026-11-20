@@ -1505,6 +1505,12 @@ async def test_card_carried_across_reconnect_is_disabled_when_its_wait_times_out
     # The card's buttons are disabled through the rebuilt client: an edit with no view lands there.
     assert view.is_finished()
     assert any(e["client"] == "new" and e.get("view") is None for e in landed)
+    # The expiry edit keeps the card's embed: greyed out and stamped with the expired footer, not replaced by None.
+    expiry = next(e for e in landed if e["client"] == "new" and e.get("view") is None)
+    assert expiry["embed"] is card["embed"]
+    assert expiry["embed"].color == discord_platform.discord.Color.greyple()
+    footer = expiry["embed"].footer
+    assert (footer["text"] if isinstance(footer, dict) else footer.text) == t("platform.discord.prompt.expired_footer")
 
     # A late press on that card now gets the expired reply.
     custom_id = f"hermes:exec:{request_id}:once"

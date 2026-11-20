@@ -120,6 +120,26 @@
           meta.mainProgram = "woodpecker-agent";
         };
 
+        # The portable release build nebula CD ships as the woodpecker-agent
+        # asset. A release asset must run without this build's /nix/store: on
+        # Linux, pkgsStatic makes a static musl ELF; on darwin, which cannot link
+        # fully static, it links only the system libSystem under /usr/lib. CD's
+        # check-asset gate enforces both rules. The agent is pure Go with cgo off.
+        woodpecker-agent-static =
+          let
+            target = if pkgs.stdenv.hostPlatform.isLinux then pkgs.pkgsStatic else pkgs;
+            staticBuildGoModule = target.buildGoModule.override { go = pkgs.go_1_27; };
+          in
+          staticBuildGoModule {
+            pname = "woodpecker-agent-static";
+            inherit version ldflags postInstall vendorHash src;
+
+            subPackages = "cmd/agent";
+            env.CGO_ENABLED = 0;
+
+            meta.mainProgram = "woodpecker-agent";
+          };
+
         # Release binaries for releaseVersion, fetched instead of built. Each
         # hash is the SRI form of the matching line in that release's checksums.txt:
         #   gh release download v<releaseVersion> -R RigelBuild/woodpecker -p checksums.txt
@@ -180,6 +200,7 @@
       {
         packages = {
           inherit woodpecker-server woodpecker-agent woodpecker-webui;
+          woodpecker-agent-static = woodpecker-agent-static;
           default = woodpecker-server;
         } // releaseBins;
 

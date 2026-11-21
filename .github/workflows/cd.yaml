@@ -108,6 +108,10 @@ jobs:
             runner: macos-latest
             goos: darwin
             goarch: arm64
+          - system: windows-amd64
+            runner: ubuntu-latest
+            goos: windows
+            goarch: amd64
     permissions:
       contents: read
       id-token: write
@@ -193,6 +197,9 @@ jobs:
         run: |
           GOOS= GOARCH= go -C tools/cd build -o "$RUNNER_TEMP/cd" .
           mkdir -p "$RUNNER_TEMP/assets"
+          # windows-amd64 binaries carry .exe; the asset tar name keeps the .exe too.
+          exe=""; tarExt=""
+          if [ "$SYSTEM" = windows-amd64 ]; then exe=".exe"; tarExt=".exe"; fi
           jq -c '.binaries[] as $b | select(.build | index($b.package)) | $b' "$RUNNER_TEMP/plan.json" |
           while read -r b; do
             pkg=$(jq -r .package <<<"$b")
@@ -208,20 +215,20 @@ jobs:
               # Nix-built: nix build .#<attr> in the project's flake. Its bin/ holds the binaries.
               nixOut=$(nix build --no-link --print-out-paths "./$project#$(jq -r .attr <<<"$b")")
               for name in $(jq -r '.binaries[]' <<<"$b"); do
-                install -m 0755 "$nixOut/bin/$name" "$stage/bin/$name"
+                install -m 0755 "$nixOut/bin/$name" "$stage/bin/$name$exe"
               done
             else
               for name in $(jq -r '.binaries[]' <<<"$b"); do
-                go -C "$project" build -trimpath -o "$stage/bin/$name" .
+                go -C "$project" build -trimpath -o "$stage/bin/$name$exe" .
               done
             fi
             # Every kind: a consumer runs the asset without this build's /nix/store.
             for name in $(jq -r '.binaries[]' <<<"$b"); do
               runtime=()
               while read -r soname; do runtime+=(-runtime "$soname"); done < <(jq -r '.runtimeDeps[]?' <<<"$b")
-              "$RUNNER_TEMP/cd" check-asset -system "$SYSTEM" "${runtime[@]}" "$stage/bin/$name"
+              "$RUNNER_TEMP/cd" check-asset -system "$SYSTEM" "${runtime[@]}" "$stage/bin/$name$exe"
             done
-            tar -C "$stage" -cf - bin | zstd -19 -q -o "$RUNNER_TEMP/assets/$pkg-$version-$SYSTEM.tar.zst"
+            tar -C "$stage" -cf - bin | zstd -19 -q -o "$RUNNER_TEMP/assets/$pkg-$version-$SYSTEM$tarExt.tar.zst"
           done
       - name: Find built assets
         id: built

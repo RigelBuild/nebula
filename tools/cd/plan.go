@@ -31,10 +31,21 @@ var errNotDescendant = errors.New("HEAD does not descend from the previous relea
 var (
 	errNixAttr       = errors.New("nix artifact needs an attr")
 	errNixFlake      = errors.New("nix artifact project has no flake.nix")
+	errUnknownSystem = errors.New("artifact names an unknown release system")
 	errRuntimeNotNix = errors.New("runtimeDeps needs a nix artifact")
 	errNameClash     = errors.New("image and package share a name")
 	errVersionDrift  = errors.New("rigel-version differs from release.base")
 )
+
+// defaultSystems are the release systems an artifact gets when it names none.
+// windowsAMD64 is opt-in: an artifact must name it in systems.
+var defaultSystems = []string{"x86_64-linux", "aarch64-linux", "aarch64-darwin"}
+
+const windowsAMD64 = "windows-amd64"
+
+// releaseSystems is every system a Release can ship, the default set plus
+// the opt-in ones. An artifact's systems must come from this list.
+var releaseSystems = append(slices.Clone(defaultSystems), windowsAMD64)
 
 // Binary is one releasable binary package declared by a tool's component.cue.
 type Binary struct {
@@ -266,6 +277,11 @@ func listBinaries(repo string) ([]Binary, error) {
 			}
 		}
 		for name, a := range c.Release.Artifacts {
+			for _, s := range a.Systems {
+				if !slices.Contains(releaseSystems, s) {
+					return nil, fmt.Errorf("%w: %s: artifact %q names %q", errUnknownSystem, m, name, s)
+				}
+			}
 			if a.Kind != kindGo && a.Kind != kindNix {
 				continue
 			}

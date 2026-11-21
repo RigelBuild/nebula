@@ -243,6 +243,70 @@ func TestResolveFailureCases(t *testing.T) {
 			wantError: "exportedVarNames",
 		},
 		{
+			name: "listed file export without suffix",
+			mutate: func(m *SecretMap, _ *fakeRunner) {
+				m.FileExports[0].Var = "DL_CLAIM_TOKEN"
+			},
+			wantCalls: 7,
+			wantError: "fileExports membership",
+		},
+		{
+			name: "suffixed variable not listed as file export",
+			mutate: func(m *SecretMap, _ *fakeRunner) {
+				m.Team[0].Var = "WOODPECKER_TOKEN_FILE"
+			},
+			wantCalls: 1,
+			wantError: "fileExports membership",
+		},
+		{
+			name: "invalid variable name",
+			mutate: func(m *SecretMap, _ *fakeRunner) {
+				m.Team[0].Var = "woodpecker-token"
+			},
+			wantCalls: 1,
+			wantError: "must match",
+		},
+		{
+			name: "lowercase variable name",
+			mutate: func(m *SecretMap, _ *fakeRunner) {
+				m.Team[0].Var = "woodpecker_token"
+			},
+			wantCalls: 1,
+			wantError: "must match",
+		},
+		{
+			name: "reserved device file export",
+			mutate: func(m *SecretMap, _ *fakeRunner) {
+				m.FileExports[0].Var = "COM1_FILE"
+			},
+			wantCalls: 7,
+			wantError: "must match",
+		},
+		{
+			name: "invalid literal name",
+			mutate: func(m *SecretMap, _ *fakeRunner) {
+				m.Literals["PATH=X"] = "value"
+			},
+			wantCalls: 9,
+			wantError: "must match",
+		},
+		{
+			name: "key with slash",
+			mutate: func(m *SecretMap, _ *fakeRunner) {
+				m.Team[0].Key = "nested/example-team-token"
+			},
+			wantCalls: 0,
+			wantError: "directly under",
+		},
+		{
+			name: "key with parent reference",
+			mutate: func(m *SecretMap, _ *fakeRunner) {
+				m.Team[0].Key = "..example-team-token"
+			},
+			wantCalls: 0,
+			wantError: "directly under",
+		},
+		{
 			name: "WSL failure",
 			mutate: func(_ *SecretMap, runner *fakeRunner) {
 				runner.failAt = 1
@@ -571,6 +635,34 @@ func TestApplySecretsExportMode(t *testing.T) {
 	}
 }
 
+func TestStageExportsSweepsStaleTempFiles(t *testing.T) {
+	// Glob syntax in the parent path must not change what the sweep sees.
+	fileDir := filepath.Join(t.TempDir(), "a[b")
+	if err := os.Mkdir(fileDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	stale := filepath.Join(fileDir, ".windows-agent-sync-stale.tmp")
+	keep := filepath.Join(fileDir, "dl-claim-token")
+	for _, path := range []string{stale, keep} {
+		if err := os.WriteFile(path, []byte("old"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	staged, err := stageExports(map[string]string{}, nil, fileDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(staged) != 0 {
+		t.Fatalf("staged = %v, want none", staged)
+	}
+	if _, err := os.Stat(stale); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("stale temp file still present: %v", err)
+	}
+	if _, err := os.Stat(keep); err != nil {
+		t.Fatalf("export removed: %v", err)
+	}
+}
+
 func TestApplySecretsRetriesFailedBroadcast(t *testing.T) {
 	store := newFakeEnvStore()
 	store.failBroadcast = true
@@ -597,6 +689,19 @@ func keys(values map[string]string) []string {
 		result = append(result, name)
 	}
 	return result
+}
+
+func TestValidVarNameRejectsReservedDeviceExports(t *testing.T) {
+	for _, name := range []string{"CON_FILE", "PRN_FILE", "AUX_FILE", "NUL_FILE", "COM0_FILE", "COM9_FILE", "LPT1_FILE"} {
+		if validVarName(name) {
+			t.Errorf("validVarName(%q) = true, want false", name)
+		}
+	}
+	for _, name := range []string{"CON", "CONSOLE_FILE", "COM10_FILE", "DL_CLAIM_TOKEN_FILE"} {
+		if !validVarName(name) {
+			t.Errorf("validVarName(%q) = false, want true", name)
+		}
+	}
 }
 
 func TestFileExportNaming(t *testing.T) {

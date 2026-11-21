@@ -409,6 +409,7 @@ func TestReadWriteState(t *testing.T) {
 		{name: "missing state", want: []string{}},
 		{name: "managed entries", initial: `{"managed":["A","B"]}`, want: []string{"A", "B"}},
 		{name: "malformed state", initial: "not json", wantErr: true},
+		{name: "invalid managed name", initial: `{"managed":["A","bad=name"]}`, wantErr: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

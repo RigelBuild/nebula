@@ -106,6 +106,17 @@ def identity_key(principal_id, session_id, request_id):
         payload={'principal': principal_id, 'request': request_id})
 
 
+def identity_value(admission_id, session_id):
+    """A pointer's value: its admission and its target session, so deleting the session finds it
+    (``retire_terminal_receipts``). A pointer written before this holds only the admission id."""
+    return json.dumps({'admission_id': admission_id, 'session_id': session_id})
+
+
+def pointed_admission_id(value):
+    saved = json.loads(value)
+    return saved['admission_id'] if isinstance(saved, dict) else saved
+
+
 def terminal_api_admissions(conn, request_id):
     """Retired API admissions that carried *request_id*: a deleted session's tombstones, kept for
     the exact-retry horizon, still spend its Idempotency-Key for every other target."""
@@ -136,7 +147,7 @@ def pointed_terminal_admission(conn, *, principal_id, session_id, request_id, di
         if conn.execute('SELECT 1 FROM state_meta WHERE key=?', (RETIRED_PREFIX + session_id,)).fetchone():
             raise RuntimeStoreError('not_found')
         return None
-    row = terminal_admission(conn, json.loads(saved[0]))
+    row = terminal_admission(conn, pointed_admission_id(saved[0]))
     if row is None:
         raise RuntimeStoreError('not_found')
     if row['payload_digest'] != digest:

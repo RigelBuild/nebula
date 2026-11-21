@@ -5,6 +5,7 @@ A row whose session has been idle past ``RETRY_HORIZON_S`` is replaced by its ``
 the same request. Queued, started and unknown rows, the session's latest row, and every row of a session
 with live work stay in ``session_admissions``.
 """
+import json
 import time
 
 import pytest
@@ -221,9 +222,88 @@ def test_an_orphaned_pointer_is_reclaimed_when_its_session_is_gone(tmp_path):
         assert db.get_meta(identity_key('api', 'gone', 'r1')) is not None
         db.delete_session('gone')
         assert db.get_session('gone') is None
+        # A pointer written before pointers recorded their session (delete cannot find it), and no
+        # retired marker (an expired sweep marker): only the session-row check can reclaim it.
+        db._execute_write(lambda conn: conn.execute(
+            'INSERT OR REPLACE INTO state_meta(key,value) VALUES(?,?)',
+            (identity_key('api', 'gone', 'r1'), json.dumps(first_id))))
+        db._execute_write(lambda conn: conn.execute(
+            'DELETE FROM state_meta WHERE key=?', ('gateway.retired_session.v1.gone',)))
         old = time.time() - IDLE_DAYS * 86400
         db._execute_write(lambda conn: conn.execute(
             "UPDATE state_meta SET value=json_set(value, '$.retired_at', ?) WHERE key=?",
             (old, 'gateway.terminal_admission.v1.' + first_id)))
         db._execute_write(lambda conn: prune_retired_tombstones(conn))
         assert db.get_meta(identity_key('api', 'gone', 'r1')) is None, 'orphaned pointer was not reclaimed'
+
+
+def test_a_pass_walks_at_most_limit_targets_and_never_a_single_row_session(tmp_path, monkeypatch):
+    """Candidate targets are chosen in SQL before any tip walk: a session with one terminal row has
+    nothing to prune and is never walked, and one pass walks at most *limit* targets."""
+    import hermes_state_mutation_retirement as retirement
+    walks = []
+    real_walk = retirement._tip_last_active
+    monkeypatch.setattr(retirement, '_tip_last_active', lambda conn, sid: walks.append(sid) or real_walk(conn, sid))
+    with SessionDB(tmp_path / 'state.db') as db:
+        epoch = rt.begin_runtime_epoch(db, instance_id='owner')
+        for n in range(30):
+            sid = f'one{n:02d}'
+            db.create_session(sid, source='api_server')
+            _settle(db, epoch, sid, 'r1', 'r1')
+            _age(db, sid)
+        for n in range(6):
+            sid = f'two{n:02d}'
+            db.create_session(sid, source='api_server')
+            _settle(db, epoch, sid, 'r1', 'r1')
+            _settle(db, epoch, sid, 'r2', 'r2')
+        with db._read_ctx() as conn:
+            retirement.prunable_terminal_admissions(conn, limit=4)
+        assert not [sid for sid in walks if sid.startswith('one')], 'a single-row session was walked'
+        assert len(walks) <= 4, f'one pass walked {len(walks)} targets for a limit of 4'
+
+
+def _prune_then_age_tombstone(db, epoch, sid):
+    from hermes_state_terminal import ADMISSION_PREFIX
+    first, first_id = _settle(db, epoch, sid, 'r1', 'charge card')
+    _settle(db, epoch, sid, 'r2', 'second')
+    _age(db, sid)
+    db.prune_sessions(older_than_days=90)
+    old = time.time() - IDLE_DAYS * 86400
+    db._execute_write(lambda conn: conn.execute(
+        "UPDATE state_meta SET value=json_set(value, '$.retired_at', ?) WHERE key=?",
+        (old, ADMISSION_PREFIX + first_id)))
+    db.prune_sessions(older_than_days=90)
+    assert db.get_meta(ADMISSION_PREFIX + first_id) is None, 'the tombstone did not age out'
+    return first
+
+
+def test_deleting_a_session_reclaims_a_pointer_whose_tombstone_aged_out(tmp_path):
+    from hermes_state_terminal import identity_key
+    with SessionDB(tmp_path / 'state.db') as db:
+        epoch = rt.begin_runtime_epoch(db, instance_id='owner')
+        db.create_session('live', source='api_server')
+        _prune_then_age_tombstone(db, epoch, 'live')
+        assert db.get_meta(identity_key('api', 'live', 'r1')) is not None
+        db.delete_session('live')
+        db.prune_sessions(older_than_days=90)
+        assert db.get_meta(identity_key('api', 'live', 'r1')) is None, 'the pointer outlived its session'
+
+
+def test_a_recreated_swept_id_admits_its_old_request_id_again(tmp_path):
+    from hermes_state_mutation_retirement import RETIRED_PREFIX
+    with SessionDB(tmp_path / 'state.db') as db:
+        epoch = rt.begin_runtime_epoch(db, instance_id='owner')
+        db.create_session('named', source='api_server')
+        first = _prune_then_age_tombstone(db, epoch, 'named')
+        db.end_session('named', 'user_exit')
+        _age(db, 'named', days=100)
+        assert db.prune_sessions(older_than_days=90) == 1, 'the ended session was not swept'
+        old = time.time() - 100 * 86400
+        db._execute_write(lambda conn: conn.execute(
+            "UPDATE state_meta SET value=json_set(value, '$.retired_at', ?) WHERE key=?",
+            (old, RETIRED_PREFIX + 'named')))
+        db.prune_sessions(older_than_days=90)
+        assert db.get_meta(RETIRED_PREFIX + 'named') is None, 'the sweep marker did not age out'
+        db.create_session('named', source='api_server')
+        out = rt.admit_session_input(db, epoch=epoch, **first)
+        assert out['status'] == 'queued', f'the reused id refused its old request id: {out}'

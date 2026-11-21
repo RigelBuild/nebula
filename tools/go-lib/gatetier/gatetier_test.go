@@ -155,10 +155,10 @@ func imagePlanner() Planner {
 		`{"id":"k8s","config":{"project":{"metadata":{"metadata":{"pipeline":{"image":"ci-k8s"}}}}}},` +
 		`{"id":"gosvc","config":{"project":{"metadata":{"metadata":{"pipeline":{"image":"ci-go"}}}}}},` +
 		`{"id":"rust","config":{"project":{"metadata":{"metadata":{"pipeline":{"image":"ci-rust"}}}}}},` +
-		`{"id":"runner-ami-smoke","config":{"project":{"metadata":{"metadata":{"pipeline":{"image":"ci-pulumi"}}}}}},` +
+		`{"id":"infra-smoke","config":{"project":{"metadata":{"metadata":{"pipeline":{"image":"ci-iac"}}}}}},` +
 		`{"id":"ci","config":{"project":{"metadata":{"metadata":{"pipeline":{"image":"ci-publish"}}}}}},` +
 		`{"id":"svc","config":{"project":{"metadata":{}}}}]}`)
-	tasks := []byte(`{"tasks":{"k8s":{"cue":{"target":"k8s:cue"}},"gosvc":{"vuln":{"target":"gosvc:vuln"}},"rust":{"build":{"target":"rust:build"}},"runner-ami-smoke":{"test":{"target":"runner-ami-smoke:test"}},"ci":{"test":{"target":"ci:test"}},"svc":{"test":{"target":"svc:test"}}}}`)
+	tasks := []byte(`{"tasks":{"k8s":{"cue":{"target":"k8s:cue"}},"gosvc":{"vuln":{"target":"gosvc:vuln"}},"rust":{"build":{"target":"rust:build"}},"infra-smoke":{"test":{"target":"infra-smoke:test"}},"ci":{"test":{"target":"ci:test"}},"svc":{"test":{"target":"svc:test"}}}}`)
 	return Planner{Runner: func(_ context.Context, _ []string, args ...string) ([]byte, error) {
 		if reflect.DeepEqual(args, []string{"query", "projects"}) {
 			return projects, nil
@@ -167,10 +167,10 @@ func imagePlanner() Planner {
 	}}
 }
 
-var allImages = []string{"ci-base", "ci-go", "ci-k8s", "ci-pulumi", "ci-publish", "ci-rust"}
+var allImages = []string{"ci-base", "ci-go", "ci-k8s", "ci-iac", "ci-publish", "ci-rust"}
 
 // The image filter selects only tasks whose project declares that image. A
-// ci-pulumi or ci-publish task is planned for its own job, never dropped.
+// ci-iac or ci-publish task is planned for its own job, never dropped.
 func TestPlanFiltersByImage(t *testing.T) {
 	planner := imagePlanner()
 	for _, test := range []struct {
@@ -181,7 +181,7 @@ func TestPlanFiltersByImage(t *testing.T) {
 		{image: "ci-k8s", want: []string{"k8s:cue"}},
 		{image: "ci-go", want: []string{"gosvc:vuln"}},
 		{image: "ci-rust", want: []string{"rust:build"}},
-		{image: "ci-pulumi", want: []string{"runner-ami-smoke:test"}},
+		{image: "ci-iac", want: []string{"infra-smoke:test"}},
 		{image: "ci-publish", want: []string{"ci:test"}},
 	} {
 		t.Run(test.image, func(t *testing.T) {
@@ -240,7 +240,7 @@ func TestUncoveredReportsTaskWithoutJob(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := targetsOf(Uncovered(all, []string{"ci-base", "ci-go", "ci-k8s", "ci-rust"}))
-	want := []string{"ci:test", "runner-ami-smoke:test"}
+	want := []string{"ci:test", "infra-smoke:test"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("uncovered = %v, want %v", got, want)
 	}

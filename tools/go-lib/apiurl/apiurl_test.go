@@ -62,7 +62,13 @@ func TestWoodpeckerAPIInClusterFromCaller(t *testing.T) {
 	if got, ok := WoodpeckerAPI(env, "https://ci.example.com/"); got != "https://ci.example.com" || !ok {
 		t.Fatalf("WoodpeckerAPI = (%q, %v), want the caller's in-cluster URL", got, ok)
 	}
-	if got, ok := WoodpeckerAPI(env, " "); got != "https://builtin.ci" || !ok {
-		t.Fatalf("WoodpeckerAPI with no in-cluster URL = (%q, %v), want CI_SYSTEM_URL", got, ok)
+	for _, empty := range []string{"", " "} {
+		if got, ok := WoodpeckerAPI(env, empty); got != "" || ok {
+			t.Fatalf("WoodpeckerAPI in cluster with in-cluster URL %q = (%q, %v), want none", empty, got, ok)
+		}
+	}
+	outside := envOf(map[string]string{"CI_SYSTEM_URL": "https://builtin.ci"})
+	if got, ok := WoodpeckerAPI(outside, ""); got != "https://builtin.ci" || !ok {
+		t.Fatalf("WoodpeckerAPI outside cluster = (%q, %v), want CI_SYSTEM_URL", got, ok)
 	}
 }

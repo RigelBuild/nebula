@@ -420,7 +420,7 @@ func dependsOnExcluded(target string, tasks map[string]moonTask, visiting, memo 
 // AffectedTargets returns the sorted affected targets between base and head
 // that are in known. Unlike PlanTargets, it keeps runInCI:false deploy targets
 // such as aws:up, which selectTasks drops, so a release can restore a lost
-// enqueue. It queries with CI= in the environment, as Petrel's QUERY_ENV does.
+// enqueue. It queries with CI= in the environment.
 func AffectedTargets(ctx context.Context, base, head string, known []string) ([]string, error) {
 	return affectedTargetsWith(ctx, runMoon, base, head, known)
 }

@@ -114,6 +114,24 @@ func TestMissingIssuePrefixFails(t *testing.T) {
 	}
 }
 
+func TestSpecImpactRejectsBadSpecDirs(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		dirs []string
+	}{
+		{name: "nil", dirs: nil},
+		{name: "empty entry", dirs: []string{""}},
+		{name: "no trailing slash", dirs: []string{"docs/specs"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := SpecImpact(SpecImpactFacts{ChangedFiles: []string{"docs/specs/x.md"}, Body: "Spec-impact: none", SpecDirs: tc.dirs})
+			if got.Pass || got.Reason != "spec-dirs" {
+				t.Fatalf("result = %+v, want spec-dirs failure", got)
+			}
+		})
+	}
+}
+
 func TestMessagesNameIssuePrefix(t *testing.T) {
 	if got := TitleIssueRef(TitleFacts{Title: "fix(ci): no reference", IssuePrefix: "ex"}); !strings.Contains(got.Message, "'EX-NNN'") {
 		t.Fatalf("title message = %q", got.Message)

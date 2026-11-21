@@ -88,11 +88,28 @@ func TitleIssueRef(facts TitleFacts) Result {
 	return Result{Gate: titleIssueGate, Reason: "missing", Message: fmt.Sprintf("This PR's title carries no issue reference. Every PR must name the issue it addresses as '%[1]s-NNN' somewhere in its title (e.g. 'fix(ci): correct the fan-out base ref (%[1]s-2179)'). Edit the PR title to include the %[1]s-NNN id and re-run the check.", upper)}
 }
 
+// validSpecDirs reports whether dirs holds at least one entry and each entry is
+// a non-empty directory prefix ending in "/".
+func validSpecDirs(dirs []string) bool {
+	if len(dirs) == 0 {
+		return false
+	}
+	for _, dir := range dirs {
+		if dir == "/" || !strings.HasSuffix(dir, "/") {
+			return false
+		}
+	}
+	return true
+}
+
 func SpecImpact(facts SpecImpactFacts) Result {
 	for _, prefix := range []string{"renovate/", "trunk-merge/"} {
 		if strings.HasPrefix(facts.HeadBranch, prefix) {
 			return Result{Gate: specImpactGate, Pass: true, Reason: "exempt-branch", Message: fmt.Sprintf("Branch '%s' is automation-exempt from the spec-impact gate.", facts.HeadBranch)}
 		}
+	}
+	if !validSpecDirs(facts.SpecDirs) {
+		return Result{Gate: specImpactGate, Reason: "spec-dirs", Message: fmt.Sprintf("Spec directories %q must hold at least one entry, each non-empty and ending in '/'.", facts.SpecDirs)}
 	}
 	for _, file := range facts.ChangedFiles {
 		for _, prefix := range facts.SpecDirs {

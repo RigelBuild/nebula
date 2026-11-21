@@ -105,14 +105,14 @@ func TestK8sEndpoints(t *testing.T) {
 			},
 			"spec": map[string]any{
 				"ingressClassName": "tailscale",
-				"tls":              []any{map[string]any{"hosts": []any{"auth.tail-example.ts.example.net"}}},
+				"tls":              []any{map[string]any{"hosts": []any{"auth.other.ts.example.net"}}},
 			},
 		}}, network, cfg)
 		if err != nil {
 			t.Fatal(err)
 		}
 		want := []endpoint{
-			{host: "auth.tail-example.ts.example.net", port: new(443), origin: "authentik/auth Ingress TLS host", owner: cfg.Owners.Kubernetes},
+			{host: "auth.other.ts.example.net", port: new(443), origin: "authentik/auth Ingress TLS host", owner: cfg.Owners.Kubernetes},
 		}
 		assertEndpoints(t, got, want)
 	})

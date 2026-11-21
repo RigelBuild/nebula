@@ -3,24 +3,24 @@ version: "2"
 linters:
   default: all
   disable:
-    # Parser format constants are intentionally numeric; tests mirror the TS suite verbatim.
+    # Fixed ports and exit codes read clearer as literals than as named constants.
     - mnd
     # The Go standard library's short local names and blank-line style are retained.
     - varnamelen
     - wsl
     - wsl_v5
-    # The parser's single-pass state machine is easier to review as a direct port.
+    # The endpoint readers walk untyped manifests in one pass; splitting them hides the checks.
     - cyclop
     - gocognit
     - gocyclo
     - maintidx
-    # Long tests and repeated diff snippets preserve one-to-one parity with TypeScript.
+    # Long table tests and repeated fixtures keep each case readable on its own.
     - funlen
     - dupl
     - goconst
-    # This API is frozen by the design contract; interface-count heuristics do not apply.
+    # Interface returns are not part of this command's design.
     - ireturn
-    # Default rules reject imports of this module's required internal text package.
+    # Default rules reject the sibling go-lib module this command imports.
     - depguard
     # Use the v2 replacement for the deprecated legacy linter.
     - gomodguard

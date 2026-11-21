@@ -4,6 +4,8 @@ package main
 
 import (
 	"fmt"
+	"path"
+	"path/filepath"
 	"strings"
 
 	"github.com/RigelBuild/nebula/tools/go-lib/serviceurls"
@@ -11,11 +13,17 @@ import (
 )
 
 func renderPage(inventory serviceurls.Inventory, cfg config.Config) (string, error) {
+	// The link target is relative to the page's own directory, not the workspace root.
+	inventoryLink, err := filepath.Rel(path.Dir(cfg.LinksPagePath), cfg.InventoryPath)
+	if err != nil {
+		return "", fmt.Errorf("link %s from %s: %w", cfg.InventoryPath, cfg.LinksPagePath, err)
+	}
+	inventoryLink = filepath.ToSlash(inventoryLink)
 	var sections []string
 	sections = append(sections,
 		"# Internal service links",
 		"",
-		"Generated from [`"+cfg.InventoryPath+"/`](./"+cfg.InventoryPath+"/). Do not edit by hand.",
+		"Generated from [`"+cfg.InventoryPath+"/`](./"+inventoryLink+"/). Do not edit by hand.",
 	)
 	for _, group := range inventory.Groups {
 		sections = append(sections,

@@ -18,20 +18,20 @@ func TestBuildPsArgs(t *testing.T) {
 }
 
 func TestParsePresentAgentNames(t *testing.T) {
-	const rows = `{"name":"nemo","mesh":"working"}, {"name":"magellan","mesh":"waiting"}`
+	const rows = `{"name":"alpha","mesh":"working"}, {"name":"bravo","mesh":"waiting"}`
 	tests := []struct {
 		name     string
 		input    string
 		expected []string
 		absent   string
 	}{
-		{name: "reads named agents in present mesh states", input: rows, expected: []string{"nemo", "magellan"}},
-		{name: "does not treat offline agent as present", input: `{"name":"nemo","mesh":"offline"}`},
-		{name: "does not treat stale mesh view as present", input: `{"name":"nemo","mesh":"working","meshView":"stale"}`},
-		{name: "accepts current mesh views", input: `{"name":"nemo","mesh":"idle","meshView":"current"}, {"name":"magellan","mesh":"waiting"}`, expected: []string{"nemo", "magellan"}},
-		{name: "ignores non-string fields", input: rows + `, {"name":3,"mesh":"working"}, {"name":"ghost","mesh":3}`, expected: []string{"nemo", "magellan"}},
-		{name: "uses exact name", input: `{"name":"nemo-2","mesh":"working"}`, expected: []string{"nemo-2"}, absent: "nemo"},
-		{name: "rejects null mesh view", input: `{"name":"nemo","mesh":"working","meshView":null}`},
+		{name: "reads named agents in present mesh states", input: rows, expected: []string{"alpha", "bravo"}},
+		{name: "does not treat offline agent as present", input: `{"name":"alpha","mesh":"offline"}`},
+		{name: "does not treat stale mesh view as present", input: `{"name":"alpha","mesh":"working","meshView":"stale"}`},
+		{name: "accepts current mesh views", input: `{"name":"alpha","mesh":"idle","meshView":"current"}, {"name":"bravo","mesh":"waiting"}`, expected: []string{"alpha", "bravo"}},
+		{name: "ignores non-string fields", input: rows + `, {"name":3,"mesh":"working"}, {"name":"ghost","mesh":3}`, expected: []string{"alpha", "bravo"}},
+		{name: "uses exact name", input: `{"name":"alpha-2","mesh":"working"}`, expected: []string{"alpha-2"}, absent: "alpha"},
+		{name: "rejects null mesh view", input: `{"name":"alpha","mesh":"working","meshView":null}`},
 		{name: "ignores null names", input: `{"name":null,"mesh":"working"}`},
 	}
 	for _, test := range tests {
@@ -64,8 +64,8 @@ func assertPresentNames(t *testing.T, test struct {
 
 func TestBuildDmArgs(t *testing.T) {
 	t.Run("sends the reachability ping to the named agent in main", func(t *testing.T) {
-		want := []string{"send", "--to", "nemo", "spawn-agent reachability check 7f3a", "--space", "main"}
-		if got := BuildDmArgs("nemo", "spawn-agent reachability check 7f3a"); !reflect.DeepEqual(got, want) {
+		want := []string{"send", "--to", "alpha", "spawn-agent reachability check 7f3a", "--space", "main"}
+		if got := BuildDmArgs("alpha", "spawn-agent reachability check 7f3a"); !reflect.DeepEqual(got, want) {
 			t.Fatalf("args = %v, want %v", got, want)
 		}
 	})
@@ -74,12 +74,12 @@ func TestBuildDmArgs(t *testing.T) {
 func TestWaitForAgentPresence(t *testing.T) {
 	t.Run("returns once the exact agent has a mesh status", func(t *testing.T) {
 		calls := 0
-		err := WaitForAgentPresence(t.Context(), "nemo", PresenceOptions{Timeout: time.Second, Poll: time.Millisecond, ReadPS: func(context.Context) (string, error) {
+		err := WaitForAgentPresence(t.Context(), "alpha", PresenceOptions{Timeout: time.Second, Poll: time.Millisecond, ReadPS: func(context.Context) (string, error) {
 			calls++
 			if calls == 1 {
-				return `{"schemaVersion":1,"command":"ps","outcome":"ok","result":{"kind":"seats","items":[{"name":"nemo","mesh":"absent"}]}}`, nil
+				return `{"schemaVersion":1,"command":"ps","outcome":"ok","result":{"kind":"seats","items":[{"name":"alpha","mesh":"absent"}]}}`, nil
 			}
-			return `{"schemaVersion":1,"command":"ps","outcome":"ok","result":{"kind":"seats","items":[{"name":"nemo","mesh":"working"}]}}`, nil
+			return `{"schemaVersion":1,"command":"ps","outcome":"ok","result":{"kind":"seats","items":[{"name":"alpha","mesh":"working"}]}}`, nil
 		}, Sleep: func(context.Context, time.Duration) error { return nil }})
 		if err != nil || calls != 2 {
 			t.Fatalf("error = %v, calls = %d", err, calls)
@@ -87,8 +87,8 @@ func TestWaitForAgentPresence(t *testing.T) {
 	})
 	t.Run("times out when the exact agent never appears", func(t *testing.T) {
 		now := time.Unix(0, 0)
-		err := WaitForAgentPresence(t.Context(), "nemo", PresenceOptions{Timeout: 2 * time.Millisecond, Poll: time.Millisecond, ReadPS: func(context.Context) (string, error) { return `{"name":"nemo-2"}`, nil }, Now: func() time.Time { return now }, Sleep: func(_ context.Context, delay time.Duration) error { now = now.Add(delay); return nil }})
-		if err == nil || !strings.Contains(err.Error(), "nemo did not appear in cotal ps") {
+		err := WaitForAgentPresence(t.Context(), "alpha", PresenceOptions{Timeout: 2 * time.Millisecond, Poll: time.Millisecond, ReadPS: func(context.Context) (string, error) { return `{"name":"alpha-2"}`, nil }, Now: func() time.Time { return now }, Sleep: func(_ context.Context, delay time.Duration) error { now = now.Add(delay); return nil }})
+		if err == nil || !strings.Contains(err.Error(), "alpha did not appear in cotal ps") {
 			t.Fatalf("error = %v", err)
 		}
 	})
@@ -97,14 +97,14 @@ func TestWaitForAgentPresence(t *testing.T) {
 func TestWaitForAgentPresencePropagatesReaderAndSleepErrors(t *testing.T) {
 	readerErr := errors.New("ps failed")
 	t.Run("reader error", func(t *testing.T) {
-		err := WaitForAgentPresence(t.Context(), "nemo", PresenceOptions{Timeout: time.Second, Poll: time.Millisecond, ReadPS: func(context.Context) (string, error) { return "", readerErr }})
+		err := WaitForAgentPresence(t.Context(), "alpha", PresenceOptions{Timeout: time.Second, Poll: time.Millisecond, ReadPS: func(context.Context) (string, error) { return "", readerErr }})
 		if !errors.Is(err, readerErr) {
 			t.Fatalf("error = %v, want %v", err, readerErr)
 		}
 	})
 	sleepErr := errors.New("sleep cancelled")
 	t.Run("sleep error", func(t *testing.T) {
-		err := WaitForAgentPresence(t.Context(), "nemo", PresenceOptions{Timeout: time.Second, Poll: time.Millisecond, ReadPS: func(context.Context) (string, error) { return `{"name":"nemo-2","mesh":"working"}`, nil }, Sleep: func(context.Context, time.Duration) error { return sleepErr }})
+		err := WaitForAgentPresence(t.Context(), "alpha", PresenceOptions{Timeout: time.Second, Poll: time.Millisecond, ReadPS: func(context.Context) (string, error) { return `{"name":"alpha-2","mesh":"working"}`, nil }, Sleep: func(context.Context, time.Duration) error { return sleepErr }})
 		if !errors.Is(err, sleepErr) {
 			t.Fatalf("error = %v, want %v", err, sleepErr)
 		}
@@ -112,11 +112,11 @@ func TestWaitForAgentPresencePropagatesReaderAndSleepErrors(t *testing.T) {
 }
 
 func TestVerifyAgentReachability(t *testing.T) {
-	const present = `{"schemaVersion":1,"command":"ps","outcome":"ok","result":{"kind":"seats","items":[{"name":"nemo","mesh":"working"}]}}`
+	const present = `{"schemaVersion":1,"command":"ps","outcome":"ok","result":{"kind":"seats","items":[{"name":"alpha","mesh":"working"}]}}`
 	t.Run("polls Cotal presence before sending the DM reachability ping", func(t *testing.T) {
 		calls := [][]string{}
 		psCalls := 0
-		err := VerifyAgentReachability(t.Context(), "nemo", func(_ context.Context, args []string) (CommandResult, error) {
+		err := VerifyAgentReachability(t.Context(), "alpha", func(_ context.Context, args []string) (CommandResult, error) {
 			calls = append(calls, args)
 			if args[0] == "ps" {
 				psCalls++
@@ -127,19 +127,19 @@ func TestVerifyAgentReachability(t *testing.T) {
 			}
 			return CommandResult{ExitCode: 0}, nil
 		}, VerifyOptions{Timeout: time.Second, Poll: time.Millisecond, Sleep: func(context.Context, time.Duration) error { return nil }})
-		want := [][]string{{"ps", "--space", "main", "--json"}, {"ps", "--space", "main", "--json"}, {"send", "--to", "nemo", "spawn-agent reachability check nemo", "--space", "main"}}
+		want := [][]string{{"ps", "--space", "main", "--json"}, {"ps", "--space", "main", "--json"}, {"send", "--to", "alpha", "spawn-agent reachability check alpha", "--space", "main"}}
 		if err != nil || !reflect.DeepEqual(calls, want) {
 			t.Fatalf("error = %v, calls = %v", err, calls)
 		}
 	})
 	t.Run("reports a failed DM command with its stderr", func(t *testing.T) {
-		err := VerifyAgentReachability(t.Context(), "nemo", func(_ context.Context, args []string) (CommandResult, error) {
+		err := VerifyAgentReachability(t.Context(), "alpha", func(_ context.Context, args []string) (CommandResult, error) {
 			if args[0] == "ps" {
 				return CommandResult{ExitCode: 0, Stdout: present}, nil
 			}
-			return CommandResult{ExitCode: 1, Stderr: "no agent nemo present"}, nil
+			return CommandResult{ExitCode: 1, Stderr: "no agent alpha present"}, nil
 		}, VerifyOptions{Timeout: time.Second, Poll: time.Millisecond})
-		if err == nil || err.Error() != "cotal send exited 1: no agent nemo present" {
+		if err == nil || err.Error() != "cotal send exited 1: no agent alpha present" {
 			t.Fatalf("error = %v", err)
 		}
 	})

@@ -598,3 +598,26 @@ func keys(values map[string]string) []string {
 	}
 	return result
 }
+
+func TestFileExportNaming(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		wantFile string
+		isFile   bool
+	}{
+		{"DL_CLAIM_TOKEN_FILE", "dl-claim-token", true},
+		{"SOPS_AGE_KEY_FILE", "sops-age-key", true},
+		{"WOODPECKER_TOKEN", "woodpecker-token", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isFileExportName(tc.name); got != tc.isFile {
+				t.Fatalf("isFileExportName(%q) = %v, want %v", tc.name, got, tc.isFile)
+			}
+			if tc.isFile {
+				if got := exportFileName(tc.name); got != tc.wantFile {
+					t.Fatalf("exportFileName(%q) = %q, want %q", tc.name, got, tc.wantFile)
+				}
+			}
+		})
+	}
+}

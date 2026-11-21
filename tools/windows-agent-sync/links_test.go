@@ -79,6 +79,10 @@ func TestLoadLinksRejectsInvalid(t *testing.T) {
 		{"empty source", `links: [{src: "", dst: ".x"}]`},
 		{"empty destination", `links: [{src: "x", dst: ""}]`},
 		{"unknown field", `links: [{src: "x", dst: ".x", extra: true}]`},
+		{"source escapes repo root", `links: [{src: "../../etc/passwd", dst: ".x"}]`},
+		{"destination escapes profile", `links: [{src: "x", dst: "../../evil"}]`},
+		{"absolute destination", `links: [{src: "x", dst: "/etc/passwd"}]`},
+		{"appdata destination escapes", `links: [{src: "x", dst: "%APPDATA%/../../evil"}]`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "links.cue")

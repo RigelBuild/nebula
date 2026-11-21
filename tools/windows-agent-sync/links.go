@@ -56,8 +56,10 @@ func syncLinks(co checkout, home, appData string, table []link, fs linkFS) error
 	return nil
 }
 
+// appDataPrefix marks a link destination that is rooted in %APPDATA% rather than the user profile.
+const appDataPrefix = "%APPDATA%/"
+
 func linkTarget(home, appData, destination string) (string, error) {
-	const appDataPrefix = "%APPDATA%/"
 	if strings.HasPrefix(destination, appDataPrefix) {
 		if appData == "" {
 			return "", oops.In("windows-agent-sync").Errorf("APPDATA is required for jj config link")

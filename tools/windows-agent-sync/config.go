@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"cuelang.org/go/cue"
 	"cuelang.org/go/cue/cuecontext"
@@ -96,6 +97,12 @@ func loadLinks(path string) ([]link, error) {
 		var entry link
 		if err := iterator.Value().Decode(&entry); err != nil {
 			return nil, fmt.Errorf("decode link: %w", err)
+		}
+		if !filepath.IsLocal(filepath.FromSlash(entry.Src)) {
+			return nil, fmt.Errorf("link source must be a path inside --repo-root: %q", entry.Src)
+		}
+		if !filepath.IsLocal(filepath.FromSlash(strings.TrimPrefix(entry.Dst, appDataPrefix))) {
+			return nil, fmt.Errorf("link destination must stay inside its profile root: %q", entry.Dst)
 		}
 		links = append(links, entry)
 	}

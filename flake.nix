@@ -282,6 +282,14 @@
                 sha256 = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
               };
             };
+            caddy-cloudflare = {
+              version = "9.9.9";
+              upstreamRev = null;
+              "${system}" = {
+                url = "https://example.invalid/caddy-cloudflare.tar.zst";
+                sha256 = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+              };
+            };
             # Image records are not packages; packagesFor must skip them.
             images = {
               omp = {
@@ -323,6 +331,10 @@
             }
             test "${merged.jj-hooks-bin.meta.mainProgram}" = "jj-hp" || {
               echo "the jj-hooks-bin wrapper has the wrong meta.mainProgram" >&2
+              exit 1
+            }
+            test "${merged.caddy-cloudflare.meta.mainProgram}" = "caddy" || {
+              echo "the caddy-cloudflare wrapper has the wrong meta.mainProgram" >&2
               exit 1
             }
             touch $out

@@ -137,12 +137,14 @@ def retry_terminal_admission(db, *, epoch, principal_id, session_id, request_id,
         saved = conn.execute('SELECT value FROM state_meta WHERE key=?',
                              (identity_key(principal_id, session_id, request_id),)).fetchone()
         if saved is None:
-            # A pruned terminal row of a live session leaves its identity tombstone, so no tombstone on
-            # an unretired session is a live target (None). On a retired id it is a definitive miss.
+            # No pointer: a live target, unless the id is retired, where it is a definitive miss.
             if conn.execute('SELECT 1 FROM state_meta WHERE key=?', (RETIRED_PREFIX + session_id,)).fetchone():
                 raise RuntimeStoreError('not_found')
             return None
         row = terminal_admission(conn, json.loads(saved[0]))
+        if row is None:
+            # The pointer outlived its pruned row past the horizon: refused, never run again.
+            raise RuntimeStoreError('not_found')
         if row['payload_digest'] != digest:
             raise RuntimeStoreError('admission_conflict', **ADMITTED_REQUEST_CONFLICT)
         return _row(row)

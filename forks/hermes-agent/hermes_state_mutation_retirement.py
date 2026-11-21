@@ -410,11 +410,12 @@ def _reclaim_expired(conn, prefix, cutoff):
 
 
 def prune_retired_tombstones(conn, older_than=RETRY_HORIZON_S):
-    """Reclaim deletion tombstones retired more than *older_than* seconds ago: the terminal admission
-    with its identity pointer and compacted result, terminal workers and a sweep's (``expires``)
-    retired-session marker or shared routing fence. A user delete's marker is the deletion fence itself and is never
-    reclaimed: it holds only ``retired_at``, and without it a deleted id could be recreated,
-    re-admitted or reissued as a Bot Chat generation.
+    """Reclaim deletion tombstones retired more than *older_than* seconds ago: the terminal admission row
+    and its compacted result, terminal workers and a sweep's (``expires``) retired-session marker or shared
+    routing fence. A deleted session's identity pointer goes with its row; a live session's stays (see the
+    loop below). A user delete's marker is the deletion fence itself and is never reclaimed: it holds only
+    ``retired_at``, and without it a deleted id could be recreated, re-admitted or reissued as a Bot Chat
+    generation.
     Tombstones written before ``retired_at`` existed are stamped now and age from this pass."""
     from hermes_state_terminal import ADMISSION_PREFIX, RESULT_PREFIX, WORKER_PREFIX, identity_key
     prefixes = (ADMISSION_PREFIX, WORKER_PREFIX)
@@ -426,43 +427,64 @@ def prune_retired_tombstones(conn, older_than=RETRY_HORIZON_S):
     for key, raw in conn.execute(f'SELECT key,value FROM state_meta WHERE key GLOB ? AND {_EXPIRED}',
                                  (ADMISSION_PREFIX + '*', cutoff)).fetchall():
         row = json.loads(raw)
-        conn.execute('DELETE FROM state_meta WHERE key IN (?,?,?)', (key, RESULT_PREFIX + row['admission_id'],
-                     identity_key(row['principal_id'], row['target_session_id'], row['request_id'])))
+        doomed = [key, RESULT_PREFIX + row['admission_id']]
+        # A live session's pruned row keeps its identity pointer past the horizon, so its retry is refused
+        # (``retry_terminal_admission``) and never run again. A deleted session's pointer is reclaimed as before.
+        if retired_in(conn, row['target_session_id']):
+            doomed.append(identity_key(row['principal_id'], row['target_session_id'], row['request_id']))
+        conn.execute(f"DELETE FROM state_meta WHERE key IN ({','.join('?' * len(doomed))})", doomed)
     conn.execute(f'DELETE FROM state_meta WHERE key GLOB ? AND {_EXPIRED}', (WORKER_PREFIX + '*', cutoff))
     for prefix in (RETIRED_PREFIX, ROUTE_FENCE_PREFIX):
         _reclaim_expired(conn, prefix, cutoff)
 
 
 
-# Terminal admission rows of a live session age out with the session's last activity (the freshest
-# of its messages, heartbeat and start, as the session lists sort). Past the retry horizon an exact
-# retry is no longer owed the settled reply. Each row is tombstoned (identity pointer and compacted
-# result, as a retired session's rows are) before it is deleted, in one transaction, so
-# ``retry_terminal_admission`` still refuses the same request. Excluded: queued, started and unknown
-# rows, each session's latest row, and every row of a session with live or unknown work.
+# Terminal admission rows of a live session age out with the activity of its compression tip, the
+# continuation the user resumes (the lineage root can be idle while that continuation is in use). Past the
+# retry horizon an exact retry is no longer owed the settled reply. Each row is tombstoned (its compacted
+# result; the identity pointer stays, so ``retry_terminal_admission`` still refuses the same request) before
+# it is deleted, in one transaction. Excluded: queued, started and unknown rows, each session's latest row,
+# and every row of a session with live or unknown work.
 def _prunable_admissions_sql():
-    from hermes_state_common import _sql_session_last_active_by_id
-    return ("SELECT a.admission_id FROM session_admissions a "
+    return ("SELECT a.admission_id, a.target_session_id FROM session_admissions a "
             "WHERE a.status = 'terminal' "
             "AND a.seq < (SELECT MAX(l.seq) FROM session_admissions l WHERE l.target_session_id = a.target_session_id) "
             "AND NOT EXISTS (SELECT 1 FROM session_admissions p WHERE p.target_session_id = a.target_session_id "
             "  AND p.status IN ('queued','started','unknown')) "
             "AND NOT EXISTS (SELECT 1 FROM worker_executions w WHERE w.session_id = a.target_session_id "
-            "  AND w.status IN ('registered','running','unknown')) "
-            f"AND {_sql_session_last_active_by_id('a.target_session_id')} < :cutoff")
+            "  AND w.status IN ('registered','running','unknown'))")
 
 
-def prunable_terminal_admissions(conn, older_than=RETRY_HORIZON_S):
-    """Admission ids ``prune_terminal_admissions`` may tombstone (see the comment above)."""
-    return [row[0] for row in conn.execute(_prunable_admissions_sql(), {'cutoff': time.time() - older_than})]
+def _tip_last_active(conn, session_id):
+    """Last activity of *session_id*'s compression tip, walked with ``_CHAIN_STEP_SQL`` on *conn* (the
+    writer's own transaction). None when the tip has no session row."""
+    from hermes_state_common import _sql_session_last_active
+    from hermes_state_compression import _CHAIN_STEP_SQL, _walk_compression_chain
+    tip = _walk_compression_chain(session_id, lambda current: conn.execute(_CHAIN_STEP_SQL, (current,)).fetchone())[-1]
+    row = conn.execute(f"SELECT {_sql_session_last_active('s')} FROM sessions s WHERE s.id = ?", (tip,)).fetchone()
+    return row[0] if row else None
 
 
-def prune_terminal_admissions(conn, older_than=RETRY_HORIZON_S):
-    """Tombstone then delete the prunable terminal admission rows, in *conn*'s transaction.
+def prunable_terminal_admissions(conn, older_than=RETRY_HORIZON_S, limit=500):
+    """Up to *limit* admission ids ``prune_terminal_admissions`` may tombstone (see the comment above).
+    The age test runs here, not in SQL, so *limit* counts only rows that have aged out."""
+    cutoff, tips, ids = time.time() - older_than, {}, []
+    for admission_id, target in conn.execute(_prunable_admissions_sql()).fetchall():
+        if target not in tips:
+            tips[target] = _tip_last_active(conn, target)
+        if tips[target] is not None and tips[target] < cutoff:
+            ids.append(admission_id)
+            if len(ids) >= limit:
+                break
+    return ids
+
+
+def prune_terminal_admissions(conn, older_than=RETRY_HORIZON_S, limit=500):
+    """Tombstone then delete up to *limit* prunable terminal admission rows, in *conn*'s transaction.
     Returns the number pruned. The tombstones are written before the rows they replace go."""
     from hermes_state_terminal import ADMISSION_PREFIX, identity_key
     from hermes_state_media import retire_media
-    ids = prunable_terminal_admissions(conn, older_than)
+    ids = prunable_terminal_admissions(conn, older_than, limit)
     for admission_id in ids:
         row = dict(conn.execute('SELECT * FROM session_admissions WHERE admission_id=?', (admission_id,)).fetchone())
         retire_media(conn, json.loads(row['payload_json']), row['request_id'])

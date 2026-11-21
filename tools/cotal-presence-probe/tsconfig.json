@@ -1,0 +1,14 @@
+{
+	"extends": "../tsconfig/base.json",
+	"compilerOptions": {
+		"moduleDetection": "force",
+		"lib": ["ESNext"],
+		"target": "ESNext",
+		"module": "Preserve",
+		"types": ["bun"],
+		"allowImportingTsExtensions": true,
+		"noUncheckedIndexedAccess": true,
+		"noImplicitOverride": true
+	},
+	"include": ["*.ts"]
+}

@@ -496,7 +496,7 @@ def _prunable_page(conn, older_than, limit):
         "  AND w.status IN ('registered','running','unknown')) "
         "GROUP BY a.target_session_id HAVING COUNT(*) > 1 ORDER BY a.target_session_id LIMIT ?",
         (saved[0] if saved else '', limit)).fetchall()]
-    cursor = ''
+    cursor = saved[0] if saved else ''  # no target of this pass completed yet: resume after the saved cursor
     for target in targets:
         if len(ids) >= limit:
             return ids, cursor  # resume at this target

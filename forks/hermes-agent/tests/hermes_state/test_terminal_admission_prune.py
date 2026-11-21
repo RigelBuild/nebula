@@ -206,6 +206,53 @@ def test_two_targets_over_the_limit_finish_on_the_next_pass(tmp_path, monkeypatc
         assert left == 2, f'after pass two only the two latest rows should remain, got {left}'
 
 
+def test_young_targets_ahead_of_an_aged_target_do_not_block_its_prune(tmp_path, monkeypatch):
+    """Keyset paging: more young candidates than the limit sit ahead of an aged target. The cursor moves
+    past them, so the aged target is reached and pruned within two passes."""
+    import hermes_state_mutation_retirement as retirement
+    monkeypatch.setattr(retirement, 'PRUNE_BATCH_LIMIT', 2)
+    with SessionDB(tmp_path / 'state.db') as db:
+        epoch = rt.begin_runtime_epoch(db, instance_id='owner')
+        for sid in ('a0', 'a1', 'a2', 'z'):
+            db.create_session(sid, source='api_server')
+            for k in ('k1', 'k2', 'k3'):
+                _settle(db, epoch, sid, k, k)
+        _age(db, 'z')
+
+        db.prune_sessions(older_than_days=90)
+        db.prune_sessions(older_than_days=90)
+
+        for sid in ('a0', 'a1', 'a2'):
+            assert len(rt.list_session_admissions(db, session_id=sid, pending_only=False)) == 3, f'young {sid} pruned'
+        left = len(rt.list_session_admissions(db, session_id='z', pending_only=False))
+        assert left == 1, f'the aged target keeps {left} rows after two passes; only its latest should remain'
+
+
+def test_a_target_over_the_limit_resumes_at_that_target_on_the_next_pass(tmp_path, monkeypatch):
+    """A target with more prunable rows than the limit is cut off mid-target. The cursor stays at the young
+    target before it, so the next pass resumes at that target, not at the front of the candidate list."""
+    import hermes_state_mutation_retirement as retirement
+    monkeypatch.setattr(retirement, 'PRUNE_BATCH_LIMIT', 2)
+    with SessionDB(tmp_path / 'state.db') as db:
+        epoch = rt.begin_runtime_epoch(db, instance_id='owner')
+        for sid in ('a0', 'a1', 'big'):
+            db.create_session(sid, source='api_server')
+        for sid in ('a0', 'a1'):
+            _settle(db, epoch, sid, 'k1', 'k1')
+            _settle(db, epoch, sid, 'k2', 'k2')
+        for k in ('k1', 'k2', 'k3', 'k4', 'k5'):
+            _settle(db, epoch, 'big', k, k)
+        _age(db, 'big')
+
+        db.prune_sessions(older_than_days=90)  # a0 and a1 are young: the cursor moves to a1
+        db.prune_sessions(older_than_days=90)  # big: the limit cuts it after two of its four prunable rows
+        assert len(rt.list_session_admissions(db, session_id='big', pending_only=False)) == 3
+
+        db.prune_sessions(older_than_days=90)  # resumes at big, not at a0
+        left = len(rt.list_session_admissions(db, session_id='big', pending_only=False))
+        assert left == 1, f'the next pass did not resume at the cut target: {left} rows left'
+
+
 def test_an_orphaned_pointer_is_reclaimed_when_its_session_is_gone(tmp_path):
     """A pointer whose session row no longer exists is reclaimed by the prune, however the session was
     retired. The session is deleted through the sanctioned path, which fences it; the orphaned pointer
@@ -287,6 +334,26 @@ def test_deleting_a_session_reclaims_a_pointer_whose_tombstone_aged_out(tmp_path
         db.delete_session('live')
         db.prune_sessions(older_than_days=90)
         assert db.get_meta(identity_key('api', 'live', 'r1')) is None, 'the pointer outlived its session'
+
+
+def test_deleting_a_session_keeps_a_held_tombstone_pointer_so_an_exact_retry_still_replays(tmp_path):
+    from hermes_state_terminal import ADMISSION_PREFIX, identity_key
+    with SessionDB(tmp_path / 'state.db') as db:
+        epoch = rt.begin_runtime_epoch(db, instance_id='owner')
+        db.create_session('live', source='api_server')
+        first, first_id = _settle(db, epoch, 'live', 'r1', 'charge card')
+        _settle(db, epoch, 'live', 'r2', 'second')
+        _age(db, 'live')
+        db.prune_sessions(older_than_days=90)
+        assert db.get_meta(ADMISSION_PREFIX + first_id) is not None, 'the tombstone must still be held'
+
+        db.delete_session('live')
+
+        assert db.get_meta(identity_key('api', 'live', 'r1')) is not None, 'a held tombstone lost its pointer'
+        replay = rt.admit_session_input(db, epoch=epoch, **first)
+        assert replay['admission_id'] == first_id and replay['status'] == 'terminal'
+        with pytest.raises(rt.RuntimeStoreError, match='admission_conflict'):
+            rt.admit_session_input(db, epoch=epoch, **{**first, 'payload': {'text': 'other'}})
 
 
 def test_a_recreated_swept_id_admits_its_old_request_id_again(tmp_path):

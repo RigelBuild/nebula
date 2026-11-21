@@ -618,6 +618,34 @@ describe("auth-broker wire surface", () => {
 		}
 	});
 
+	test("operator DELETE /v1/credential/:id/blocks leaves a manual block in place", async () => {
+		const client = new AuthBrokerClient({ url: handle!.url, token });
+		const initialResult = await client.fetchSnapshot();
+		if (initialResult.status !== 200) throw new Error("expected snapshot");
+		const entry = initialResult.snapshot.credentials[0]!;
+		const blockedUntilMs = Date.now() + 60 * 60_000;
+		await client.upsertCredentialBlock(entry.id, {
+			providerKey: "anthropic:oauth",
+			blockScope: "manual",
+			blockedUntilMs,
+			reason: "operator hold",
+			by: "matt",
+		});
+		await client.upsertCredentialBlock(entry.id, {
+			providerKey: "anthropic:oauth",
+			blockScope: "auth",
+			blockedUntilMs,
+		});
+
+		await client.deleteCredentialBlocks(entry.id);
+
+		const after = await client.fetchSnapshot();
+		if (after.status !== 200) throw new Error("expected snapshot");
+		expect(credentialBlocks(after.snapshot, entry.id)).toEqual([
+			expect.objectContaining({ blockScope: "manual", blockedUntilMs, reason: "operator hold", by: "matt" }),
+		]);
+	});
+
 	test("GET /v1/usage/history serves recorded snapshots with sinceMs/provider filters and requires auth", async () => {
 		const hourMs = 60 * 60 * 1000;
 		const now = Date.now();

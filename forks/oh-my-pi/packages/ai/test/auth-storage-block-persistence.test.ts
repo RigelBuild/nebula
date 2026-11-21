@@ -521,6 +521,84 @@ describe("AuthStorage credential block persistence", () => {
 		expect(readAuthSchemaVersion(dbPath)).toBe(9);
 	});
 
+	it("upgrades a real v8 file: keeps a manual block, adds reason and by, and keeps attribution on a repeat block", async () => {
+		const setupStore = await SqliteAuthCredentialStore.open(dbPath);
+		await setupStore.saveOAuth(PROVIDER, oauthCredential("upgrade"));
+		const [row] = setupStore.listAuthCredentials(PROVIDER);
+		setupStore.close();
+		if (!row) throw new Error("expected credential row");
+
+		// Rebuild the block table in its v8 shape: no reason or by column, and no triggers.
+		const db = new Database(dbPath);
+		try {
+			for (const { name } of db
+				.prepare("SELECT name FROM sqlite_master WHERE type = 'trigger' AND tbl_name = 'auth_credential_blocks'")
+				.all() as Array<{ name: string }>) {
+				db.run(`DROP TRIGGER IF EXISTS "${name}"`);
+			}
+			db.run(`
+				DROP TABLE auth_credential_blocks;
+				CREATE TABLE auth_credential_blocks (
+					credential_id INTEGER NOT NULL,
+					provider_key TEXT NOT NULL,
+					block_scope TEXT NOT NULL DEFAULT '',
+					blocked_until_ms INTEGER NOT NULL,
+					updated_at INTEGER NOT NULL,
+					PRIMARY KEY (credential_id, provider_key, block_scope)
+				);
+				UPDATE auth_schema_version SET version = 8 WHERE id = 1;
+			`);
+			db.run(
+				"INSERT INTO auth_credential_blocks (credential_id, provider_key, block_scope, blocked_until_ms, updated_at) VALUES (?, ?, ?, ?, ?)",
+				[row.id, PROVIDER_KEY, "manual", FUTURE_BLOCK_MS, LEGACY_TIMESTAMP],
+			);
+		} finally {
+			db.close();
+		}
+		expect(readAuthSchemaVersion(dbPath)).toBe(8);
+
+		const upgraded = await SqliteAuthCredentialStore.open(dbPath);
+		try {
+			expect(readAuthSchemaVersion(dbPath)).toBe(9);
+			// The pre-upgrade row survives the migration with no attribution.
+			expect(upgraded.listCredentialBlocks([row.id])).toEqual([
+				{
+					credentialId: row.id,
+					providerKey: PROVIDER_KEY,
+					blockScope: "manual",
+					blockedUntilMs: FUTURE_BLOCK_MS,
+					updatedAtMs: LEGACY_TIMESTAMP * 1000,
+				},
+			]);
+
+			// A block with attribution stores it.
+			upgraded.upsertCredentialBlock({
+				credentialId: row.id,
+				providerKey: PROVIDER_KEY,
+				blockScope: "manual",
+				blockedUntilMs: FUTURE_BLOCK_MS,
+				reason: "upgrade hold",
+				by: "matt",
+			});
+			expect(upgraded.listCredentialBlocks([row.id])[0]).toEqual(
+				expect.objectContaining({ reason: "upgrade hold", by: "matt" }),
+			);
+
+			// A repeat block without attribution keeps the stored reason and caller.
+			upgraded.upsertCredentialBlock({
+				credentialId: row.id,
+				providerKey: PROVIDER_KEY,
+				blockScope: "manual",
+				blockedUntilMs: FUTURE_BLOCK_MS,
+			});
+			expect(upgraded.listCredentialBlocks([row.id])[0]).toEqual(
+				expect.objectContaining({ reason: "upgrade hold", by: "matt" }),
+			);
+		} finally {
+			upgraded.close();
+		}
+	});
+
 	it("mirrors a legacy Codex shared insert into meter rows while hiding shared from current APIs", async () => {
 		const store = await SqliteAuthCredentialStore.open(dbPath);
 		await store.saveOAuth(CODEX_PROVIDER, oauthCredential("late"));

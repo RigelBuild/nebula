@@ -518,6 +518,7 @@ class SnapshotSource {
 		}
 	}
 
+	/** Wire snapshot for one client flavour, projected at the current server time. */
 	build(clientSupportsCodexMeterBlockScopes: boolean, clientSupportsBlockAttribution: boolean): SnapshotResponse {
 		const rows = this.#currentRows();
 		const serverNowMs = Date.now();

@@ -757,12 +757,28 @@ export class CredentialBlocks implements BlocksApi {
 		this.#deps.pool.bump("credential-block");
 	}
 
+	/**
+	 * Operator bulk clear. Removes every block except `manual`, which lifts only at
+	 * its deadline or on an explicit single-scope delete. Auth and account-policy
+	 * holds stay clearable here, as before.
+	 */
 	deleteAll(credentialId: number): void {
 		this.#deps.health.assertWritable();
-		const deleteCredentialBlocks = this.#deps.store.deleteCredentialBlocks?.bind(this.#deps.store);
+		const store = this.#deps.store;
+		const deleteCredentialBlocks = store.deleteCredentialBlocks?.bind(store);
 		if (!deleteCredentialBlocks) return;
 		try {
-			deleteCredentialBlocks(credentialId);
+			const rows = store.listCredentialBlocks?.([credentialId]) ?? [];
+			if (rows.some(block => block.blockScope === MANUAL_BLOCK_SCOPE)) {
+				// A manual hold survives the operator clear: delete every other row one at a time.
+				for (const block of rows) {
+					if (block.blockScope !== MANUAL_BLOCK_SCOPE) {
+						store.deleteCredentialBlock?.(credentialId, block.providerKey, block.blockScope);
+					}
+				}
+			} else {
+				deleteCredentialBlocks(credentialId);
+			}
 		} catch (err) {
 			if (this.#deps.health.handle(err)) this.#deps.health.assertWritable();
 			throw err;

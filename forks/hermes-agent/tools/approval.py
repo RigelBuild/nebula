@@ -1214,7 +1214,7 @@ def _run_approval_gate(
     Unattended deny text is ``ctx.block_message(subject, noun, advice)`` unless the caller passes
     an explicit ``*_deny_message`` (the file-tool write gates word their own).
     ``review_first`` runs the smart reviewer before the human, whatever ``approvals.mode`` is.
-    A reviewer DENY always asks for a one-operation owner override; other verdicts honour cached
+    A reviewer DENY always asks for a one-operation owner override; only an ESCALATE honours cached
     human grants. ``pattern_keys`` (default ``[pattern_key]``) are what a session/always answer persists.
     """
     plugin_origin = approval_context.is_plugin_origin_turn()
@@ -1271,8 +1271,9 @@ def _run_approval_gate(
         reviewer_denied = verdict == "deny"
         if reviewer_denied:
             _record_denial(session_key)
-        elif not plugin_origin and is_approved(session_key, pattern_key):
-            # A human already granted this exact key. An ESCALATE honours that grant; a DENY never does.
+        elif verdict == "escalate" and not plugin_origin and is_approved(session_key, pattern_key):
+            # A human already granted this exact key. Only an ESCALATE honours that grant: a DENY never does,
+            # and an unavailable reviewer goes to the human like an ungranted call.
             return _approved()
         description = f"{description}\n{_review_line(verdict, note)}"
     else:

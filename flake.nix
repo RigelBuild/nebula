@@ -24,15 +24,17 @@
       goCommands = {
         code-shape-gate = "sha256-Ee6lA9fZjXfNx2tkoScY+Su5JULWUpK4DshrXO3fmkU=";
         cotal-sys-creds-check = null;
-        design-ledger-gate = "sha256-euBbY7ewPBNIwVPjPkAX9DVbH6XaJ81n+5aMJfBzPW8=";
         depsupdate-wake = null;
+        design-ledger-gate = "sha256-euBbY7ewPBNIwVPjPkAX9DVbH6XaJ81n+5aMJfBzPW8=";
         dev-hygiene = null;
         dl-claim = "sha256-3EcIygo4CNKJmMCIWrIL/bFMqBUznQCV9HI6h1EyeGU=";
         dl-list = "sha256-+YGOcD3K7shRymY29qRJa49GfFkOc8wsdeMdmpvv44A=";
         dl-reconcile = "sha256-M9sG3Wt4un2pQ17tcrLI+K/u1K8JjXy2DXyGrGU8emk=";
+        filevault-unlock = "sha256-QRkNiaX+C0MKkhJxxfEhkmTSRvw2qn0IqBTDFwKdeo8=";
         fork-sync = "sha256-3CiEdm8Db78vQ8JG1KOBt5w55pmxuTs04in8RUhzwoM=";
         gh-route = "sha256-7K17JaXFsjf163g5PXCb5ng2gYdotnZ2IDKk8KFjNj0=";
         hk-hook = null;
+        host-bao-seal = "sha256-i9/7BGDMvMIbVBaYM4cMUtLzK7m7ZEdsYuvOKlLzSAo=";
         host-secret-ready = null;
         length-gate = "sha256-m4lHVyrsYIrQpPFIblIZcMc5rPmJJJsHt6RS8QAoXCk=";
         linear-acceptance = null;
@@ -42,7 +44,10 @@
         ref-gate = "sha256-WVoZkg5kdUYlATXDDxAA/yozThBwyYSKHwLoUsuIBfg=";
         rjc-gates-image = "sha256-WJ+DzF3TydFNjIOq2MAQxEDI62G8xJcjTCAyMZtwgP0=";
         ssh-orphan-reap = null;
+        wave-dreamer = "sha256-7K17JaXFsjf163g5PXCb5ng2gYdotnZ2IDKk8KFjNj0=";
         wave-host = "sha256-3/tNPMYKxKjwprceoPRjRJuTNBwJSJE4LD8grnh+haI=";
+        wave-recall = null;
+        wave-seat-holder = null;
       };
 
       # Does a command's go.mod replace the shared go-lib module? The replace
@@ -99,6 +104,8 @@
         dev-hygiene = pkgs: [ pkgs.jujutsu ];
         # hk-hook's tests create jj workspaces with jj on PATH.
         hk-hook = pkgs: [ pkgs.jujutsu ];
+        # host-bao-seal's tests run a sops/age round-trip.
+        host-bao-seal = pkgs: [ pkgs.sops pkgs.age ];
       };
 
       buildCommand = pkgs: name: vendorHash:

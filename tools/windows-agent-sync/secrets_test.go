@@ -243,6 +243,54 @@ func TestResolveFailureCases(t *testing.T) {
 			wantError: "exportedVarNames",
 		},
 		{
+			name: "listed file export without suffix",
+			mutate: func(m *SecretMap, _ *fakeRunner) {
+				m.FileExports[0].Var = "DL_CLAIM_TOKEN"
+			},
+			wantCalls: 7,
+			wantError: "fileExports membership",
+		},
+		{
+			name: "suffixed variable not listed as file export",
+			mutate: func(m *SecretMap, _ *fakeRunner) {
+				m.Team[0].Var = "WOODPECKER_TOKEN_FILE"
+			},
+			wantCalls: 1,
+			wantError: "fileExports membership",
+		},
+		{
+			name: "invalid variable name",
+			mutate: func(m *SecretMap, _ *fakeRunner) {
+				m.Team[0].Var = "woodpecker-token"
+			},
+			wantCalls: 1,
+			wantError: "must match",
+		},
+		{
+			name: "invalid literal name",
+			mutate: func(m *SecretMap, _ *fakeRunner) {
+				m.Literals["PATH=X"] = "value"
+			},
+			wantCalls: 9,
+			wantError: "must match",
+		},
+		{
+			name: "key with slash",
+			mutate: func(m *SecretMap, _ *fakeRunner) {
+				m.Team[0].Key = "nested/example-team-token"
+			},
+			wantCalls: 0,
+			wantError: "directly under",
+		},
+		{
+			name: "key with parent reference",
+			mutate: func(m *SecretMap, _ *fakeRunner) {
+				m.Team[0].Key = "..example-team-token"
+			},
+			wantCalls: 0,
+			wantError: "directly under",
+		},
+		{
 			name: "WSL failure",
 			mutate: func(_ *SecretMap, runner *fakeRunner) {
 				runner.failAt = 1
@@ -568,6 +616,30 @@ func TestApplySecretsExportMode(t *testing.T) {
 	}
 	if mode := info.Mode().Perm(); mode != 0o600 {
 		t.Fatalf("export mode = %o, want 600", mode)
+	}
+}
+
+func TestStageExportsSweepsStaleTempFiles(t *testing.T) {
+	fileDir := t.TempDir()
+	stale := filepath.Join(fileDir, ".windows-agent-sync-stale.tmp")
+	keep := filepath.Join(fileDir, "dl-claim-token")
+	for _, path := range []string{stale, keep} {
+		if err := os.WriteFile(path, []byte("old"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	staged, err := stageExports(map[string]string{}, nil, fileDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(staged) != 0 {
+		t.Fatalf("staged = %v, want none", staged)
+	}
+	if _, err := os.Stat(stale); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("stale temp file still present: %v", err)
+	}
+	if _, err := os.Stat(keep); err != nil {
+		t.Fatalf("export removed: %v", err)
 	}
 }
 

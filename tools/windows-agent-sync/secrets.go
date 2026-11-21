@@ -8,6 +8,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -118,9 +119,24 @@ var errMissingSecret = errors.New("secret is missing")
 // secretsDir is the NixOS-WSL directory that holds one file per secret key.
 const secretsDir = "/run/secrets"
 
+// varNamePattern is the shape of every exported Windows variable name.
+var varNamePattern = regexp.MustCompile(`^[A-Z][A-Z0-9_]*$`)
+
+func validVarName(name string) bool {
+	return varNamePattern.MatchString(name)
+}
+
+// validSecretKey reports whether key names one file directly under secretsDir.
+func validSecretKey(key string) bool {
+	return key != "" && !strings.Contains(key, "/") && !strings.Contains(key, "..")
+}
+
 func readSecret(ctx context.Context, runner Runner, distro string, ref secretRef) (string, error) {
 	if ref.Key == "" || ref.Var == "" {
 		return "", oops.In("windows-agent-sync").Errorf("secret map contains an empty key or variable name")
+	}
+	if !validSecretKey(ref.Key) {
+		return "", oops.In("windows-agent-sync").Errorf("secret map key %q must name a file directly under %s", ref.Key, secretsDir)
 	}
 	output, err := runner(ctx, "wsl.exe", "-d", distro, "--exec", "/run/current-system/sw/bin/cat", path.Join(secretsDir, ref.Key))
 	if err != nil {
@@ -137,13 +153,20 @@ func addResolved(vars, files map[string]string, fileExports []secretRef, name, v
 	if name == "" {
 		return oops.In("windows-agent-sync").Errorf("secret map contains an empty variable name")
 	}
+	if !validVarName(name) {
+		return oops.In("windows-agent-sync").Errorf("secret map variable %q must match %s", name, varNamePattern)
+	}
 	if _, exists := vars[name]; exists {
 		return oops.In("windows-agent-sync").Errorf("secret map repeats variable %s", name)
 	}
 	if _, exists := files[name]; exists {
 		return oops.In("windows-agent-sync").Errorf("secret map repeats variable %s", name)
 	}
-	if isFileExport(fileExports, name) {
+	listed := isFileExport(fileExports, name)
+	if listed != isFileExportName(name) {
+		return oops.In("windows-agent-sync").Errorf("secret map variable %s: fileExports membership must match the %s suffix", name, fileExportSuffix)
+	}
+	if listed {
 		files[name] = value
 	} else {
 		vars[name] = value
@@ -212,7 +235,13 @@ func applySecrets(store EnvStore, vars, files map[string]string, fileDir string,
 	return sortedKeys(newSet), nil
 }
 
+// stagedExportPattern names the temp files stageExport creates in the export dir.
+const stagedExportPattern = ".windows-agent-sync-*.tmp"
+
 func stageExports(files map[string]string, fileNames []string, fileDir string) (map[string]string, error) {
+	if err := sweepStaleExports(fileDir); err != nil {
+		return nil, err
+	}
 	staged := make(map[string]string, len(files))
 	for _, name := range fileNames {
 		if err := stageExport(staged, fileDir, name, files[name]); err != nil {
@@ -222,8 +251,26 @@ func stageExports(files map[string]string, fileNames []string, fileDir string) (
 	return staged, nil
 }
 
+// sweepStaleExports deletes temp files a previous interrupted run left behind.
+func sweepStaleExports(fileDir string) error {
+	stale, err := filepath.Glob(filepath.Join(fileDir, stagedExportPattern))
+	if err != nil {
+		return oops.In("windows-agent-sync").Wrapf(err, "listing stale exports")
+	}
+	var removeErr error
+	for _, temp := range stale {
+		if err := os.Remove(temp); err != nil && !errors.Is(err, os.ErrNotExist) {
+			removeErr = errors.Join(removeErr, err)
+		}
+	}
+	if removeErr != nil {
+		return oops.In("windows-agent-sync").Wrapf(removeErr, "removing stale exports")
+	}
+	return nil
+}
+
 func stageExport(staged map[string]string, fileDir, name, value string) error {
-	if err := os.MkdirAll(fileDir, 0o700); err != nil {
+	if err := envstore.MkdirPrivate(fileDir); err != nil {
 		cleanupErr := removeStaged(staged)
 		return oops.In("windows-agent-sync").Wrapf(errors.Join(err, cleanupErr), "creating export directory")
 	}
@@ -236,16 +283,13 @@ func stageExport(staged map[string]string, fileDir, name, value string) error {
 		cleanupErr := removeStaged(staged)
 		return oops.In("windows-agent-sync").Wrapf(errors.Join(readErr, cleanupErr), "checking export %s", name)
 	}
-	file, err := os.CreateTemp(fileDir, ".windows-agent-sync-*.tmp")
+	file, err := envstore.CreatePrivateFile(fileDir, stagedExportPattern)
 	if err != nil {
 		cleanupErr := removeStaged(staged)
 		return oops.In("windows-agent-sync").Wrapf(errors.Join(err, cleanupErr), "staging export %s", name)
 	}
 	temp := file.Name()
-	writeErr := file.Chmod(0o600)
-	if writeErr == nil {
-		_, writeErr = file.WriteString(value)
-	}
+	_, writeErr := file.WriteString(value)
 	if writeErr == nil {
 		writeErr = file.Sync()
 	}

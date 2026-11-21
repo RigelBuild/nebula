@@ -266,6 +266,11 @@ func readState(path string) ([]string, error) {
 	if saved.Managed == nil {
 		saved.Managed = []string{}
 	}
+	for _, name := range saved.Managed {
+		if !validVarName(name) {
+			return nil, oops.In("windows-agent-sync").Errorf("state file variable %q must match %s", name, varNamePattern)
+		}
+	}
 	return saved.Managed, nil
 }
 

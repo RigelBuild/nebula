@@ -25,6 +25,7 @@ jobs:
       projects: ${{ steps.plan.outputs.projects }}
       tag: ${{ steps.plan.outputs.tag }}
       runtime: ${{ steps.plan.outputs.runtime }}
+      hevy-runtime: ${{ steps.plan.outputs.hevy-runtime }}
     steps:
       - name: Check out tested source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -60,6 +61,18 @@ jobs:
             if [ "$runtime_assets" = 0 ]; then runtime=true; fi
           fi
           echo "runtime=$runtime" >> "$GITHUB_OUTPUT"
+          # The hevy-mcp runtime follows the same rule for tools/hevy-mcp and its hevy-mcp-runtime-* asset.
+          hevy=false
+          previous=$(jq -r '.previousTag // empty' "$RUNNER_TEMP/plan.json")
+          if jq -e '.projects | index("tools/hevy-mcp")' "$RUNNER_TEMP/plan.json" > /dev/null; then
+            hevy=true
+          elif [ -z "$previous" ]; then
+            hevy=true
+          else
+            hevy_assets=$(gh release view "$previous" --json assets --jq '[.assets[].name | select(startswith("hevy-mcp-runtime-"))] | length')
+            if [ "$hevy_assets" = 0 ]; then hevy=true; fi
+          fi
+          echo "hevy-runtime=$hevy" >> "$GITHUB_OUTPUT"
           # The release tag is fixed here so the images job and the release job share it.
           echo "tag=nebula-$(date -u +%Y%m%d)-$GITHUB_RUN_NUMBER" >> "$GITHUB_OUTPUT"
           # An image whose project has no moon.yml is never planned after the first
@@ -430,6 +443,69 @@ jobs:
           path: ${{ runner.temp }}/cotal-runtime-${{ matrix.platform }}.tar.gz
           if-no-files-found: error
 
+  # Installs the pinned hevy-mcp npm package (tools/hevy-mcp/upstream.json) from tools/hevy-mcp/package-lock.json,
+  # so hosts fetch the tree by hash and build nothing. The release job carries it forward when skipped.
+  hevy-runtime:
+    name: hevy-mcp runtime (${{ matrix.platform }})
+    needs: plan
+    if: ${{ needs.plan.outputs.hevy-runtime == 'true' }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x64
+            runner: ubuntu-24.04
+          - platform: linux-arm64
+            runner: ubuntu-24.04-arm
+          - platform: darwin-arm64
+            runner: macos-15
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - name: Check out tested source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Set up Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          # The @oxc-parser .node bindings are ABI-bound; match the consumer's nodejs_24.
+          node-version: 24
+      - name: Assemble runtime archive
+        env:
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          set -euo pipefail
+          up=tools/hevy-mcp/upstream.json
+          curl -fsSL -o "$RUNNER_TEMP/hevy-mcp.tgz" "$(jq -r .url "$up")"
+          test "sha512-$(openssl dgst -sha512 -binary "$RUNNER_TEMP/hevy-mcp.tgz" | base64 | tr -d '\n')" = "$(jq -r .integrity "$up")"
+          root="$RUNNER_TEMP/hevy-mcp-runtime-asset"
+          mkdir -p "$root/hevy-mcp"
+          tar -xzf "$RUNNER_TEMP/hevy-mcp.tgz" -C "$root/hevy-mcp" --strip-components=1
+          cp tools/hevy-mcp/package-lock.json "$root/hevy-mcp/"
+          # The published manifest lists devDependencies that are not on npm; the lock omits them.
+          jq 'del(.devDependencies)' "$root/hevy-mcp/package.json" > "$RUNNER_TEMP/package.json"
+          mv "$RUNNER_TEMP/package.json" "$root/hevy-mcp/package.json"
+          (cd "$root/hevy-mcp" && npm ci --omit=dev --ignore-scripts --legacy-peer-deps && node dist/cli.mjs --version)
+          tar_bin=tar
+          if [ "$PLATFORM" = darwin-arm64 ]; then tar_bin=gtar; fi
+          "$tar_bin" --sort=name --owner=0 --group=0 --numeric-owner --mtime="@$(git show -s --format=%ct HEAD)" \
+            -czf "$RUNNER_TEMP/hevy-mcp-runtime-${PLATFORM}.tar.gz" -C "$root" hevy-mcp
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
+        with:
+          subject-path: ${{ runner.temp }}/hevy-mcp-runtime-${{ matrix.platform }}.tar.gz
+      - name: Upload runtime asset
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: hevy-mcp-runtime-${{ matrix.platform }}
+          path: ${{ runner.temp }}/hevy-mcp-runtime-${{ matrix.platform }}.tar.gz
+          if-no-files-found: error
+
   tag-images:
     name: Tag images
     needs: [plan, release]
@@ -467,10 +543,10 @@ jobs:
 
   release:
     name: Release
-    needs: [plan, batch, images, runtime]
+    needs: [plan, batch, images, runtime, hevy-runtime]
     # A skipped runtime job is not a failure: the previous runtime assets carry forward.
     # A failed runtime job still skips this job, so a broken runtime build publishes nothing.
-    if: ${{ !cancelled() && needs.plan.result == 'success' && needs.batch.result == 'success' && needs.images.result == 'success' && (needs.runtime.result == 'success' || needs.runtime.result == 'skipped') }}
+    if: ${{ !cancelled() && needs.plan.result == 'success' && needs.batch.result == 'success' && needs.images.result == 'success' && (needs.runtime.result == 'success' || needs.runtime.result == 'skipped') && (needs.hevy-runtime.result == 'success' || needs.hevy-runtime.result == 'skipped') }}
     environment: release
     runs-on: ubuntu-latest
     permissions:
@@ -514,12 +590,14 @@ jobs:
               gh release download "$previous" --dir "$RUNNER_TEMP/previous" --pattern '*.tar.zst'
             fi
           fi
-          # The Cotal runtime carries forward when this batch does not build it. Downloading here, before
+          # Each runtime (Cotal, hevy-mcp) carries forward when this batch does not build it. Downloading here, before
           # the release commit and tag, means a failed download stops the run with nothing published.
-          if [ -n "$previous" ] && ! compgen -G "$RUNNER_TEMP/in/cotal-runtime-*/cotal-runtime-*.tar.gz" > /dev/null; then
-            mkdir -p "$RUNNER_TEMP/runtime-previous"
-            gh release download "$previous" --repo "$GITHUB_REPOSITORY" --pattern 'cotal-runtime-*' --dir "$RUNNER_TEMP/runtime-previous"
-          fi
+          for rt in cotal-runtime hevy-mcp-runtime; do
+            if [ -n "$previous" ] && ! compgen -G "$RUNNER_TEMP/in/$rt-*/$rt-*.tar.gz" > /dev/null; then
+              mkdir -p "$RUNNER_TEMP/runtime-previous"
+              gh release download "$previous" --repo "$GITHUB_REPOSITORY" --pattern "$rt-*" --dir "$RUNNER_TEMP/runtime-previous"
+            fi
+          done
       - name: Publish release-manifest.json on main
         id: publish
         env:
@@ -572,18 +650,18 @@ jobs:
           not_built=$(jq -r '.notBuilt | join(", ")' "$RUNNER_TEMP/in/plan/plan.json")
           if [ -n "$not_built" ]; then notes="$notes"$'\n\n'"Not built by CD (no build step for this toolchain): $not_built"; fi
           mkdir -p "$RUNNER_TEMP/runtime"
-          if compgen -G "$RUNNER_TEMP/in/cotal-runtime-*/cotal-runtime-*.tar.gz" > /dev/null; then
-            cp "$RUNNER_TEMP"/in/cotal-runtime-*/cotal-runtime-*.tar.gz "$RUNNER_TEMP/runtime/"
-          elif compgen -G "$RUNNER_TEMP/runtime-previous/cotal-runtime-*.tar.gz" > /dev/null; then
-            cp "$RUNNER_TEMP"/runtime-previous/cotal-runtime-*.tar.gz "$RUNNER_TEMP/runtime/"
-          fi
-          if compgen -G "$RUNNER_TEMP/runtime/cotal-runtime-*.tar.gz" > /dev/null; then
-            (cd "$RUNNER_TEMP/runtime" && sha256sum cotal-runtime-*.tar.gz > cotal-runtime-SHA256SUMS)
-          fi
           runtime_files=()
-          if compgen -G "$RUNNER_TEMP/runtime/cotal-runtime-*.tar.gz" > /dev/null; then
-            runtime_files=("$RUNNER_TEMP"/runtime/cotal-runtime-*.tar.gz "$RUNNER_TEMP/runtime/cotal-runtime-SHA256SUMS")
-          fi
+          for rt in cotal-runtime hevy-mcp-runtime; do
+            if compgen -G "$RUNNER_TEMP/in/$rt-*/$rt-*.tar.gz" > /dev/null; then
+              cp "$RUNNER_TEMP"/in/$rt-*/$rt-*.tar.gz "$RUNNER_TEMP/runtime/"
+            elif compgen -G "$RUNNER_TEMP/runtime-previous/$rt-*.tar.gz" > /dev/null; then
+              cp "$RUNNER_TEMP"/runtime-previous/$rt-*.tar.gz "$RUNNER_TEMP/runtime/"
+            fi
+            if compgen -G "$RUNNER_TEMP/runtime/$rt-*.tar.gz" > /dev/null; then
+              (cd "$RUNNER_TEMP/runtime" && sha256sum $rt-*.tar.gz > $rt-SHA256SUMS)
+              runtime_files+=("$RUNNER_TEMP"/runtime/$rt-*.tar.gz "$RUNNER_TEMP/runtime/$rt-SHA256SUMS")
+            fi
+          done
           gh release create "$TAG" --verify-tag --title "$TAG" --notes "$notes" \
             "$RUNNER_TEMP/release-manifest.json" "$RUNNER_TEMP/SHA256SUMS" "${files[@]}" "${runtime_files[@]}"
 

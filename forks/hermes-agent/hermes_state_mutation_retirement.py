@@ -465,7 +465,12 @@ def _tip_last_active(conn, session_id):
     return row[0] if row else None
 
 
-def prunable_terminal_admissions(conn, older_than=RETRY_HORIZON_S, limit=500):
+PRUNE_BATCH_LIMIT = 500  # admission rows one prune pass may tombstone; the rest wait for the next pass
+
+
+def prunable_terminal_admissions(conn, older_than=RETRY_HORIZON_S, limit=None):
+    if limit is None:
+        limit = PRUNE_BATCH_LIMIT
     """Up to *limit* admission ids ``prune_terminal_admissions`` may tombstone (see the comment above).
     The age test runs here, not in SQL, so *limit* counts only rows that have aged out."""
     cutoff, tips, ids = time.time() - older_than, {}, []
@@ -479,7 +484,9 @@ def prunable_terminal_admissions(conn, older_than=RETRY_HORIZON_S, limit=500):
     return ids
 
 
-def prune_terminal_admissions(conn, older_than=RETRY_HORIZON_S, limit=500):
+def prune_terminal_admissions(conn, older_than=RETRY_HORIZON_S, limit=None):
+    if limit is None:
+        limit = PRUNE_BATCH_LIMIT
     """Tombstone then delete up to *limit* prunable terminal admission rows, in *conn*'s transaction.
     Returns the number pruned. The tombstones are written before the rows they replace go."""
     from hermes_state_terminal import ADMISSION_PREFIX, identity_key

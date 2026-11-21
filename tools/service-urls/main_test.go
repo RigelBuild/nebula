@@ -58,12 +58,6 @@ func TestMissingConfigFlagExitsOperationalError(t *testing.T) {
 	}
 }
 
-func TestWriteFailureReturnsOperationalErrorStatus(t *testing.T) {
-	if code := writeFailure(errorWriter{}, "operational failure"); code != 2 {
-		t.Fatalf("writeFailure() = %d, want 2", code)
-	}
-}
-
 type errorWriter struct{}
 
 func (errorWriter) Write([]byte) (int, error) {

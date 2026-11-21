@@ -4,6 +4,7 @@ package main
 
 import (
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -338,5 +339,83 @@ func assertEndpoints(t *testing.T, got, want []endpoint) {
 		if got[index].host != want[index].host || got[index].origin != want[index].origin || got[index].owner != want[index].owner || !portMatches {
 			t.Errorf("endpoint[%d] = %#v, want %#v", index, got[index], want[index])
 		}
+	}
+}
+
+const coverageNodeLink = `[[link]]
+group = "services"
+name = "Node A"
+url = "https://node-a.internal.example.com"
+what = "Example"
+access = "tailnet"
+kind = "endpoint"
+via = "Fixture"
+source = "example/dns/records.json"
+`
+
+const coverageApexLink = `[[link]]
+group = "services"
+name = "Apex"
+url = "https://example.com"
+what = "Example"
+access = "public"
+kind = "web"
+via = "Fixture"
+source = "example/workers/sites.ts"
+`
+
+func writeCoverageFixture(t *testing.T, root, links string) {
+	t.Helper()
+	cfg := exampleConfig()
+	writeFixtureFile(t, root, cfg.InventoryPath+"/groups.toml", "[[group]]\nid = \"services\"\ntitle = \"Services\"\n")
+	writeFixtureFile(t, root, cfg.InventoryPath+"/links.toml", links)
+	writeFixtureFile(t, root, cfg.DNSRecordsPath, `[{"name":"node-a","host":"node-a"}]`)
+	writeFixtureFile(t, root, cfg.WorkerDomainsPath, `new cloudflare.WorkersCustomDomain("site-apex", { hostname: "example.com" });`)
+	writeFixtureFile(t, root, cfg.ManagedReposPath, `{"active":[],"unmanaged":[]}`)
+	writeFixtureFile(t, root, cfg.CloudflareHostsPath, `{"access":[],"proxied":[]}`)
+	writeFixtureFile(t, root, cfg.TailnetPath, "magicDnsSuffix = \"ts.example.net\"\n")
+	writeFixtureFile(t, root, cfg.UnionPath, "")
+}
+
+func writeFixtureFile(t *testing.T, root, name, contents string) {
+	t.Helper()
+	path := filepath.Join(root, filepath.FromSlash(name))
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCoverageWriteFailureExitsOperationalError(t *testing.T) {
+	tests := []struct {
+		name          string
+		links         string
+		healthyStatus int
+		failStdout    bool
+	}{
+		{name: "complete case fails writing its summary to stdout", links: coverageNodeLink + coverageApexLink, healthyStatus: 0, failStdout: true},
+		{name: "gaps case fails writing a gap to stderr", links: coverageNodeLink, healthyStatus: 1, failStdout: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			writeCoverageFixture(t, root, test.links)
+			cfg := exampleConfig()
+			var stdout, stderr strings.Builder
+			if code := runCoverage(root, cfg, &stdout, &stderr); code != test.healthyStatus {
+				t.Fatalf("runCoverage() = %d, stdout %q, stderr %q; want %d", code, stdout.String(), stderr.String(), test.healthyStatus)
+			}
+			var failingStdout, failingStderr io.Writer = io.Discard, io.Discard
+			if test.failStdout {
+				failingStdout = errorWriter{}
+			} else {
+				failingStderr = errorWriter{}
+			}
+			if code := runCoverage(root, cfg, failingStdout, failingStderr); code != 2 {
+				t.Fatalf("runCoverage() with failing writer = %d, want 2", code)
+			}
+		})
 	}
 }

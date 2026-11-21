@@ -156,11 +156,8 @@ func (e commandStatusError) Error() string {
 }
 
 func writeLine(writer io.Writer, line string) bool {
-	if _, err := io.WriteString(writer, line+"\n"); err != nil {
-		slog.New(slog.NewTextHandler(os.Stderr, nil)).Error("write service-urls output", "error", err)
-		return false
-	}
-	return true
+	_, err := io.WriteString(writer, line+"\n")
+	return err == nil
 }
 
 func writeFailure(writer io.Writer, line string) int {

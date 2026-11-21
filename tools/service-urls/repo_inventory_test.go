@@ -143,6 +143,52 @@ func TestRunRepoInventoryWithOptions(t *testing.T) {
 	}
 }
 
+func TestRepoInventoryWriteFailureExitsOperationalError(t *testing.T) {
+	tests := []struct {
+		name          string
+		body          string
+		healthyStatus int
+		failStdout    bool
+	}{
+		{name: "complete case fails writing its summary to stdout", body: `[{"name":"alpha","archived":false},{"name":"BETA","archived":false},{"name":"gamma","archived":false}]`, healthyStatus: 0, failStdout: true},
+		{name: "gaps case fails writing a gap to stderr", body: `[{"name":"alpha","archived":false},{"name":"BETA","archived":false},{"name":"gamma","archived":false},{"name":"stray","archived":false}]`, healthyStatus: 1, failStdout: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+				if _, err := io.WriteString(writer, test.body); err != nil {
+					t.Errorf("write response: %v", err)
+				}
+			}))
+			t.Cleanup(server.Close)
+			options := func(stdout, stderr io.Writer) repoInventoryOptions {
+				return repoInventoryOptions{
+					reposText: testManagedRepos,
+					mint: func(context.Context) (githubapptoken.Token, error) {
+						return "test-token", nil
+					},
+					client: &http.Client{Transport: testRoundTripper{base: server.Client().Transport, url: server.URL}},
+					stdout: stdout,
+					stderr: stderr,
+				}
+			}
+			var stdout, stderr strings.Builder
+			if code := runRepoInventoryWithOptions(t.Context(), options(&stdout, &stderr)); code != test.healthyStatus {
+				t.Fatalf("runRepoInventoryWithOptions() = %d, stdout %q, stderr %q; want %d", code, stdout.String(), stderr.String(), test.healthyStatus)
+			}
+			var failingStdout, failingStderr io.Writer = io.Discard, io.Discard
+			if test.failStdout {
+				failingStdout = errorWriter{}
+			} else {
+				failingStderr = errorWriter{}
+			}
+			if code := runRepoInventoryWithOptions(t.Context(), options(failingStdout, failingStderr)); code != 2 {
+				t.Fatalf("runRepoInventoryWithOptions() with failing writer = %d, want 2", code)
+			}
+		})
+	}
+}
+
 type testRoundTripper struct {
 	base http.RoundTripper
 	url  string

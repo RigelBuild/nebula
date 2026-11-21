@@ -51,6 +51,7 @@
         ssh-orphan-reap = null;
         wave-dreamer = "sha256-7K17JaXFsjf163g5PXCb5ng2gYdotnZ2IDKk8KFjNj0=";
         wave-host = "sha256-3/tNPMYKxKjwprceoPRjRJuTNBwJSJE4LD8grnh+haI=";
+        wave-ledger = "sha256-9TnmijwY7K3fhUngJXQRcn+eoYEKMKo5qd2YYgpHnN8=";
         wave-recall = null;
         wave-seat-holder = null;
         zellij-rss-watchdog = "sha256-3/tNPMYKxKjwprceoPRjRJuTNBwJSJE4LD8grnh+haI=";

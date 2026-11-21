@@ -193,7 +193,7 @@ func TestSwitchDryRun(t *testing.T) {
 	if err := runSwitch(t.Context(), deps, localRepo, []host{fleetHosts[1]}, true); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), "--target-host root@nixos1.example.com --build-host root@nixos1.example.com") {
+	if !strings.Contains(out.String(), "--target-host example-admin@nixos1.example.com --build-host example-admin@nixos1.example.com") {
 		t.Fatal(out.String())
 	}
 }

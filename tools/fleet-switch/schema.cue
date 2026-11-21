@@ -14,7 +14,7 @@
 		windowsCheckout: string & =~#"^[^'"$`]+$"#
 		windowsSetup:    string & =~#"^[^'"$`]+$"#
 	}
-	user: *"root" | string
+	user: string & !=""
 	port: (*22 | int) & >=1 & <=65535
 	identityFile?: string
 	gamingFlag?: string

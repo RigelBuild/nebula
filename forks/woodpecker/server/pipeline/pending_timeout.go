@@ -337,7 +337,8 @@ func skipDeadWorkflow(storage store.Store, workflow *model.Workflow, deps map[st
 
 // verdictForbids reports whether every dependency reached a verdict that a
 // runs_on-gated workflow would reject. Skipped counts as a verdict; killed,
-// canceled, error and declined do not.
+// canceled, error and declined do not. A skipped dependency that lost work
+// already carries canceled steps, so its dependent need not repeat the mark.
 func verdictForbids(deps map[string]model.StatusValue) bool {
 	for _, status := range deps {
 		if status != model.StatusSuccess && status != model.StatusFailure && status != model.StatusSkipped {

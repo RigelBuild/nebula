@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -39,7 +40,7 @@ func New(getenv func(string) string) (*Client, error) {
 	if !ok {
 		return nil, errors.New("KUBERNETES_SERVICE_PORT is missing from the in-cluster environment")
 	}
-	return &Client{baseURL: "https://" + host + ":" + port, serviceAccount: DefaultServiceAccount}, nil
+	return &Client{baseURL: "https://" + net.JoinHostPort(host, port), serviceAccount: DefaultServiceAccount}, nil
 }
 
 // secretPath builds the Secret resource path with encodeURIComponent-compatible escaping.

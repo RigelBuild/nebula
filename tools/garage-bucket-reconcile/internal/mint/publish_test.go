@@ -76,7 +76,7 @@ func TestPublishesEmptySecretBeforeDeletingOldTokensWithSameName(t *testing.T) {
 	}
 }
 
-func TestRetainsMintedTokenAfterFailedPublishAndRemovesItAfterLaterPublish(t *testing.T) {
+func TestFailedPublishDeletesItsOwnTokenAndLaterPublishRemovesNoOthers(t *testing.T) {
 	t.Parallel()
 	tokens := []map[string]any{
 		tokenRecord(new("token-1"), Scope, nil, tokenName),
@@ -102,12 +102,15 @@ func TestRetainsMintedTokenAfterFailedPublishAndRemovesItAfterLaterPublish(t *te
 			}
 			return r, err
 		case "ListAdminTokens":
-			return fakeadmin.Reply{Body: tokens}, nil
+			mu.Lock()
+			defer mu.Unlock()
+			return fakeadmin.Reply{Body: slices.Clone(tokens)}, nil
 		case "DeleteAdminToken":
 			mu.Lock()
 			defer mu.Unlock()
 			if id := deleteID(req); id != "" {
 				deleted = append(deleted, id)
+				tokens = slices.DeleteFunc(tokens, func(tok map[string]any) bool { return tok["id"] == id })
 			}
 			return fakeadmin.Reply{}, nil
 		}
@@ -117,28 +120,14 @@ func TestRetainsMintedTokenAfterFailedPublishAndRemovesItAfterLaterPublish(t *te
 	if _, err := Run(context.Background(), testConfig(), testDeps(d, clock, secrets)); err == nil || err.Error() != "publish failed" {
 		t.Fatalf("first Run err = %v, want publish failed", err)
 	}
-	if len(deleted) != 0 {
-		t.Errorf("deleted after failed publish = %v, want none", deleted)
-	}
-	// Token literals: created is the fake now, and expiration is now plus the 30-day TTL.
-	wantToken := func(id string) map[string]any {
-		return map[string]any{
-			"id":         id,
-			"created":    "2026-01-01T00:00:00.000Z",
-			"name":       tokenName,
-			"expiration": "2026-01-31T00:00:00.000Z",
-			"expired":    false,
-			"scope":      Scope,
-		}
-	}
-	if !jsonEqualAny(tokens[0], wantToken("token-1")) || !jsonEqualAny(tokens[1], wantToken("token-2")) {
-		t.Error("token list was mutated")
+	if !slices.Equal(deleted, []string{"token-1"}) {
+		t.Errorf("deleted after failed publish = %v, want [token-1]", deleted)
 	}
 	if _, err := Run(context.Background(), testConfig(), testDeps(d, clock, secrets)); err != nil {
 		t.Fatalf("second Run: %v", err)
 	}
 	if !slices.Equal(deleted, []string{"token-1"}) {
-		t.Errorf("deleted = %v, want [token-1]", deleted)
+		t.Errorf("deleted = %v, want only the failed run's token-1 (no repeat)", deleted)
 	}
 }
 

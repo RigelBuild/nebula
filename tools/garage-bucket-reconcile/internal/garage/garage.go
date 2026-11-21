@@ -47,11 +47,14 @@ func TrimTrailingSlashes(adminURL string) string {
 	return strings.TrimRight(adminURL, "/")
 }
 
-// ErrorBody replaces token with [redacted], then truncates to 200 UTF-16 units with an ellipsis.
-func ErrorBody(body, token string) string {
+// ErrorBody replaces every non-empty token with [redacted], then truncates to 200 UTF-16 units with an ellipsis.
+// Redaction runs before truncation, so a token that straddles the cut is still replaced in full.
+func ErrorBody(body string, tokens ...string) string {
 	redacted := body
-	if token != "" {
-		redacted = strings.ReplaceAll(body, token, "[redacted]")
+	for _, token := range tokens {
+		if token != "" {
+			redacted = strings.ReplaceAll(redacted, token, "[redacted]")
+		}
 	}
 	units := utf16.Encode([]rune(redacted))
 	if len(units) <= errorBodyLimit {

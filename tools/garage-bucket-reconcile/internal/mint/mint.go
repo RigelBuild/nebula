@@ -158,10 +158,7 @@ func apiCall(ctx context.Context, cfg Config, deps Deps, endpoint, method, authT
 	ok := status >= http.StatusOK && status < http.StatusMultipleChoices
 	authorizedRejection := allowUnauthorized && (status == http.StatusUnauthorized || status == http.StatusForbidden)
 	if !ok && !authorizedRejection {
-		safe := garage.ErrorBody(string(text), cfg.MasterToken)
-		for _, token := range redact {
-			safe = garage.ErrorBody(safe, token)
-		}
+		safe := garage.ErrorBody(string(text), append([]string{cfg.MasterToken}, redact...)...)
 		return apiResult{}, fmt.Errorf("%s returned HTTP %d: %s", endpoint, status, safe)
 	}
 	if !ok || len(text) == 0 {
@@ -348,6 +345,10 @@ func publishToken(ctx context.Context, cfg Config, deps Deps, current map[string
 		return true, nil
 	}
 	if !errors.Is(err, ErrSecretConflict) {
+		// The new token is valid for 30 days, but nothing stores it. Delete it best-effort, and join any delete error.
+		if _, delErr := apiCall(ctx, cfg, deps, "DeleteAdminToken?id="+jscompat.EncodeURIComponent(token.id), http.MethodPost, cfg.MasterToken, nil, []string{token.secretToken}, false); delErr != nil {
+			return false, errors.Join(err, delErr)
+		}
 		return false, err
 	}
 	if _, err := apiCall(ctx, cfg, deps, "DeleteAdminToken?id="+jscompat.EncodeURIComponent(token.id), http.MethodPost, cfg.MasterToken, nil, []string{token.secretToken}, false); err != nil {

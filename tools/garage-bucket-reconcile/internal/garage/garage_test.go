@@ -65,6 +65,22 @@ func TestErrorBodyRedactsTokenAndTruncatesToUTF16Limit(t *testing.T) {
 	}
 }
 
+func TestErrorBodyRedactsEveryTokenBeforeTruncating(t *testing.T) {
+	t.Parallel()
+	const master = "master-token-secret"
+	const minted = "new-id.new-secret-value-0123456789"
+	body := strings.Repeat("x", 190) + minted
+	got := ErrorBody(body, master, minted)
+	if strings.Contains(got, minted) {
+		t.Errorf("ErrorBody kept the minted token: %q", got)
+	}
+	for n := 4; n <= len(minted); n++ {
+		if strings.Contains(got, minted[:n]) {
+			t.Fatalf("ErrorBody leaks a %d-character prefix of the token: %q", n, got)
+		}
+	}
+}
+
 func TestTrimTrailingSlashesRemovesEverySlash(t *testing.T) {
 	t.Parallel()
 	if got := TrimTrailingSlashes("http://garage.example.com:3903///"); got != "http://garage.example.com:3903" {

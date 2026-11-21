@@ -139,3 +139,18 @@ func TestReplaceDoesNotFollowRedirects(t *testing.T) {
 		t.Error("error exposed the service account token")
 	}
 }
+
+func TestNewBracketsIPv6ServiceHost(t *testing.T) {
+	t.Parallel()
+	env := map[string]string{
+		"KUBERNETES_SERVICE_HOST": "fd00::1",
+		"KUBERNETES_SERVICE_PORT": "443",
+	}
+	c, err := New(func(k string) string { return env[k] })
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if want := "https://[fd00::1]:443"; c.baseURL != want {
+		t.Errorf("baseURL = %q, want %q", c.baseURL, want)
+	}
+}

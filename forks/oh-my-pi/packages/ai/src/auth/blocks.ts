@@ -32,7 +32,13 @@ export function scopedBackoffKey(providerKey: string, blockScope: string | undef
 export const AUTH_BLOCK_SCOPE = "auth";
 /** Account-policy backoffs apply to every model and survive quota resets. */
 export const ACCOUNT_POLICY_BLOCK_SCOPE = "account-policy";
-const PROTECTED_BLOCK_SCOPES = [AUTH_BLOCK_SCOPE, ACCOUNT_POLICY_BLOCK_SCOPE] as const;
+/**
+ * Operator hold on one account, placed through the broker. Applies to every
+ * model and survives quota resets, usage healing and reset redemption. It lifts
+ * only at its deadline or on an explicit delete.
+ */
+export const MANUAL_BLOCK_SCOPE = "manual";
+const PROTECTED_BLOCK_SCOPES = [AUTH_BLOCK_SCOPE, ACCOUNT_POLICY_BLOCK_SCOPE, MANUAL_BLOCK_SCOPE] as const;
 
 const MODEL_ACCOUNT_POLICY_BLOCK_SCOPE_PREFIX = "model-policy:";
 
@@ -503,8 +509,14 @@ export class CredentialBlocks implements BlocksApi {
 	 * that `markUsageLimitReached` set for the now-obsolete reset time.
 	 */
 	clearAll(provider: string, credentialId: number): void {
+		const providerKey = providerTypeKey(provider, "oauth");
+		const protectedScopes: readonly string[] = PROTECTED_BLOCK_SCOPES;
 		try {
-			this.deleteAll(credentialId);
+			// A redeem clears usage exhaustion only. Operator and policy holds stay.
+			for (const block of this.#deps.store.listCredentialBlocks?.([credentialId]) ?? []) {
+				if (protectedScopes.includes(block.blockScope)) continue;
+				this.delete(credentialId, block.providerKey, block.blockScope, false);
+			}
 		} catch (err) {
 			logger.debug("Failed to clear persisted credential blocks", {
 				err,
@@ -513,10 +525,11 @@ export class CredentialBlocks implements BlocksApi {
 			});
 		}
 
-		const providerKey = providerTypeKey(provider, "oauth");
 		const scopedPrefix = `${providerKey}\0`;
 		for (const key of this.#credentialBackoff.keys()) {
-			if (key === providerKey || key.startsWith(scopedPrefix)) this.#deleteCredentialBackoff(key, credentialId);
+			if (key !== providerKey && !key.startsWith(scopedPrefix)) continue;
+			const blockScope = key === providerKey ? "" : key.slice(scopedPrefix.length);
+			if (!protectedScopes.includes(blockScope)) this.#deleteCredentialBackoff(key, credentialId);
 		}
 	}
 
@@ -744,12 +757,28 @@ export class CredentialBlocks implements BlocksApi {
 		this.#deps.pool.bump("credential-block");
 	}
 
+	/**
+	 * Operator bulk clear. Removes every block except `manual`, which lifts only at
+	 * its deadline or on an explicit single-scope delete. Auth and account-policy
+	 * holds stay clearable here, as before.
+	 */
 	deleteAll(credentialId: number): void {
 		this.#deps.health.assertWritable();
-		const deleteCredentialBlocks = this.#deps.store.deleteCredentialBlocks?.bind(this.#deps.store);
+		const store = this.#deps.store;
+		const deleteCredentialBlocks = store.deleteCredentialBlocks?.bind(store);
 		if (!deleteCredentialBlocks) return;
 		try {
-			deleteCredentialBlocks(credentialId);
+			const rows = store.listCredentialBlocks?.([credentialId]) ?? [];
+			if (rows.some(block => block.blockScope === MANUAL_BLOCK_SCOPE)) {
+				// A manual hold survives the operator clear: delete every other row one at a time.
+				for (const block of rows) {
+					if (block.blockScope !== MANUAL_BLOCK_SCOPE) {
+						store.deleteCredentialBlock?.(credentialId, block.providerKey, block.blockScope);
+					}
+				}
+			} else {
+				deleteCredentialBlocks(credentialId);
+			}
 		} catch (err) {
 			if (this.#deps.health.handle(err)) this.#deps.health.assertWritable();
 			throw err;

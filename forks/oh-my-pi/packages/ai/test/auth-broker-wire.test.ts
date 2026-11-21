@@ -266,7 +266,7 @@ describe("auth-broker wire surface", () => {
 		const unchanged = await client.fetchSnapshot({ ifGenerationGt: body.generation, waitMs: 10 });
 		expect(unchanged.status).toBe(304);
 		expect(unchanged.generation).toBe(body.generation);
-		expect(observedCapabilities).toEqual([AUTH_BROKER_CAPABILITY_CODEX_METER_BLOCK_SCOPES]);
+		expect(observedCapabilities).toEqual(["codex-meter-block-scopes,block-attribution"]);
 
 		const rawUnchanged = await fetch(`${handle!.url}/v1/snapshot?wait=10`, {
 			headers: {
@@ -532,6 +532,118 @@ describe("auth-broker wire surface", () => {
 		expect(afterResult.snapshot.credentials).toHaveLength(0);
 
 		await expect(client.refreshCredential(id)).rejects.toThrow();
+	});
+	test("POST /v1/credential/:id/block stores reason and by, serves them in the snapshot, and logs them without the token", async () => {
+		const info = vi.spyOn(logger, "info");
+		const client = new AuthBrokerClient({ url: handle!.url, token });
+		const initialResult = await client.fetchSnapshot();
+		if (initialResult.status !== 200) throw new Error("expected snapshot");
+		const entry = initialResult.snapshot.credentials[0]!;
+		const blockedUntilMs = Date.now() + 60 * 60_000;
+
+		await client.upsertCredentialBlock(entry.id, {
+			providerKey: "anthropic:oauth",
+			blockScope: "manual",
+			blockedUntilMs,
+			reason: "quota hold for RIG-11747",
+			by: "matt",
+		});
+
+		const after = await client.fetchSnapshot();
+		if (after.status !== 200) throw new Error("expected snapshot");
+		expect(credentialBlocks(after.snapshot, entry.id)).toEqual([
+			expect.objectContaining({
+				providerKey: "anthropic:oauth",
+				blockScope: "manual",
+				blockedUntilMs,
+				reason: "quota hold for RIG-11747",
+				by: "matt",
+			}),
+		]);
+
+		const upserted = info.mock.calls.find(([message]) => message === "auth-broker credential block upserted");
+		expect(upserted?.[1]).toEqual(
+			expect.objectContaining({
+				id: entry.id,
+				accountId: entry.credential.type === "oauth" ? entry.credential.accountId : undefined,
+				by: "matt",
+				reason: "quota hold for RIG-11747",
+			}),
+		);
+		expect(JSON.stringify(info.mock.calls)).not.toContain(token);
+		info.mockRestore();
+	});
+
+	test("snapshot strips reason and by for a client that does not advertise block-attribution", async () => {
+		const client = new AuthBrokerClient({ url: handle!.url, token });
+		const initialResult = await client.fetchSnapshot();
+		if (initialResult.status !== 200) throw new Error("expected snapshot");
+		const entry = initialResult.snapshot.credentials[0]!;
+		await client.upsertCredentialBlock(entry.id, {
+			providerKey: "anthropic:oauth",
+			blockScope: "manual",
+			blockedUntilMs: Date.now() + 60 * 60_000,
+			reason: "old client must not see this",
+			by: "matt",
+		});
+
+		// An old client advertises only the Codex capability.
+		const legacy = await fetch(`${handle!.url}/v1/snapshot`, {
+			headers: {
+				Authorization: `Bearer ${token}`,
+				[AUTH_BROKER_CAPABILITIES_HEADER]: AUTH_BROKER_CAPABILITY_CODEX_METER_BLOCK_SCOPES,
+			},
+		});
+		const legacyBody: unknown = await legacy.json();
+		if (
+			typeof legacyBody !== "object" ||
+			legacyBody === null ||
+			!("credentials" in legacyBody) ||
+			!Array.isArray(legacyBody.credentials)
+		) {
+			throw new Error("expected snapshot body");
+		}
+		const legacyEntry = legacyBody.credentials.find(
+			(candidate: unknown) =>
+				typeof candidate === "object" && candidate !== null && "id" in candidate && candidate.id === entry.id,
+		);
+		const legacyBlocks: unknown[] =
+			legacyEntry && typeof legacyEntry === "object" && "blocks" in legacyEntry && Array.isArray(legacyEntry.blocks)
+				? legacyEntry.blocks
+				: [];
+		expect(legacyBlocks.length).toBeGreaterThan(0);
+		for (const block of legacyBlocks) {
+			expect(block).not.toHaveProperty("reason");
+			expect(block).not.toHaveProperty("by");
+		}
+	});
+
+	test("operator DELETE /v1/credential/:id/blocks leaves a manual block in place", async () => {
+		const client = new AuthBrokerClient({ url: handle!.url, token });
+		const initialResult = await client.fetchSnapshot();
+		if (initialResult.status !== 200) throw new Error("expected snapshot");
+		const entry = initialResult.snapshot.credentials[0]!;
+		const blockedUntilMs = Date.now() + 60 * 60_000;
+		await client.upsertCredentialBlock(entry.id, {
+			providerKey: "anthropic:oauth",
+			blockScope: "manual",
+			blockedUntilMs,
+			reason: "operator hold",
+			by: "matt",
+		});
+		await client.upsertCredentialBlock(entry.id, {
+			providerKey: "anthropic:oauth",
+			blockScope: "auth",
+			blockedUntilMs,
+		});
+
+		await client.deleteCredentialBlocks(entry.id);
+
+		const after = await client.fetchSnapshot();
+		if (after.status !== 200) throw new Error("expected snapshot");
+		expect(credentialBlocks(after.snapshot, entry.id)).toEqual([
+			expect.objectContaining({ blockScope: "manual", blockedUntilMs, reason: "operator hold", by: "matt" }),
+		]);
 	});
 
 	test("GET /v1/usage/history serves recorded snapshots with sinceMs/provider filters and requires auth", async () => {

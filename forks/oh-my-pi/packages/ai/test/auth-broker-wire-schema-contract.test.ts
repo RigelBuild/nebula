@@ -193,7 +193,13 @@ const validSamples: Record<SchemaName, unknown> = {
 		generatedAt: 2_000,
 		disabled: [{ id: 7, provider: "anthropic", type: "oauth", cause: "revoked" }],
 	},
-	credentialBlockRequestSchema: BLOCK,
+	credentialBlockRequestSchema: {
+		providerKey: BLOCK.providerKey,
+		blockScope: "manual",
+		blockedUntilMs: BLOCK.blockedUntilMs,
+		reason: "operator hold",
+		by: "matt",
+	},
 	credentialBlockDeleteRequestSchema: { providerKey: BLOCK.providerKey, blockScope: BLOCK.blockScope },
 	credentialBlockResponseSchema: { ok: true },
 	credentialBlocksDeleteResponseSchema: { ok: true },
@@ -257,7 +263,8 @@ describe("auth-broker public wire schemas", () => {
 	});
 
 	test("preserves fixed envelopes, integer fields, discriminators, and block alias identity", () => {
-		expect(wireSchemas.credentialBlockRequestSchema).toBe(wireSchemas.credentialBlockSnapshotSchema);
+		// POST has its own schema: the snapshot-only `updatedAtMs` is not an accepted request field.
+		reject(wireSchemas.credentialBlockRequestSchema, { ...BLOCK, blockScope: "" });
 		accept(wireSchemas.credentialBlockRequestSchema, {
 			providerKey: BLOCK.providerKey,
 			blockScope: "",
@@ -277,6 +284,25 @@ describe("auth-broker public wire schemas", () => {
 		reject(wireSchemas.snapshotStreamEventSchema, { ...STREAM_ENTRY, kind: "snapshot" });
 		reject(wireSchemas.snapshotStreamEventSchema, { ...STREAM_REMOVED, extra: true });
 		reject(wireSchemas.snapshotStreamEventSchema, { kind: "unknown" });
+	});
+
+	test("accepts optional reason and by on block POST and DELETE, bounded, and rejects unknown fields", () => {
+		const post = { providerKey: BLOCK.providerKey, blockScope: "manual", blockedUntilMs: BLOCK.blockedUntilMs };
+		accept(wireSchemas.credentialBlockRequestSchema, { ...post, reason: "operator hold", by: "matt" });
+		accept(wireSchemas.credentialBlockRequestSchema, { ...post, reason: "x".repeat(200), by: "y".repeat(64) });
+		reject(wireSchemas.credentialBlockRequestSchema, { ...post, reason: "x".repeat(201) });
+		reject(wireSchemas.credentialBlockRequestSchema, { ...post, by: "y".repeat(65) });
+		reject(wireSchemas.credentialBlockRequestSchema, { ...post, extra: true });
+		accept(wireSchemas.credentialBlockDeleteRequestSchema, {
+			providerKey: BLOCK.providerKey,
+			blockScope: "manual",
+			by: "matt",
+		});
+		reject(wireSchemas.credentialBlockDeleteRequestSchema, {
+			providerKey: BLOCK.providerKey,
+			blockScope: "manual",
+			by: "y".repeat(65),
+		});
 	});
 
 	test("preserves usage extensions while rejecting envelope and enum violations", () => {

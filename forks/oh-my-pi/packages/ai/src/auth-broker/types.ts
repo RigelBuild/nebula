@@ -110,11 +110,12 @@ export interface DisabledCredentialsResponse {
 	disabled: DisabledCredentialSummary[];
 }
 
-/** POST /v1/credential/:id/block request body. */
-export type CredentialBlockRequest = CredentialBlockSnapshot;
+/** POST /v1/credential/:id/block request body. `by` and `reason` are operator attribution, logged and served back. */
+export type CredentialBlockRequest = Pick<CredentialBlockSnapshot, "providerKey" | "blockScope" | "blockedUntilMs"> &
+	Pick<CredentialBlockSnapshot, "reason" | "by">;
 
 /** DELETE /v1/credential/:id/block request body; empty scope targets only the global row. */
-export type CredentialBlockDeleteRequest = Pick<CredentialBlockSnapshot, "providerKey" | "blockScope">;
+export type CredentialBlockDeleteRequest = Pick<CredentialBlockSnapshot, "providerKey" | "blockScope" | "by">;
 
 /** POST /v1/credential/:id/block response body. */
 export interface CredentialBlockResponse {
@@ -190,6 +191,9 @@ export const AUTH_BROKER_CAPABILITIES_HEADER = "OMP-Auth-Broker-Capabilities";
 
 /** Client understands independent Codex `chat` and `spark` credential-block scopes. */
 export const AUTH_BROKER_CAPABILITY_CODEX_METER_BLOCK_SCOPES = "codex-meter-block-scopes";
+
+/** Client understands `reason` and `by` on credential-block snapshot entries. Others get them stripped. */
+export const AUTH_BROKER_CAPABILITY_BLOCK_ATTRIBUTION = "block-attribution";
 
 /** Default port when none is configured. Loopback-only, no external exposure. */
 export const DEFAULT_AUTH_BROKER_BIND = "127.0.0.1:8765";

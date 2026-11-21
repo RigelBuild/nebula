@@ -140,6 +140,8 @@ export const credentialBlockSnapshotSchema: FluentType<CredentialBlockSnapshot> 
 	blockScope: "string",
 	blockedUntilMs: "number",
 	"updatedAtMs?": "number",
+	"reason?": type("string").atMostLength(200),
+	"by?": type("string").atMostLength(64),
 });
 
 export const snapshotEntrySchema: FluentType<SnapshotEntry> = type({
@@ -496,12 +498,20 @@ export const disabledCredentialsResponseSchema: FluentType<DisabledCredentialsRe
 
 // ─── Credential blocks ───────────────────────────────────────────────────────
 
-export const credentialBlockRequestSchema: FluentType<CredentialBlockRequest> = credentialBlockSnapshotSchema;
+export const credentialBlockRequestSchema: FluentType<CredentialBlockRequest> = type({
+	"+": "reject",
+	providerKey: type("string").atLeastLength(1),
+	blockScope: "string",
+	blockedUntilMs: "number",
+	"reason?": type("string").atMostLength(200),
+	"by?": type("string").atMostLength(64),
+});
 
 export const credentialBlockDeleteRequestSchema: FluentType<CredentialBlockDeleteRequest> = type({
 	"+": "reject",
 	providerKey: type("string").atLeastLength(1),
 	blockScope: "string",
+	"by?": type("string").atMostLength(64),
 });
 
 export const credentialBlockResponseSchema: FluentType<CredentialBlockResponse> = type({

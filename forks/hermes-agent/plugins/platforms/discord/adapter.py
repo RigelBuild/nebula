@@ -5989,13 +5989,15 @@ class DiscordAdapter(DiscordAuthorizationMixin, DiscordMediaMixin, DiscordThread
         return SendResult(success=False, error=result.error, raw_response={"approval_text_fallback_posted": True})
 
     async def _send_exec_approval_text_fallback(self, prompt: ExecApprovalPrompt) -> None:
-        """Post the plain-text approval prompt in the approval's own thread. Never raises."""
+        """Post the plain-text approval prompt in the approval's own thread. Never raises. The request is withdrawn
+        after approval_card_confirm_timeout, so the prompt states that window, not approvals.timeout."""
         from gateway.run_turn_runner_approval_text import approval_text_prompt
         actions = set(prompt.choices)
+        window = _read_approval_card_confirm_timeout(getattr(self.config, "extra", None))
         text = approval_text_prompt(self, prompt.chat_id, prompt.session_key, prompt.request_id, prompt.command,
                                     prompt.description, getattr(self, "typed_command_prefix", "/"),
                                     allow_permanent="always" in actions, allow_session="session" in actions,
-                                    smart_denied=prompt.smart_denied)
+                                    smart_denied=prompt.smart_denied, deadline_s=math.ceil(window))
         try:
             metadata = {**(prompt.metadata or {}), "is_approval_prompt": True}
             await self.send(prompt.chat_id, text, metadata=metadata)

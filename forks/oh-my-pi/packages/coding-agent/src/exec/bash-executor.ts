@@ -197,6 +197,8 @@ function pollRunTrace(trace: RunTrace, onTrace: (trace: ShellTrace) => void): { 
 			warned = true;
 			return;
 		}
+		// Release the superseded snapshot's link so a snapshot kept in a tool result does not pin the run.
+		if (latest) detachShellTrace(latest);
 		latest = snapshot;
 		attachShellTrace(latest, trace);
 		onTrace(latest);

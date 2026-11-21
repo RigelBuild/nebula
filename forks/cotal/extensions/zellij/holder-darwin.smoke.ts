@@ -243,4 +243,14 @@ await check("darwin spawn refuses before holder start when wave-host is unavaila
   assert.deepEqual(calls, [], "holder start must not run when wave-host is unresolved");
 });
 
+await check("darwin handle declares no work closure and exposes no waitForWorkExit", () => {
+  assert.equal(new HolderRuntime({ platform: "darwin", waveHostCommand: () => waveHost }).supportsWorkClosure, false);
+  const f = fixture();
+  try {
+    assert.equal(f.spawn().waitForWorkExit, undefined);
+  } finally {
+    f.cleanup();
+  }
+});
+
 console.log(`HOLDER DARWIN PACKAGE TESTS: ${checks} tests executed`);

@@ -14,6 +14,9 @@ import { privateLauncher } from "./runtime.js";
 const STOP_GRACE_MS = 30_000;
 const POLL_MS = 1_000;
 const START_TIMEOUT_MS = 15_000;
+/** Cap on `waitForWorkExit`, kept below the manager's RESTART_WORK_EXIT_MS (10 s). The holder's diagnostic, which names the
+ *  observed state, then fires before the manager's generic timeout, so the log shows the cause. */
+const WORK_EXIT_MS = 9_000;
 
 export type HolderReapEvidence =
   | { outcome: "absent" }
@@ -75,20 +78,27 @@ function parseStartOutput(stdout: string): { holderPid: number; agentPid: number
   return { holderPid, agentPid };
 }
 
-const UNIT_SHOW_ARGS = ["--user", "show", "-p", "ActiveState", "-p", "ControlGroup"] as const;
+const UNIT_SHOW_ARGS = ["--user", "show", "-p", "LoadState", "-p", "ActiveState", "-p", "ControlGroup", "-p", "ConsistsOf"] as const;
+const MEMBER_SHOW_ARGS = ["--user", "show", "-p", "LoadState", "-p", "ActiveState", "-p", "ControlGroup"] as const;
 const LIVE_UNIT_STATES: Record<string, true> = { active: true, activating: true, deactivating: true, reloading: true };
 
-/** Parse `systemctl show -p ActiveState -p ControlGroup`. A missing field throws, so a half-read unit never resolves. */
-function parseUnitShow(stdout: string): { ActiveState: string; ControlGroup: string } {
+type UnitShow = { LoadState: string; ActiveState: string; ControlGroup: string; ConsistsOf: string };
+
+/** Parse `systemctl show` output for the fields above. A unit that is not loaded reads as `LoadState=not-found` and
+ *  needs no other field. Any other missing field throws, so a half-read unit never resolves. */
+function parseUnitShow(stdout: string, unit: string): UnitShow {
   const fields = new Map(stdout.split("\n").flatMap((line) => {
     const cut = line.indexOf("=");
     return cut < 0 ? [] : [[line.slice(0, cut), line.slice(cut + 1)] as const];
   }));
+  const LoadState = fields.get("LoadState");
+  if (LoadState === "not-found") return { LoadState, ActiveState: "", ControlGroup: "", ConsistsOf: "" };
   const ActiveState = fields.get("ActiveState");
   const ControlGroup = fields.get("ControlGroup");
-  if (ActiveState === undefined || ActiveState === "" || ControlGroup === undefined)
-    throw new Error(`holder runtime: could not read unit state ${JSON.stringify(stdout)}`);
-  return { ActiveState, ControlGroup };
+  const ConsistsOf = fields.get("ConsistsOf") ?? "";
+  if (LoadState === undefined || ActiveState === undefined || ActiveState === "" || ControlGroup === undefined)
+    throw new Error(`holder runtime: could not read unit state of ${unit} ${JSON.stringify(stdout)}`);
+  return { LoadState, ActiveState, ControlGroup, ConsistsOf };
 }
 
 function parseReference(reference: RuntimeReference): { name: string; holder: ProcessIdentity; agent: ProcessIdentity } | undefined {
@@ -206,7 +216,7 @@ export class HolderRuntime implements Runtime {
         waitForExit: async () => {
           while (status() !== "exited") await this.sleep(POLL_MS);
         },
-        ...(this.platform === "darwin" ? {} : { waitForWorkExit: () => this.waitForUnitWorkExit(name) }),
+        ...(this.platform === "darwin" ? {} : { waitForWorkExit: () => this.waitForUnitWorkExit(name, this.agentRunScope(agentPid)) }),
         attach: () => {
           throw new Error("holder runtime: attach with wave-seat-holder attach");
         },
@@ -254,6 +264,21 @@ export class HolderRuntime implements Runtime {
       reason: holderState === "unknown" || agentState === "unknown" ? "unprovable" : "members-remain",
       detail,
     };
+  }
+
+  /** The agent's own `run-p<panePid>-*.scope` unit, read from its cgroup path. The omp scope is not listed in the seat's
+   *  `ConsistsOf`, so the wait must name it. Undefined when the agent runs in no run-p scope (for example on a host
+   *  without systemd-run) or the cgroup cannot be read; the seat's own members still gate the wait then. */
+  private agentRunScope(agentPid: number): string | undefined {
+    let cgroup: string;
+    try {
+      cgroup = this.fs.readFileSync(`/proc/${agentPid}/cgroup`, "utf8");
+    } catch {
+      return undefined;
+    }
+    const path = cgroup.split("\n").find((line) => line.startsWith("0::"))?.slice(3);
+    const scope = path?.split("/").at(-1);
+    return scope !== undefined && /^run-p\d+-.*\.scope$/u.test(scope) ? path : undefined;
   }
 
   private readProcess(pid: number): ProcessRecord | undefined {
@@ -324,42 +349,80 @@ export class HolderRuntime implements Runtime {
     }
   }
 
-  /** Resolve once the seat unit's work has ended. Rule: the unit is `inactive` or `failed` AND its cgroup holds no
-   *  process. The cgroup is the containment, so a detached survivor keeps the wait open. A live or transitioning
-   *  unit keeps polling; an unknown state, a failed `systemctl`, or an unreadable cgroup rejects. A proven `failed`
-   *  unit is reset so the same name can start again. */
-  private async waitForUnitWorkExit(name: string): Promise<void> {
+  /** Resolve once the seat's work has ended. Proof: the seat unit is `inactive` or `failed`, every unit it lists in
+   *  `ConsistsOf` (its tmux-spawn scopes) is `inactive`, `failed` or absent, and each of those cgroups holds no process
+   *  (`populated 0`). The agent's own run-p scope is waited on too, because the seat does not list it. The seat unit must
+   *  also be unloaded (`LoadState=not-found`), so the restart's `start` is not refused by `unitLoaded`. A failed unit is
+   *  reset until systemd unloads it. A live or transitioning unit keeps polling. An unknown state, a failed `systemctl`,
+   *  or an unreadable cgroup rejects. The wait is capped at WORK_EXIT_MS and then rejects with what it last saw. */
+  private async waitForUnitWorkExit(name: string, agentScope?: string): Promise<void> {
     const unit = `${this.prefix()}${name}`;
+    const deadline = this.now() + WORK_EXIT_MS;
     for (;;) {
-      const state = parseUnitShow(this.exec("systemctl", [...UNIT_SHOW_ARGS, unit], { encoding: "utf8", timeout: START_TIMEOUT_MS }));
-      const terminal = state.ActiveState === "inactive" || state.ActiveState === "failed";
-      if (!terminal) {
-        if (LIVE_UNIT_STATES[state.ActiveState] !== true)
-          throw new Error(`holder runtime: unit ${unit} is in unknown state ${state.ActiveState}`);
-        await this.sleep(POLL_MS);
-        continue;
+      const seat = parseUnitShow(this.exec("systemctl", [...UNIT_SHOW_ARGS, unit], { encoding: "utf8", timeout: START_TIMEOUT_MS }), unit);
+      const agentEnded = agentScope === undefined || this.cgroupEmpty(agentScope);
+      const busy = seat.LoadState === "not-found" ? undefined : this.busyUnit(seat, unit);
+      if (busy === undefined && agentEnded) {
+        if (seat.LoadState === "not-found") return;
+        if (seat.ActiveState === "failed") this.resetFailed(unit);
       }
-      if (!this.cgroupEmpty(state.ControlGroup)) {
-        await this.sleep(POLL_MS);
-        continue;
+      if (this.now() >= deadline) {
+        const observed = busy ?? (agentEnded ? `ActiveState=${seat.ActiveState}, still loaded` : `agent scope ${agentScope} populated`);
+        throw new Error(`holder runtime: unit ${unit} not proved ended within ${WORK_EXIT_MS}ms (${observed})`);
       }
-      if (state.ActiveState === "failed") this.exec("systemctl", ["--user", "reset-failed", unit], { encoding: "utf8" });
-      return;
+      await this.sleep(Math.min(POLL_MS, deadline - this.now()));
     }
   }
 
-  /** True when the cgroup holds no process. A missing cgroup is empty; any other read error throws, so the caller
-   *  never resolves on it. */
+  /** The first member of the seat that still runs work, or undefined when every member has ended. A seat that is not
+   *  inactive or failed is busy. An unknown active state rejects. */
+  private busyUnit(seat: UnitShow, unit: string): string | undefined {
+    if (seat.ActiveState !== "inactive" && seat.ActiveState !== "failed") {
+      if (LIVE_UNIT_STATES[seat.ActiveState] !== true)
+        throw new Error(`holder runtime: unit ${unit} is in unknown state ${seat.ActiveState}`);
+      return `ActiveState=${seat.ActiveState}`;
+    }
+    if (!this.cgroupEmpty(seat.ControlGroup)) return `${unit} cgroup populated`;
+    for (const member of seat.ConsistsOf.split(/\s+/u).filter((u) => u !== "")) {
+      if (!this.memberEnded(member)) return `${member} populated`;
+    }
+    return undefined;
+  }
+
+  /** True when a listed member has ended: its state is inactive, failed or absent, and its cgroup holds no process. */
+  private memberEnded(member: string): boolean {
+    const state = parseUnitShow(this.exec("systemctl", [...MEMBER_SHOW_ARGS, member], { encoding: "utf8", timeout: START_TIMEOUT_MS }), member);
+    if (state.LoadState === "not-found") return true;
+    if (state.ActiveState !== "inactive" && state.ActiveState !== "failed") return false;
+    return this.cgroupEmpty(state.ControlGroup);
+  }
+
+  /** Reset a proven `failed` unit. systemd garbage-collects a `--collect` unit at once, so a reset that finds the unit
+   *  already `not loaded` has done its job. Any other failure still rejects. */
+  private resetFailed(unit: string): void {
+    try {
+      this.exec("systemctl", ["--user", "reset-failed", unit], { encoding: "utf8" });
+    } catch (error) {
+      if (error instanceof Error && /not loaded/u.test(error.message)) return;
+      throw error;
+    }
+  }
+
+  /** True when the cgroup holds no process, read from `cgroup.events` so child cgroups count. A missing cgroup is
+   *  empty; any other read error, or a file without a `populated` field, throws so the caller never resolves on it. */
   private cgroupEmpty(controlGroup: string): boolean {
     if (controlGroup === "") return true;
-    let procs: string;
+    const path = `/sys/fs/cgroup${controlGroup}/cgroup.events`;
+    let events: string;
     try {
-      procs = this.fs.readFileSync(`/sys/fs/cgroup${controlGroup}/cgroup.procs`, "utf8");
+      events = this.fs.readFileSync(path, "utf8");
     } catch (error) {
       if (isMissingProcess(error)) return true;
       throw error;
     }
-    return procs.trim() === "";
+    const populated = /^populated (\d+)$/mu.exec(events)?.[1];
+    if (populated === undefined) throw new Error(`holder runtime: no populated field in ${path}`);
+    return populated === "0";
   }
 
   /** The graceful, platform-correct stop of a seat's job. Darwin removes its launchd job; Linux stops the unit. */

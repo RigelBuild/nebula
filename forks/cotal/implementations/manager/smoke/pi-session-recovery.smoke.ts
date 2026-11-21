@@ -305,6 +305,32 @@ for (const mode of ["absent", "rejected", "pending", "retired", "timeout"] as co
   }
 }
 
+// A work-exit proof refused once is retried once after a short delay; a proof on the retry permits the replacement.
+{
+  const handle = makeHandle("closure-retry", { command: "true", args: [], env: {} });
+  let proofs = 0;
+  handle.waitForWorkExit = async () => {
+    proofs++;
+    if (proofs === 1) throw new Error("seat still unloading");
+  };
+  const row = {
+    ...managed, name: handle.name, id: "closure_retry", handle, terminalizing: false,
+    restart: { ...managed.restart, crashes: [], recovering: false, armed: true },
+  };
+  writeFileSync(statePath, JSON.stringify({ version: 1, sessionId, status: "running" }) + "\n");
+  agents.set(row.name, row);
+  handle.crash();
+  const before = spawnedOpts.length;
+  (manager as unknown as { onAgentExit(agent: typeof row): void }).onAgentExit(row);
+  await waitFor(() => spawnedOpts.length === before + 1 && !row.restart.recovering, "retried work-exit proof restart", 12_000);
+  check(proofs === 2, `the work-exit proof must be retried exactly once, was tried ${proofs} times`);
+  check(agents.get(row.name) === row, "a proof on the retry keeps the seat under its existing lifecycle");
+  row.terminalizing = true;
+  row.handle.stop();
+  agents.delete(row.name);
+}
+
+
 // A successor cannot turn a missing reference or ordinary process reap into work closure.
 const recover = manager as unknown as {
   restartSupervisedSeat(row: { alias: string; runtime?: { kind: string; id: string } }, record: { supervise: { restarts: number; windowMs: number }; crashes: number[] }): Promise<string | undefined>;

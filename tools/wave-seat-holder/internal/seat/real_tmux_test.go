@@ -87,7 +87,16 @@ func TestRealTmuxDeadLauncherStopsTheRealServerOnTheSeatSocket(t *testing.T) {
 	if tmux == "" {
 		t.Skip("tmux is not on PATH and WAVE_SEAT_TEST_TMUX is unset")
 	}
-	dir := t.TempDir()
+	// t.TempDir embeds the test name, which pushes the socket path past the 107-byte limit on linux.
+	dir, err := os.MkdirTemp("", "wsh")
+	if err != nil {
+		t.Fatalf("create short socket dir: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := os.RemoveAll(dir); err != nil {
+			t.Errorf("remove socket dir: %v", err)
+		}
+	})
 	socketPath := filepath.Join(dir, "seat.sock")
 	systemd := &realSystemd{tmux: tmux}
 	t.Cleanup(func() {

@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -397,7 +398,7 @@ func waitForRemoteChildExec(t *testing.T, pid int, executable string) {
 	ticker := time.NewTicker(5 * time.Millisecond)
 	defer ticker.Stop()
 	for {
-		childExecutable, err := os.Readlink(filepath.Join("/proc", strconv.Itoa(pid), "exe"))
+		childExecutable, err := executableOf(pid)
 		if err == nil && childExecutable == resolvedExecutable {
 			return
 		}
@@ -407,6 +408,19 @@ func waitForRemoteChildExec(t *testing.T, pid int, executable string) {
 			t.Fatalf("remote child PID %d did not exec %q", pid, resolvedExecutable)
 		}
 	}
+}
+
+// executableOf returns the executable path of pid. Linux reads /proc/<pid>/exe. Other platforms
+// have no /proc, so the path comes from ps.
+func executableOf(pid int) (string, error) {
+	if runtime.GOOS == "linux" {
+		return os.Readlink(filepath.Join("/proc", strconv.Itoa(pid), "exe"))
+	}
+	out, err := exec.Command("ps", "-o", "comm=", "-p", strconv.Itoa(pid)).Output()
+	if err != nil {
+		return "", fmt.Errorf("ps for pid %d: %w", pid, err)
+	}
+	return strings.TrimSpace(string(out)), nil
 }
 
 func (p *remoteChildTestProcess) waitForShutdown(t *testing.T, wantExitCode int, timeout time.Duration) {

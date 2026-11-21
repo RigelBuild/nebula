@@ -1,0 +1,44 @@
+version: "2"
+
+linters:
+  default: all
+  disable:
+    # File modes and sizes are literal octal values in the install code.
+    - mnd
+    # The Go standard library's short local names and blank-line style are retained.
+    - varnamelen
+    - wsl
+    - wsl_v5
+    # The phase and link code is easier to review as direct sequences.
+    - cyclop
+    - gocognit
+    - gocyclo
+    - maintidx
+    # Long tests and repeated fixture snippets are kept for readability.
+    - funlen
+    - dupl
+    - goconst
+    # envstore.New returns the Store interface on every platform.
+    - ireturn
+    - depguard
+    # Use the v2 replacement for the deprecated legacy linter.
+    - gomodguard
+    - nlreturn
+    - exhaustruct
+  enable:
+    - gomodguard_v2
+  exclusions:
+    rules:
+      - path: '_test\.go'
+        linters:
+          - gochecknoglobals
+          - paralleltest
+          - testpackage
+          - funlen
+          - goconst
+          - dupl
+          - gosec
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

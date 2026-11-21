@@ -127,6 +127,22 @@ describe("renderUsageMetrics", () => {
 		expect(out).toContain('email="c@example.com"');
 	});
 
+	test("splits Claude banked resets by scope and emits zero for empty scopes", () => {
+		const base = 'provider="anthropic",account="acct-claude-1",org="",email="a@example.com"';
+		const withCredits = renderUsageMetrics([
+			{ ...claudeReport(), resetCredits: { availableCount: 3, availableByScope: { full: 1, fable: 2 } } },
+		]);
+		expect(withCredits).toContain(`llm_usage_reset_credits_available{${base}} 3`);
+		expect(withCredits).toContain(`llm_usage_reset_credits_available{${base},scope="full"} 1`);
+		expect(withCredits).toContain(`llm_usage_reset_credits_available{${base},scope="fable"} 2`);
+
+		const empty = renderUsageMetrics([
+			{ ...claudeReport(), resetCredits: { availableCount: 0, availableByScope: { full: 0, fable: 0 } } },
+		]);
+		expect(empty).toContain(`llm_usage_reset_credits_available{${base},scope="full"} 0`);
+		expect(empty).toContain(`llm_usage_reset_credits_available{${base},scope="fable"} 0`);
+	});
+
 	test('absent status maps to -1, and a windowless limit emits window=""', () => {
 		const out = renderUsageMetrics([codexReport()]);
 		expect(out).toContain(

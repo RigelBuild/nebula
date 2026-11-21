@@ -19,6 +19,8 @@ const CEDAR_GRANT_ID = /^[a-z0-9_-]{1,40}$/;
 const REDEEM_REQUEST_ID = /^[A-Za-z0-9_-]{1,64}$/;
 const ORGANIZATION_ID = /^[A-Za-z0-9_-]{1,128}$/;
 const WINDOW_ID = /^[a-z0-9_-]{1,80}$/;
+const FABLE_LIMIT_ID = "anthropic:7d:fable";
+const WEEKLY_LIMIT_ID = "anthropic:7d";
 
 const CLAUDE_RESET_WINDOW_IDS: Readonly<Record<string, string>> = {
 	five_hour: "anthropic:5h",
@@ -335,6 +337,7 @@ function normalizeCedarList(status: CedarStatus, orgId?: string, baseUrl?: strin
 	const now = Date.now();
 	const cooldownActive = status.cooldownUntil !== undefined && Date.parse(status.cooldownUntil) > now;
 	let availableCount = 0;
+	const availableByScope = { full: 0, fable: 0 };
 	let selectedCredit: UsageResetCredit | undefined;
 	const credits = status.grants.map<UsageResetCredit>(grant => {
 		const expired = grant.expiresAt !== undefined && Date.parse(grant.expiresAt) <= now;
@@ -356,7 +359,13 @@ function normalizeCedarList(status: CedarStatus, orgId?: string, baseUrl?: strin
 					: usable
 						? "available"
 						: "unavailable";
-		if (!expired && grant.remainingCount > 0) availableCount += grant.remainingCount;
+		if (!expired && grant.remainingCount > 0) {
+			availableCount += grant.remainingCount;
+			// A Fable launch grant clears the Fable weekly cap but not the shared weekly window.
+			const fableOnly = grant.clears.includes(FABLE_LIMIT_ID) && !grant.clears.includes(WEEKLY_LIMIT_ID);
+			if (fableOnly) availableByScope.fable += grant.remainingCount;
+			else availableByScope.full += grant.remainingCount;
+		}
 		const credit: UsageResetCredit = {
 			id: grant.id,
 			title: grant.label || "Claude limit reset",
@@ -376,6 +385,7 @@ function normalizeCedarList(status: CedarStatus, orgId?: string, baseUrl?: strin
 	});
 	return {
 		availableCount,
+		availableByScope,
 		redeemableCount: selectedCredit?.usable ? (selectedCredit.remainingCount ?? 0) : 0,
 		...(status.nextGrantId && status.eligible ? { nextCreditId: status.nextGrantId } : {}),
 		eligible: status.eligible,

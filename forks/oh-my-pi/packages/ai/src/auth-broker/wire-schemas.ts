@@ -259,6 +259,7 @@ const usageLimitSchema = type({
 
 const usageResetCreditsSchema = type({
 	availableCount: "number",
+	"availableByScope?": { full: "number", fable: "number" },
 	"redeemableCount?": "number",
 	"nextCreditId?": "string",
 	"eligible?": "boolean",

@@ -89,6 +89,7 @@ describe("usage report notes wire schema", () => {
 				availableCount: 2,
 				redeemableCount: 2,
 				nextCreditId: "grant_1",
+				availableByScope: { full: 1, fable: 2 },
 				eligible: true,
 				cooldownUntil: "2099-09-28T00:00:00.000Z",
 				credits: [

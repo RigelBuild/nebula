@@ -86,6 +86,7 @@ describe("listClaudeResetCredits", () => {
 			availableCount: 2,
 			redeemableCount: 2,
 			nextCreditId: "grant_1",
+			availableByScope: { full: 2, fable: 0 },
 			eligible: true,
 			credits: [
 				{
@@ -114,6 +115,26 @@ describe("listClaudeResetCredits", () => {
 		const { fetch } = recordingFetch(() => json(200, payload));
 		const result = await listClaudeResetCredits({ accessToken: "token", orgId: "org_1", fetch });
 		expect(result?.credits[0]?.clears).toEqual(["anthropic:5h", "anthropic:7d:fable"]);
+	});
+
+	it("counts banked resets by full and Fable scope", async () => {
+		const payload = cedarPayload();
+		payload.cedar_ember.grants = [
+			{ ...payload.cedar_ember.grants[0], id: "grant_full", resets_left: 1, clears: ["five_hour", "seven_day"] },
+			{
+				...payload.cedar_ember.grants[0],
+				id: "grant_fable",
+				resets_left: 2,
+				clears: ["five_hour", "seven_day_overage_included"],
+			},
+		];
+		payload.cedar_ember.next_grant_id = "grant_fable";
+		const { fetch } = recordingFetch(() => json(200, payload));
+		const result = await listClaudeResetCredits({ accessToken: "token", orgId: "org_1", fetch });
+		expect(result).toMatchObject({
+			availableCount: 3,
+			availableByScope: { full: 1, fable: 2 },
+		});
 	});
 
 	it("parses discovery quota evidence with the same normalized model windows as ordinary usage", async () => {

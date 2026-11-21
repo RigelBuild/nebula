@@ -121,6 +121,9 @@ func TestRealTmuxDeadLauncherStopsTheRealServerOnTheSeatSocket(t *testing.T) {
 		Sleep: sleepContext,
 		Files: Files{
 			Mkdir:     os.MkdirAll,
+			Lstat:     os.Lstat,
+			Chmod:     os.Chmod,
+			Getuid:    os.Getuid,
 			WriteFile: writePrivateFile,
 			Readdir:   readDirNames,
 			ReadText:  readFileText,

@@ -161,6 +161,9 @@ func fakeFiles(fake *fakeHolder, options fakeOptions, live map[string]bool, chil
 			fake.writes = append(fake.writes, recordedWrite{path: path, data: append([]byte(nil), data...), perm: perm})
 			return nil
 		},
+		Lstat:  func(string) (fs.FileInfo, error) { return ownedSeatDirInfo(), nil },
+		Chmod:  func(string, fs.FileMode) error { return nil },
+		Getuid: func() int { return fakeUID },
 		Readdir: func(string) ([]string, error) {
 			if options.socketNames == nil {
 				return nil, fs.ErrNotExist

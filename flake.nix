@@ -24,12 +24,18 @@
       goCommands = {
         code-shape-gate = "sha256-Ee6lA9fZjXfNx2tkoScY+Su5JULWUpK4DshrXO3fmkU=";
         design-ledger-gate = "sha256-euBbY7ewPBNIwVPjPkAX9DVbH6XaJ81n+5aMJfBzPW8=";
+        dev-hygiene = null;
+        depsupdate-wake = null;
         dl-claim = "sha256-3EcIygo4CNKJmMCIWrIL/bFMqBUznQCV9HI6h1EyeGU=";
         dl-list = "sha256-+YGOcD3K7shRymY29qRJa49GfFkOc8wsdeMdmpvv44A=";
         dl-reconcile = "sha256-M9sG3Wt4un2pQ17tcrLI+K/u1K8JjXy2DXyGrGU8emk=";
         fork-sync = "sha256-3CiEdm8Db78vQ8JG1KOBt5w55pmxuTs04in8RUhzwoM=";
+        gh-route = "sha256-7K17JaXFsjf163g5PXCb5ng2gYdotnZ2IDKk8KFjNj0=";
         length-gate = "sha256-m4lHVyrsYIrQpPFIblIZcMc5rPmJJJsHt6RS8QAoXCk=";
+        linear-acceptance = null;
         ref-gate = "sha256-WVoZkg5kdUYlATXDDxAA/yozThBwyYSKHwLoUsuIBfg=";
+        reddit-fetch = null;
+        ssh-orphan-reap = null;
       };
 
       # Does a command's go.mod replace the shared go-lib module? The replace
@@ -82,6 +88,8 @@
             (requireVersion pkgs.golangci-lint "2.15.0")
             (requireVersion pkgs.biome "2.6.5")
           ];
+        # dev-hygiene's workspace tests create real jj repositories as fixtures.
+        dev-hygiene = pkgs: [ pkgs.jujutsu ];
       };
 
       buildCommand = pkgs: name: vendorHash:

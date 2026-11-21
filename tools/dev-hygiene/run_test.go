@@ -174,7 +174,13 @@ func idleFakeWorkspace(t *testing.T, snapshot string) (root, dir, argsFile strin
 	}
 	dir = filepath.Join(root, "ws")
 	mustMkdir(t, filepath.Join(dir, jjDir, "working_copy"))
-	mustWrite(t, filepath.Join(dir, jjDir, "repo"), "/nowhere/.jj/repo\n")
+	// A real store: the orphan check must pass, so the fake jj below is still reached.
+	store, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustMkdir(t, filepath.Join(store, jjDir, "repo"))
+	mustWrite(t, filepath.Join(dir, jjDir, "repo"), filepath.Join(store, jjDir, "repo")+"\n")
 	mustWrite(t, filepath.Join(dir, "README.md"), "x\n")
 	backdate(t, dir, time.Now().Add(-100*time.Hour))
 	argsFile = filepath.Join(t.TempDir(), "jj-args")
@@ -202,7 +208,7 @@ func TestSnapshotErrorSkipsWorkspace(t *testing.T) {
 	if !strings.Contains(stdout.String(), dir+": skipped: check working copy") {
 		t.Fatalf("stale workspace not reported skipped: %q", stdout.String())
 	}
-	if !strings.Contains(stdout.String(), "1 skipped") {
+	if !strings.Contains(stdout.String(), "skip jj inspect failed: 1 workspace(s), ") {
 		t.Fatalf("skipped workspace not counted: %q", stdout.String())
 	}
 	if _, err := os.Stat(filepath.Join(dir, "README.md")); err != nil {

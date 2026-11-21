@@ -37,9 +37,11 @@ async function terminal(element: React.ReactElement) {
   stdin.ref = () => stdin;
   stdin.unref = () => stdin;
   let frame = "";
+  let pending: { marker: string; value: string } | undefined; // sent inside the paint write showing the marker
   const stdout = new Writable({ write(bytes, _encoding, done) {
     const text = String(bytes).replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, "");
     if (text.trim()) frame = text;
+    if (pending && text.includes(pending.marker)) { stdin.write(pending.value); pending = undefined; }
     done();
   } }) as unknown as NodeJS.WriteStream;
   stdout.columns = 120; stdout.rows = 36; stdout.isTTY = true;
@@ -50,6 +52,7 @@ async function terminal(element: React.ReactElement) {
   });
   return {
     key: async (value: string) => { await act(async () => { stdin.write(value); }); await pause(); },
+    pressOn: (marker: string, value: string) => { pending = { marker, value }; },
     screen: (marker: string) => until(() => frame.includes(marker), `Expected ${marker}; saw: ${frame}`),
     rerender: async (next: React.ReactElement) => {
       frame = "";
@@ -206,6 +209,13 @@ try {
     await term.key("\r"); assert.equal(selected, "alpha", "Picker refills with its first space selected");
     await term.key("j"); await term.key("\r"); assert.equal(selected, "beta");
     await term.key("\x1b[A"); await term.key("\r"); assert.equal(selected, "alpha");
+    // The key lands in the paint write that first shows the row, before Ink rebinds the handler.
+    for (const space of ["alpha", "beta", "gamma"]) await jsm.streams.delete(`CHAT_${space}`);
+    await term.key("r"); await term.screen("no spaces found");
+    for (const space of ["alpha", "beta", "gamma"]) await jsm.streams.add({ name: `CHAT_${space}`, subjects: [`cursor.${space}`] });
+    term.pressOn("▸ alpha", "j");
+    await term.key("r"); await term.screen("▸ beta");
+    await term.key("\r"); assert.equal(selected, "beta", "Key pressed right after refill moves the cursor");
     console.log("PASS space picker native listSpaces refresh after empty-list navigation");
   } finally { await term.close(); }
 } finally {

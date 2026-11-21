@@ -108,3 +108,47 @@ def test_a_pruned_live_request_stays_refused_after_the_second_horizon(tmp_path):
         assert db.get_meta(identity_key('api', 'live', 'r1')) is not None, 'the identity pointer was reclaimed'
         with pytest.raises(rt.RuntimeStoreError, match='not_found'):
             rt.admit_session_input(db, epoch=epoch, **first)
+
+
+def test_rows_age_by_the_compression_tip_not_the_lineage_root(tmp_path):
+    """A compressed conversation's rows age by its tip (the continuation the user resumes), not its root.
+    An idle tip prunes its root's rows; an active tip keeps them."""
+    with SessionDB(tmp_path / 'state.db') as db:
+        epoch = rt.begin_runtime_epoch(db, instance_id='owner')
+        db.create_session('idle_root', source='api_server')
+        _settle(db, epoch, 'idle_root', 'i1', 'i1')
+        _settle(db, epoch, 'idle_root', 'i2', 'i2')
+        db.create_session('idle_tip', source='api_server', parent_session_id='idle_root')
+        db.create_session('busy_root', source='api_server')
+        _settle(db, epoch, 'busy_root', 'b1', 'b1')
+        _settle(db, epoch, 'busy_root', 'b2', 'b2')
+        db.create_session('busy_tip', source='api_server', parent_session_id='busy_root')
+        db._execute_write(lambda conn: conn.execute(
+            "UPDATE sessions SET end_reason='compression' WHERE id IN ('idle_root', 'busy_root')"))
+        _age(db, 'idle_root')
+        _age(db, 'idle_tip')
+        _age(db, 'busy_root')
+
+        db.prune_sessions(older_than_days=90)
+
+        assert rt.find_session_admission(db, principal_id='api', session_id='idle_root', request_id='i1') is None, \
+            'idle tip: its root row should be pruned'
+        assert rt.find_session_admission(db, principal_id='api', session_id='busy_root', request_id='b1') is not None, \
+            'active tip: its root row must stay'
+
+
+def test_one_pass_prunes_at_most_the_batch_limit(tmp_path, monkeypatch):
+    """The prune is bounded: one pass removes at most the batch limit of aged rows; the rest wait."""
+    import hermes_state_mutation_retirement as retirement
+    monkeypatch.setattr(retirement, 'PRUNE_BATCH_LIMIT', 1)
+    with SessionDB(tmp_path / 'state.db') as db:
+        epoch = rt.begin_runtime_epoch(db, instance_id='owner')
+        db.create_session('batch', source='api_server')
+        for k in ('k1', 'k2', 'k3', 'k4'):
+            _settle(db, epoch, 'batch', k, k)
+        _age(db, 'batch')
+
+        db.prune_sessions(older_than_days=90)
+
+        left = len(rt.list_session_admissions(db, session_id='batch', pending_only=False))
+        assert left == 3, f'expected 3 rows left after a limit-1 pass, got {left}'

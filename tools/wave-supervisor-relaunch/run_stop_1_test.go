@@ -40,7 +40,9 @@ relaunchIssue: %q
 knownCause: %q
 causeOwner: %q
 seatCLI: %q
-`, cfg.RootSeat, cfg.CotalSpace, cfg.EndpointKind, cfg.ZellijSession, cfg.ZellijUnit, cfg.CotalManagerUnit, cfg.RelaunchUnit, cfg.WaveSlice, cfg.SeatsPath, cfg.StateDir, cfg.HomeDir, cfg.SessionsDir, cfg.Hosts[0], cfg.ManagerLogPath, cfg.JournalUnits[0], cfg.JournalUnits[1], cfg.JournalUnits[2], cfg.RelaunchIssue, cfg.KnownCause, cfg.CauseOwner, cfg.SeatCLI)
+spawnCommand: %q
+seatHolderCLI: %q
+`, cfg.RootSeat, cfg.CotalSpace, cfg.EndpointKind, cfg.ZellijSession, cfg.ZellijUnit, cfg.CotalManagerUnit, cfg.RelaunchUnit, cfg.WaveSlice, cfg.SeatsPath, cfg.StateDir, cfg.HomeDir, cfg.SessionsDir, cfg.Hosts[0], cfg.ManagerLogPath, cfg.JournalUnits[0], cfg.JournalUnits[1], cfg.JournalUnits[2], cfg.RelaunchIssue, cfg.KnownCause, cfg.CauseOwner, cfg.SeatCLI, cfg.SpawnCommand, cfg.SeatHolderCLI)
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}

@@ -16,6 +16,7 @@ type sequence struct {
 	sleep    func(context.Context, time.Duration) error
 	deadline time.Duration
 	poll     time.Duration
+	seatCLI  string
 }
 
 // relaunch stops an idle seat, waits until it is absent, then restarts it through
@@ -37,10 +38,10 @@ func (s sequence) relaunch(ctx context.Context, name string) (string, error) {
 	}
 	code, err := s.restart(ctx, name)
 	if err != nil {
-		return "", fmt.Errorf("wave-seats restart: %w", err)
+		return "", fmt.Errorf("%s restart: %w", s.seatCLI, err)
 	}
 	if code != 0 {
-		return "", fmt.Errorf("wave-seats restart exited %d", code)
+		return "", fmt.Errorf("%s restart exited %d", s.seatCLI, code)
 	}
 	return outcomeRelaunched, nil
 }

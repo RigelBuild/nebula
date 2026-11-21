@@ -64,6 +64,8 @@ var fixtureConfigText = strings.Join([]string{
 	`knownCause: "zellij server out of memory"`,
 	`causeOwner: "owner-fixture"`,
 	`seatCLI: "wave-seats"`,
+	`spawnCommand: "spawn-agent"`,
+	`seatHolderCLI: "wave-seat-holder"`,
 	``,
 }, "\n")
 

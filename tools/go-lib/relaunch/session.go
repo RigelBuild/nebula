@@ -430,11 +430,6 @@ func ReconcileSessions(before map[string]struct{}, after []string, eligibleNames
 	return reconciled
 }
 
-// DevboxLive reports whether list-sessions shows a live devbox session.
-func DevboxLive(listSessionsText string) bool {
-	return SessionLive(listSessionsText, "devbox")
-}
-
 // SessionLive reports whether list-sessions shows a live session named name. An EXITED line is
 // not live, and a line naming a longer session (a prefix sibling) does not match.
 func SessionLive(listSessionsText, name string) bool {

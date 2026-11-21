@@ -39,6 +39,8 @@ type Config struct {
 	KnownCause       string   `json:"knownCause"`
 	CauseOwner       string   `json:"causeOwner"`
 	SeatCLI          string   `json:"seatCLI"`
+	SpawnCommand     string   `json:"spawnCommand"`
+	SeatHolderCLI    string   `json:"seatHolderCLI"`
 }
 
 // loadConfig reads the --config file and checks it against #Config. Unknown fields and missing

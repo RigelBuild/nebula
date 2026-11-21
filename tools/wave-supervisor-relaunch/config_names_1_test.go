@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -40,6 +41,30 @@ func TestConfiguredManagerUnitKeysTheFingerprint(t *testing.T) {
 	}
 }
 
+func TestConfiguredManagerUnitUnchangedIsNotDetected(t *testing.T) {
+	deps := runDeps{Config: renamedConfig()}
+	before := renamedTrigger("inv-1")
+	deps.Trigger = func(context.Context) (Trigger, error) { return renamedTrigger("inv-1"), nil }
+	changed, err := managerChanged(context.Background(), deps, before)
+	if err != nil || changed {
+		t.Fatalf("managerChanged() = %t, %v; want false when the configured unit's invocation is unchanged", changed, err)
+	}
+}
+
+func TestConfiguredManagerUnitDeactivatingSkipsAsStopping(t *testing.T) {
+	h := newRunHarness()
+	h.deps.Config.CotalManagerUnit = "ops-manager.service"
+	h.deps.Trigger = func(context.Context) (Trigger, error) {
+		return Trigger{BootID: "boot", ManagerUnit: "ops-manager.service", Units: []UnitFact{{Unit: "ops-manager.service", InvocationID: "manager", ActiveState: "deactivating"}}}, nil
+	}
+	if got := runSupervisor(t.Context(), h.deps); got.Reason != "manager-stopping" {
+		t.Fatalf("run=%#v, want manager-stopping for the configured unit", got)
+	}
+	if h.hasCall("ps") || h.hasCall("endpoints") || h.countPrefix("spawn:") != 0 {
+		t.Fatalf("manager-stop run classified or spawned: %v", h.calls)
+	}
+}
+
 func TestConfiguredManagerUnitChangeIsDetected(t *testing.T) {
 	deps := runDeps{Config: renamedConfig()}
 	before := renamedTrigger("inv-1")
@@ -66,5 +91,39 @@ func TestConfiguredSeatCLIRunsTheRestart(t *testing.T) {
 	want := []string{"seatctl", "restart", "alpha"}
 	if strings.Join(argv, " ") != strings.Join(want, " ") {
 		t.Fatalf("Restart() ran %q, want %q: the seat CLI must come from config", argv, want)
+	}
+}
+
+// TestLiveZellijSessionTable pins the configured session check. The viewer must be live under its
+// own name; a live devbox, an EXITED viewer, a failed list, or a non-zero exit all read as not live.
+func TestLiveZellijSessionTable(t *testing.T) {
+	cases := []struct {
+		name   string
+		result cotalreach.CommandResult
+		err    error
+		want   string
+	}{
+		{name: "viewer live", result: cotalreach.CommandResult{Stdout: "viewer [Created 1h ago]\n"}, want: "viewer"},
+		{name: "only devbox listed", result: cotalreach.CommandResult{Stdout: "devbox [Created 1h ago]\n"}, want: ""},
+		{name: "viewer exited", result: cotalreach.CommandResult{Stdout: "viewer [EXITED - attach to resurrect]\n"}, want: ""},
+		{name: "non-zero exit", result: cotalreach.CommandResult{Stdout: "viewer [Created 1h ago]\n", ExitCode: 1}, want: ""},
+		{name: "runner error", err: errors.New("no zellij"), want: ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			runner := func(context.Context, []string, string) (cotalreach.CommandResult, error) {
+				return tc.result, tc.err
+			}
+			got, err := liveZellijSession(context.Background(), runner, "viewer")
+			if tc.err != nil {
+				if err == nil {
+					t.Fatalf("liveZellijSession() error = nil, want the runner error")
+				}
+				return
+			}
+			if err != nil || got != tc.want {
+				t.Fatalf("liveZellijSession() = %q, %v; want %q", got, err, tc.want)
+			}
+		})
 	}
 }

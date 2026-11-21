@@ -39,6 +39,7 @@ type Deps struct {
 	Now         func() time.Time
 	Sleep       func(context.Context, time.Duration) error
 	Log         func(string)
+	SeatCLI     string
 }
 
 // Run relaunches at most one idle non-root seat over the threshold. It logs every outcome and
@@ -83,6 +84,7 @@ func (deps Deps) sequence() sequence {
 		sleep:    deps.Sleep,
 		deadline: stopBound,
 		poll:     waitPoll,
+		seatCLI:  deps.SeatCLI,
 	}
 }
 

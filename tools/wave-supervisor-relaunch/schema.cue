@@ -39,4 +39,8 @@
 	causeOwner: string & !=""
 	// Seat CLI command the relaunch prompt tells the root to run, e.g. "wave-seats".
 	seatCLI: string & !=""
+	// Command that spawns a fresh agent session, e.g. "spawn-agent".
+	spawnCommand: string & !=""
+	// Seat holder CLI whose list command reports the live holders, e.g. "wave-seat-holder".
+	seatHolderCLI: string & !=""
 }

@@ -151,8 +151,6 @@ func TestCoreSessionHelpersAndPresentation(t *testing.T) {
 
 	t.Run("picks by mtime, not filename, and skips burned session IDs", testCoreSessionHelpersAndPresentationCase2)
 
-	t.Run("recognizes only a live devbox zellij session", testCoreSessionHelpersAndPresentationCase3)
-
 	t.Run("relaunchPrompt never asks the supervisor to spawn a lane", testCoreSessionHelpersAndPresentationCase4)
 
 	t.Run("live notices describe a down or unreadable devbox server in words", testCoreSessionHelpersAndPresentationCase5)
@@ -377,17 +375,6 @@ func testCoreSessionHelpersAndPresentationCase2(t *testing.T) {
 	pick, err := relaunch.NewestSession("/sessions", "foreman", "/home/mattw/agents/workspaces/foreman", map[string]struct{}{"newer": {}}, relaunch.SessionDeps{FileSystem: fsys})
 	if err != nil || pick == nil || pick.ID != "older" {
 		t.Fatalf("NewestSession() = %#v, %v", pick, err)
-	}
-}
-
-func testCoreSessionHelpersAndPresentationCase3(t *testing.T) {
-	for _, tc := range []struct {
-		text string
-		want bool
-	}{{"devbox [Created 1h ago]\nother", true}, {"devbox [EXITED]\nother", false}, {"devbox-old [Created]", false}} {
-		if got := relaunch.DevboxLive(tc.text); got != tc.want {
-			t.Errorf("DevboxLive(%q) = %t, want %t", tc.text, got, tc.want)
-		}
 	}
 }
 

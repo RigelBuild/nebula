@@ -37,6 +37,8 @@ func testConfig() Config {
 		KnownCause:       "zellij server out of memory",
 		CauseOwner:       "harness",
 		SeatCLI:          "wave-seats",
+		SpawnCommand:     "spawn-agent",
+		SeatHolderCLI:    "wave-seat-holder",
 	}
 }
 

@@ -247,12 +247,6 @@ func TestRecognizesOnlyALiveNamedZellijSession(t *testing.T) {
 	}
 }
 
-func TestDevboxLiveDelegatesToTheDevboxSession(t *testing.T) {
-	if !DevboxLive("devbox [Created 1h ago]\nother") || DevboxLive("devbox [EXITED]\nother") || DevboxLive("devbox-old [Created]") {
-		t.Fatal("DevboxLive must match only a live devbox session")
-	}
-}
-
 func TestClassifiesFailedCallsIncompleteSweepsRetryStatesAndReadyRetryWait(t *testing.T) {
 	cases := []struct {
 		name   string

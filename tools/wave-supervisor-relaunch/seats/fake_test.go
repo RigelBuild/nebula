@@ -171,9 +171,10 @@ func (w *world) deps() Deps {
 			w.calls = append(w.calls, "wave-seats restart "+name)
 			return w.restartRC, nil
 		},
-		Now:   func() time.Time { return w.clock },
-		Sleep: func(_ context.Context, d time.Duration) error { w.clock = w.clock.Add(d); return nil },
-		Log:   func(line string) { w.logs = append(w.logs, line) },
+		Now:     func() time.Time { return w.clock },
+		Sleep:   func(_ context.Context, d time.Duration) error { w.clock = w.clock.Add(d); return nil },
+		Log:     func(line string) { w.logs = append(w.logs, line) },
+		SeatCLI: "wave-seats",
 	}
 }
 

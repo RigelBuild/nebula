@@ -256,6 +256,19 @@ func TestStepRestartFailureIsLogged(t *testing.T) {
 	}
 }
 
+// TestStepRestartErrorNamesConfiguredSeatCLI pins the failure text to the configured seat CLI, not
+// the literal wave-seats. A different name must appear in the log.
+func TestStepRestartErrorNamesConfiguredSeatCLI(t *testing.T) {
+	w := newWorld(foreman(1), idleSeat("accounts", 10))
+	w.restartRC = 1
+	deps := w.deps()
+	deps.SeatCLI = "seatctl"
+	Run(t.Context(), deps)
+	if len(w.logs) != 1 || !strings.Contains(w.logs[0], "seatctl restart exited 1") || strings.Contains(w.logs[0], "wave-seats") {
+		t.Fatalf("logs = %q, want the configured seatctl name", w.logs)
+	}
+}
+
 func TestStepRejectsBadThreshold(t *testing.T) {
 	w := newWorld(foreman(1), idleSeat("accounts", 10))
 	w.threshold = "9.5"

@@ -104,7 +104,7 @@ func buildDefaultDeps(cfg Config, getenv envGetter, paths toolPaths, fsys relaun
 			return err == nil && result.ExitCode == 0, err
 		},
 		Spawn: func(ctx context.Context, args []string, cwd string) (int, error) {
-			result, err := runner(ctx, append([]string{"spawn-agent"}, args...), cwd)
+			result, err := runner(ctx, append([]string{cfg.SpawnCommand}, args...), cwd)
 			return result.ExitCode, err
 		},
 		DM: func(ctx context.Context, name, text string) (bool, error) {
@@ -112,7 +112,7 @@ func buildDefaultDeps(cfg Config, getenv envGetter, paths toolPaths, fsys relaun
 			return err == nil && result.ExitCode == 0, err
 		},
 		Holders: func(ctx context.Context) (string, error) {
-			return readCommandStdout(ctx, runner, []string{"wave-seat-holder", "list", "--json"})
+			return readCommandStdout(ctx, runner, []string{cfg.SeatHolderCLI, "list", "--json"})
 		},
 		Runner:        runner,
 		SeatThreshold: getenv(seats.ThresholdEnv),
@@ -278,8 +278,9 @@ func seatStepDeps(ctx context.Context, deps runDeps, stderr io.Writer) seats.Dep
 			result, err := deps.Runner(restartCtx, []string{deps.Config.SeatCLI, "restart", name}, "")
 			return result.ExitCode, err
 		},
-		Now:   deps.now,
-		Sleep: deps.sleep,
+		Now:     deps.now,
+		Sleep:   deps.sleep,
+		SeatCLI: deps.Config.SeatCLI,
 		Log: func(line string) {
 			if err := deps.log(ctx, line); err != nil {
 				if _, writeErr := fmt.Fprintln(stderr, "wave-supervisor-relaunch: seat step log failed:", err); writeErr != nil {

@@ -49,6 +49,7 @@
         longhorn-drain = null;
         mem-sampler = null;
         node-removal = null;
+        omp-pool = null;
         openbao-agent-macos-smoke = null;
         rbuild-workspace-prune = null;
         reddit-fetch = null;

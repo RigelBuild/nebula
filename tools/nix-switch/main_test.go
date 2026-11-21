@@ -231,3 +231,49 @@ func TestKeepaliveStops(t *testing.T) {
 		t.Fatal("keepalive did not run")
 	}
 }
+
+// TestRepoFlagOverridesConfig gives --repo a value that differs from the config's repo.
+// Every jj call and the nh flake path must use --repo.
+func TestRepoFlagOverridesConfig(t *testing.T) {
+	const cfgRepo = "/config-repo"
+	cfgBody := "repo: \"" + cfgRepo + "\"\nflake: \"example/nix\"\nhosts: [\"example-host\"]\n"
+	modes := []struct {
+		name string
+		args []string
+	}{
+		{name: "sync", args: nil},
+		{name: "local", args: []string{"--local"}},
+	}
+	for _, mode := range modes {
+		t.Run(mode.name, func(t *testing.T) {
+			f := &fakeRunner{empty: "true"}
+			var out, stderr bytes.Buffer
+			a := app{runner: f, stdin: strings.NewReader(""), stdout: &out, stderr: &stderr, interval: time.Hour}
+			args := append([]string{"--config", writeConfig(t, cfgBody), "--host", "example-host", "--repo", "/repo"}, mode.args...)
+			if got := a.run(t.Context(), args); got != 0 {
+				t.Fatalf("exit %d: %s", got, stderr.String())
+			}
+			var jjDirs []string
+			var switchPath string
+			for _, c := range f.snapshot() {
+				switch c.name {
+				case "jj":
+					jjDirs = append(jjDirs, c.dir)
+				case "nh":
+					switchPath = c.args[2]
+				}
+			}
+			if len(jjDirs) == 0 {
+				t.Fatal("no jj command ran")
+			}
+			for _, dir := range jjDirs {
+				if dir != "/repo" {
+					t.Errorf("jj ran in %q, want --repo /repo", dir)
+				}
+			}
+			if want := "/repo/example/nix#example-host"; switchPath != want {
+				t.Errorf("nh flake %q, want %q", switchPath, want)
+			}
+		})
+	}
+}

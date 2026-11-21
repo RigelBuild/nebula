@@ -32,6 +32,7 @@
         dl-reconcile = "sha256-M9sG3Wt4un2pQ17tcrLI+K/u1K8JjXy2DXyGrGU8emk=";
         filevault-unlock = "sha256-QRkNiaX+C0MKkhJxxfEhkmTSRvw2qn0IqBTDFwKdeo8=";
         fleet-gc-roots = null;
+        fleet-switch = "sha256-nFAh8mkwsLGj9kG5oQfDG77/XphG74jLO0IWZCerszY=";
         fork-sync = "sha256-3CiEdm8Db78vQ8JG1KOBt5w55pmxuTs04in8RUhzwoM=";
         gh-route = "sha256-7K17JaXFsjf163g5PXCb5ng2gYdotnZ2IDKk8KFjNj0=";
         hk-hook = null;

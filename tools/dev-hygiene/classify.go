@@ -14,23 +14,29 @@ const (
 	verdictRecent verdict = "recent"
 	// verdictLive: a process has its working directory inside the workspace. Skipped.
 	verdictLive verdict = "live"
+	// verdictOrphaned: the .jj/repo pointer names a store that is gone. Kept in place; never forgotten or removed.
+	verdictOrphaned verdict = "orphaned-store"
 )
 
 // workspace is the state classify decides on. Unpushed holds change IDs not yet on any remote bookmark.
 // Stamp is the activity clock taken by the sweep's scan, before any jj call; a later move means a file edit since.
 type workspace struct {
-	Name       string
-	Root       string
-	LastActive time.Time
-	Clean      bool
-	Unpushed   []string
-	LiveCwd    bool
-	Notes      []string
-	Stamp      time.Time
+	Name         string
+	Root         string
+	LastActive   time.Time
+	Clean        bool
+	Unpushed     []string
+	LiveCwd      bool
+	Notes        []string
+	Stamp        time.Time
+	StoreMissing string
 }
 
-// classify applies the rules in order: live cwd, then recency, then pushed-and-clean.
+// classify applies the rules in order: orphaned store, live cwd, then recency, then pushed-and-clean.
 func classify(ws workspace, now time.Time, idle time.Duration) verdict {
+	if ws.StoreMissing != "" {
+		return verdictOrphaned
+	}
 	if ws.LiveCwd {
 		return verdictLive
 	}

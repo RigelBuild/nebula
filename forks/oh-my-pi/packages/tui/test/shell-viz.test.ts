@@ -1,8 +1,9 @@
-import { describe, expect, it } from "bun:test";
+import { beforeEach, describe, expect, it } from "bun:test";
 import { RunTrace, Shell } from "@oh-my-pi/pi-natives";
 import { isShellTrace, type ShellTrace, type ShellVizPresentation } from "@oh-my-pi/pi-wire";
 import {
 	attachShellTrace,
+	clearRestoredVisualizations,
 	decodeShellPresentation,
 	defaultShellVizPreferences,
 	readShellPresentation,
@@ -41,6 +42,10 @@ function fixture(): ShellVizPresentation {
 }
 
 describe("native shell presentation boundary", () => {
+	beforeEach(() => {
+		clearRestoredVisualizations();
+	});
+
 	it("rejects malformed DTOs and numeric node identities without compatibility coercion", () => {
 		for (const value of [
 			{ ...fixture(), rows: [{ ...fixture().rows[0], node: 17 }] },
@@ -118,5 +123,35 @@ describe("native shell presentation boundary", () => {
 		if (!again) throw new Error("Expected the evicted trace to restore from JSON");
 		expect(readShellPresentation(again, replayOf(first), first).output).toBe("bounded-0\n");
 		expect(restoredVisualizationCount()).toBe(16);
+	});
+
+	it("keeps the recently restored entry and rebuilds the evicted one", async () => {
+		const snapshots: ShellTrace[] = [];
+		for (let i = 0; i < 17; i++) {
+			const command = `printf 'lru-${i}\\n'`;
+			const trace = new RunTrace(command);
+			await new Shell().run({ command, trace });
+			snapshots.push(snapshot(trace));
+		}
+		const first = snapshots[0];
+		const second = snapshots[1];
+		const last = snapshots[16];
+		if (!first || !second || !last) throw new Error("Expected 17 snapshots");
+		const restoredFirst = shellVisualization(first);
+		const restoredSecond = shellVisualization(second);
+		if (!restoredFirst || !restoredSecond) throw new Error("Expected the first two traces to restore");
+		for (const stored of snapshots.slice(2, 16)) expect(shellVisualization(stored)).toBeDefined();
+		expect(restoredVisualizationCount()).toBe(16);
+		// Touching the oldest entry makes the second one the least recently used.
+		expect(shellVisualization(first)).toBe(restoredFirst);
+		expect(shellVisualization(last)).toBeDefined();
+		expect(restoredVisualizationCount()).toBe(16);
+		// The touched entry survived; the untouched one was evicted and rebuilds as a new object.
+		expect(shellVisualization(first)).toBe(restoredFirst);
+		const rebuilt = shellVisualization(second);
+		if (!rebuilt) throw new Error("Expected the evicted trace to restore from JSON");
+		expect(rebuilt).not.toBe(restoredSecond);
+		const replay = { ...defaultShellVizPreferences(), cursor: second.history?.length ?? 0 };
+		expect(readShellPresentation(rebuilt, replay, second).output).toBe("lru-1\n");
 	});
 });

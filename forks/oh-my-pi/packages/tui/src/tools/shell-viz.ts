@@ -66,6 +66,11 @@ export function restoredVisualizationCount(): number {
 	return restored.size;
 }
 
+/** Test seam: forget every restored visualization so a test starts with an empty LRU. */
+export function clearRestoredVisualizations(): void {
+	restored.clear();
+}
+
 /** Python-like Pseudo, all layers enabled, one pane, live, paused, normal speed. */
 export function defaultShellVizPreferences(): ShellVizPreferences {
 	return {

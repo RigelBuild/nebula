@@ -21,6 +21,14 @@ if (!existsSync(BIN)) {
   process.exit(1);
 }
 
+// `Promise.withResolvers` needs lib es2024; the smoke tsconfig lib stops at es2023, so build the pair by hand.
+function deferred<T>(): { promise: Promise<T>; resolve: (value: T | PromiseLike<T>) => void; reject: (reason?: unknown) => void } {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => { resolve = res; reject = rej; });
+  return { promise, resolve, reject };
+}
+
 const { check, finish } = createSuite();
 const space = `credspins-${randomUUID().slice(0, 8)}`;
 const dir = mkdtempSync(join(tmpdir(), "cotal-creds-pins-"));
@@ -128,7 +136,7 @@ try {
   // Resolves when bob gets `text`. The deadline is armed after the send exits, and fails only this case.
   const deliveredWithin = (text: string, deadlineMs: number) => {
     if (got.some((m) => m.text === text)) return Promise.resolve();
-    const { promise, resolve, reject } = Promise.withResolvers<void>();
+    const { promise, resolve, reject } = deferred<void>();
     const timer = setTimeout(() => { waiters.delete(text); reject(new Error(`no delivery of "${text}" within ${deadlineMs}ms`)); }, deadlineMs);
     waiters.set(text, () => { clearTimeout(timer); waiters.delete(text); resolve(); });
     return promise;

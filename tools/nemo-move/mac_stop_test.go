@@ -22,7 +22,7 @@ var testLaunchdJobs = []launchdJob{
 	{label: "com.example.agent.tunnel", domain: systemDomain},
 }
 
-const testHome = "/Users/example"
+const testHome = "/src/home/example"
 
 // testInventory is the made-up deployment every source-touching test passes
 // with --inventory.

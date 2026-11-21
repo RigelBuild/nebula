@@ -13,8 +13,8 @@ func TestOptionsValidateSourceHome(t *testing.T) {
 	}{
 		{name: "relative", home: "Users/example", wantErr: true},
 		{name: "root", home: "/", wantErr: true},
-		{name: "trailing slash", home: "/Users/example/", wantErr: true},
-		{name: "valid", home: "/Users/example"},
+		{name: "trailing slash", home: "/src/home/example/", wantErr: true},
+		{name: "valid", home: "/src/home/example"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			opts := Options{SourceHome: tc.home, MacUser: "example-user", Layout: testLayout}
@@ -29,7 +29,7 @@ func TestOptionsValidateSourceHome(t *testing.T) {
 }
 
 func TestStageCredentialsScriptOwner(t *testing.T) {
-	script := stageCredentialsScript(Options{SourceHome: "/Users/example", MacUser: "example-user"})
+	script := stageCredentialsScript(Options{SourceHome: "/src/home/example", MacUser: "example-user"})
 	if want := "owner='example-user:staff'"; !strings.Contains(script, want) {
 		t.Fatalf("script lacks %q:\n%s", want, script)
 	}

@@ -2,4 +2,4 @@
 
 package transfer
 
-func useTestSealer() func() { return func() {} }
+func useTestJournalLocker() func() { return func() {} }

@@ -9,11 +9,14 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"unicode/utf8"
+
+	"github.com/RigelBuild/nebula/tools/nemo-move/internal/layout"
 )
 
 // rewriteFile verifies source bytes before generating the expected destination entry.
-func rewriteFile(source io.Reader, entry ManifestEntry, rewrite bool, tempDir, sourceHome string) (_ *os.File, destination ManifestEntry, resultErr error) {
+func rewriteFile(source io.Reader, entry ManifestEntry, rewrite bool, tempDir, sourceHome string, lay layout.Layout) (_ *os.File, destination ManifestEntry, resultErr error) {
 	if err := os.MkdirAll(tempDir, 0o700); err != nil {
 		return nil, entry, fmt.Errorf("create rewrite temp directory: %w", err)
 	}
@@ -72,7 +75,7 @@ func rewriteFile(source io.Reader, entry ManifestEntry, rewrite bool, tempDir, s
 			resultErr = errors.Join(resultErr, output.Close(), os.Remove(output.Name()))
 		}
 	}()
-	if err := rewriteText(input, output, sourceHome); err != nil {
+	if err := rewriteText(input, output, sourceHome, lay); err != nil {
 		return nil, entry, err
 	}
 	hash = sha256.New()
@@ -117,14 +120,14 @@ func isRewriteText(source io.Reader) (bool, error) {
 	}
 }
 
-func rewriteText(source io.Reader, output io.Writer, sourceHome string) error {
-	return rewriteTextWithBoundaries(source, output, sourceHome)
+func rewriteText(source io.Reader, output io.Writer, sourceHome string, lay layout.Layout) error {
+	return rewriteTextWithBoundaries(source, output, sourceHome, lay)
 }
 
-func rewriteTextWithBoundaries(source io.Reader, output io.Writer, sourceHome string) error {
+func rewriteTextWithBoundaries(source io.Reader, output io.Writer, sourceHome string, lay layout.Layout) error {
 	r := bufio.NewReader(source)
 	w := bufio.NewWriter(output)
-	prefixes := []string{sourceHome + "/.hermes", sourceHome}
+	prefixes := homePrefixes(sourceHome, lay)
 	for {
 		first, err := r.Peek(1)
 		if errors.Is(err, io.EOF) {
@@ -136,25 +139,25 @@ func rewriteTextWithBoundaries(source io.Reader, output io.Writer, sourceHome st
 		matched := false
 		if first[0] == '/' {
 			for _, prefix := range prefixes {
-				data, peekErr := r.Peek(len(prefix) + 1)
+				data, peekErr := r.Peek(len(prefix.source) + 1)
 				if peekErr != nil && !errors.Is(peekErr, io.EOF) {
 					return peekErr
 				}
-				if !bytes.HasPrefix(data, []byte(prefix)) {
+				if !bytes.HasPrefix(data, []byte(prefix.source)) {
 					continue
 				}
-				boundary := len(data) == len(prefix)
-				if len(data) > len(prefix) {
-					next := data[len(prefix)]
+				boundary := len(data) == len(prefix.source)
+				if len(data) > len(prefix.source) {
+					next := data[len(prefix.source)]
 					boundary = next == '/' || !isPathByte(next)
 				}
 				if !boundary {
 					continue
 				}
-				if _, err := r.Discard(len(prefix)); err != nil {
+				if _, err := r.Discard(len(prefix.source)); err != nil {
 					return err
 				}
-				if _, err := w.WriteString("/opt/data"); err != nil {
+				if _, err := w.WriteString(prefix.dest); err != nil {
 					return err
 				}
 				matched = true
@@ -176,6 +179,24 @@ func rewriteTextWithBoundaries(source io.Reader, output io.Writer, sourceHome st
 func isPathByte(b byte) bool {
 	return b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z' ||
 		b >= '0' && b <= '9' || b == '_' || b == '-' || b == '.'
+}
+
+// homePrefix maps a source path prefix to the container path that replaces it.
+type homePrefix struct{ source, dest string }
+
+// homePrefixes lists each copy row as a source prefix under sourceHome with its
+// container dest, longest source first. The source home itself comes last and
+// falls back to /opt/data.
+func homePrefixes(sourceHome string, lay layout.Layout) []homePrefix {
+	var prefixes []homePrefix
+	for _, row := range lay.Rows {
+		if row.Kind == layout.Copy {
+			prefixes = append(prefixes, homePrefix{source: sourceHome + "/" + row.Path, dest: row.Dest})
+		}
+	}
+	prefixes = append(prefixes, homePrefix{source: sourceHome, dest: "/opt/data"})
+	sort.SliceStable(prefixes, func(i, j int) bool { return len(prefixes[i].source) > len(prefixes[j].source) })
+	return prefixes
 }
 
 func rejectBinarySourceHome(file *os.File, path, sourceHome string) error {

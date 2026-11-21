@@ -19,7 +19,7 @@ import (
 )
 
 func ExtractForTest(source *bytes.Buffer, root string) (Manifest, error) {
-	restore := useTestSealer()
+	restore := useTestJournalLocker()
 	defer restore()
 	return extract(source, root, testOptions, func(string, Manifest) error { return nil }, func(root string, want Manifest) error {
 		got, err := scanTree(root, want.Roots)
@@ -71,7 +71,7 @@ func extractionArchive(t *testing.T, manifest Manifest, headers ...*tar.Header) 
 
 func TestExtractPartialThenRerun(t *testing.T) {
 	root := t.TempDir()
-	t.Cleanup(useTestSealer())
+	t.Cleanup(useTestJournalLocker())
 	hash := sha256.Sum256(nil)
 	rootEntry := ManifestEntry{Path: dataRoot, Type: directoryType, Mode: 0o700}
 	dir := ManifestEntry{Path: "opt/data/nemo", Type: directoryType, Mode: 0o700}
@@ -128,7 +128,7 @@ func TestExtractEmptyJournalManifestRerun(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			t.Cleanup(useTestSealer())
+			t.Cleanup(useTestJournalLocker())
 			page := ManifestEntry{Path: pageRoot, Type: directoryType, Mode: 0o755}
 			archive := extractionArchive(t, Manifest{Roots: []string{pageRoot}, Entries: []ManifestEntry{page}}, &tar.Header{Name: pageRoot, Typeflag: tar.TypeDir, Mode: 0o755})
 			got, err := ExtractForTest(archive, root)
@@ -160,7 +160,7 @@ func TestExtractCleanupDoesNotFollowSymlinks(t *testing.T) {
 	dir := ManifestEntry{Path: "opt/data/nemo", Type: directoryType, Mode: 0o700}
 	manifest := Manifest{Roots: []string{dataRoot}, Entries: []ManifestEntry{dir}}
 	archive := extractionArchive(t, manifest, &tar.Header{Name: dir.Path, Typeflag: tar.TypeDir, Mode: 0o700})
-	t.Cleanup(useTestSealer())
+	t.Cleanup(useTestJournalLocker())
 	if _, err := extract(archive, root, testOptions, func(string, Manifest) error { return nil }, func(string, Manifest) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
@@ -228,12 +228,12 @@ func TestExtractReplacesExistingPagingJournal(t *testing.T) {
 }
 
 func TestExtractRewritesSourceHomeSymlink(t *testing.T) {
-	t.Cleanup(useTestSealer())
+	t.Cleanup(useTestJournalLocker())
 	for _, tc := range []struct {
 		name, target, want string
 		fail               bool
 	}{
-		{name: "source home", target: testSourceHome + "/.hermes/file", want: "/opt/data/file"},
+		{name: "source home", target: testSourceHome + "/.example-agent/file", want: "/opt/data/file"},
 		{name: "target home", target: "/opt/data/file", want: "/opt/data/file"},
 		{name: "outside homes", target: "/etc/passwd", fail: true},
 	} {

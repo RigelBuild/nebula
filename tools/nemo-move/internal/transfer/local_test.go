@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/RigelBuild/nebula/tools/nemo-move/internal/layout"
 )
 
 func TestRuntimeCredential(t *testing.T) {
@@ -97,7 +99,8 @@ func TestVerifyRuntimeLinksAndRepositories(t *testing.T) {
 		called = name == "jj" && len(args) == 3 && args[0] == "status" && args[1] == "--repository" && args[2] == dir
 		return "", errors.New("status failed")
 	}
-	if err := verifyJujutsuRepositories(t.Context(), filepath.Join(root, "opt/data/nemo/repos"), run); err == nil || !called {
+	lay := layout.Layout{Rows: []layout.Row{{Path: "example/repos", Kind: layout.Copy, Dest: "/opt/data/nemo/repos"}}}
+	if err := verifyAsRuntimeUser(t.Context(), root, Manifest{Roots: []string{dataRoot}}, lay, run); err == nil || !called {
 		t.Fatalf("jj status: called = %v, error = %v", called, err)
 	}
 	if err := os.Remove(link); err != nil {
@@ -134,5 +137,41 @@ func TestVerifyRuntimeLinksAndRepositories(t *testing.T) {
 	}
 	if err := verifyLink(root, filepath.Join(chain, "link"), []string{dataRoot}); err == nil {
 		t.Fatal("escaping symlink chain accepted")
+	}
+}
+
+func TestVerifyJujutsuRepositoriesWalksEveryCopyDest(t *testing.T) {
+	lay, err := layout.Load(filepath.Join("..", "..", "testdata", "inventory.cue"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lay.Google.Accounts = nil
+	root := t.TempDir()
+	want := map[string]bool{}
+	for _, row := range lay.Rows {
+		if row.Kind != layout.Copy {
+			continue
+		}
+		repo := filepath.Join(root, filepath.FromSlash(strings.TrimPrefix(row.Dest, "/")), "repo")
+		if err := os.MkdirAll(filepath.Join(repo, ".jj"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		want[repo] = false
+	}
+	run := func(_ context.Context, name string, args ...string) (string, error) {
+		if name == "jj" && len(args) == 3 && args[0] == "status" && args[1] == "--repository" {
+			if _, ok := want[args[2]]; ok {
+				want[args[2]] = true
+			}
+		}
+		return "", nil
+	}
+	if err := verifyAsRuntimeUser(t.Context(), root, Manifest{Roots: []string{dataRoot}}, lay, run); err != nil {
+		t.Fatal(err)
+	}
+	for repo, seen := range want {
+		if !seen {
+			t.Fatalf("jj status did not run in %s", repo)
+		}
 	}
 }

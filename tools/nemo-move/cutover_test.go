@@ -75,7 +75,7 @@ func (f *fakeCutover) inject(point string) error {
 }
 
 func TestCutover(t *testing.T) {
-	args := []string{"--kubeconfig", "config", "--mac", "example@192.0.2.10", "--home-root", "/Users/example", "--ssh-user", "example", "--inventory", testInventory, "--launchd-label", "com.example.agent:gui", "--mac-binary", "mac-binary"}
+	args := []string{"--kubeconfig", "config", "--mac", "example@192.0.2.10", "--home-root", "/src/home/example", "--ssh-user", "example", "--inventory", testInventory, "--launchd-label", "com.example.agent:gui", "--mac-binary", "mac-binary"}
 	for _, tc := range []struct {
 		name, phase, state, resume string
 		want                       []string
@@ -103,7 +103,7 @@ func TestCutover(t *testing.T) {
 }
 
 func TestCutoverNormalAndFaults(t *testing.T) {
-	args := []string{"--kubeconfig", "config", "--mac", "example@192.0.2.10", "--home-root", "/Users/example", "--ssh-user", "example", "--inventory", testInventory, "--launchd-label", "com.example.agent:gui", "--mac-binary", "mac-binary"}
+	args := []string{"--kubeconfig", "config", "--mac", "example@192.0.2.10", "--home-root", "/src/home/example", "--ssh-user", "example", "--inventory", testInventory, "--launchd-label", "com.example.agent:gui", "--mac-binary", "mac-binary"}
 	for _, point := range []string{"", "before-extract", "mid-extract", "after-verify-before-commit", "after-phase-write-before-ack"} {
 		t.Run(point, func(t *testing.T) {
 			f := &fakeCutover{phase: "blocked", fault: point}
@@ -125,7 +125,7 @@ func TestCutoverNormalAndFaults(t *testing.T) {
 }
 
 func TestCutoverTransferFailureStopsCommit(t *testing.T) {
-	args := []string{"--kubeconfig", "config", "--mac", "example@192.0.2.10", "--home-root", "/Users/example", "--ssh-user", "example", "--inventory", testInventory, "--launchd-label", "com.example.agent:gui", "--mac-binary", "mac-binary"}
+	args := []string{"--kubeconfig", "config", "--mac", "example@192.0.2.10", "--home-root", "/src/home/example", "--ssh-user", "example", "--inventory", testInventory, "--launchd-label", "com.example.agent:gui", "--mac-binary", "mac-binary"}
 	for _, tc := range []struct {
 		failure string
 		want    []string
@@ -145,7 +145,7 @@ func TestCutoverTransferFailureStopsCommit(t *testing.T) {
 
 func TestCutoverLostAcknowledgement(t *testing.T) {
 	f := &fakeCutover{id: "run", state: "committing", phase: "blocked", lostAck: true}
-	err := cutover(t.Context(), []string{"--kubeconfig", "config", "--mac", "example@192.0.2.10", "--home-root", "/Users/example", "--ssh-user", "example", "--inventory", testInventory, "--launchd-label", "com.example.agent:gui", "--mac-binary", "mac-binary", "--resume", "run"}, cutoverDeps{ops: f, fault: f.inject}, io.Discard, io.Discard)
+	err := cutover(t.Context(), []string{"--kubeconfig", "config", "--mac", "example@192.0.2.10", "--home-root", "/src/home/example", "--ssh-user", "example", "--inventory", testInventory, "--launchd-label", "com.example.agent:gui", "--mac-binary", "mac-binary", "--resume", "run"}, cutoverDeps{ops: f, fault: f.inject}, io.Discard, io.Discard)
 	if err != nil || f.state != "committed" {
 		t.Fatalf("error %v state %s", err, f.state)
 	}
@@ -157,7 +157,7 @@ func TestCutoverLostAcknowledgement(t *testing.T) {
 
 func TestCutoverRequiresMacBinary(t *testing.T) {
 	f := &fakeCutover{phase: "blocked"}
-	err := cutover(t.Context(), []string{"--kubeconfig", "config", "--mac", "example@192.0.2.10", "--home-root", "/Users/example", "--ssh-user", "example", "--inventory", testInventory, "--launchd-label", "com.example.agent:gui"}, cutoverDeps{ops: f}, io.Discard, io.Discard)
+	err := cutover(t.Context(), []string{"--kubeconfig", "config", "--mac", "example@192.0.2.10", "--home-root", "/src/home/example", "--ssh-user", "example", "--inventory", testInventory, "--launchd-label", "com.example.agent:gui"}, cutoverDeps{ops: f}, io.Discard, io.Discard)
 	if err == nil || len(f.events) != 0 {
 		t.Fatalf("error %v, events %v", err, f.events)
 	}
@@ -165,7 +165,7 @@ func TestCutoverRequiresMacBinary(t *testing.T) {
 
 func TestCutoverRefusesExtractWhenPhaseNotBlocked(t *testing.T) {
 	f := &fakeCutover{phase: "blocked", fault: "phase-not-blocked"}
-	err := cutover(t.Context(), []string{"--kubeconfig", "config", "--mac", "example@192.0.2.10", "--home-root", "/Users/example", "--ssh-user", "example", "--inventory", testInventory, "--launchd-label", "com.example.agent:gui", "--mac-binary", "mac-binary"}, cutoverDeps{ops: f, newID: func() (string, error) { return "new", nil }}, io.Discard, io.Discard)
+	err := cutover(t.Context(), []string{"--kubeconfig", "config", "--mac", "example@192.0.2.10", "--home-root", "/src/home/example", "--ssh-user", "example", "--inventory", testInventory, "--launchd-label", "com.example.agent:gui", "--mac-binary", "mac-binary"}, cutoverDeps{ops: f, newID: func() (string, error) { return "new", nil }}, io.Discard, io.Discard)
 	if err == nil {
 		t.Fatal("extract accepted a non-blocked phase")
 	}
@@ -223,21 +223,21 @@ func TestProductionCutoverExtractSendsSourceHome(t *testing.T) {
 	}
 	p := &productionCutover{
 		ctl:     controlPath{run: run, namespace: "nemo"},
-		source:  transfer.Options{SourceHome: "/Users/example", MacUser: "example-user", Layout: lay},
+		source:  transfer.Options{SourceHome: "/src/home/example", MacUser: "example-user", Layout: lay},
 		archive: archive,
 	}
 	if err := p.extract(t.Context(), func() error { return nil }); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"-n", "nemo", "exec", "-i", maintName, "--", "nemo-move", "maint-side", "extract", "/Users/example", layoutJSON}
+	want := []string{"-n", "nemo", "exec", "-i", maintName, "--", "nemo-move", "maint-side", "extract", "/src/home/example", layoutJSON}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("extract argv = %v, want %v", got, want)
 	}
 }
 
 func TestCutoverHomeMismatchStopsNothing(t *testing.T) {
-	f := &fakeCutover{phase: "blocked", homeErr: errors.New(`remote home "/Users/other" does not match source home "/Users/example"`)}
-	args := []string{"--kubeconfig", "config", "--mac", "example@192.0.2.10", "--home-root", "/Users/example", "--ssh-user", "example", "--inventory", testInventory, "--launchd-label", "com.example.agent:gui", "--mac-binary", "mac-binary"}
+	f := &fakeCutover{phase: "blocked", homeErr: errors.New(`remote home "/src/home/other" does not match source home "/src/home/example"`)}
+	args := []string{"--kubeconfig", "config", "--mac", "example@192.0.2.10", "--home-root", "/src/home/example", "--ssh-user", "example", "--inventory", testInventory, "--launchd-label", "com.example.agent:gui", "--mac-binary", "mac-binary"}
 	err := cutover(t.Context(), args, cutoverDeps{ops: f, newID: func() (string, error) { return "new", nil }, fault: f.inject}, io.Discard, io.Discard)
 	if err == nil || !strings.Contains(err.Error(), "check source home") {
 		t.Fatalf("error = %v, want source home check failure", err)

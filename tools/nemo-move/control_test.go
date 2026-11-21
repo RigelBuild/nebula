@@ -168,7 +168,7 @@ func controlPodImage(pod map[string]any) string {
 
 func TestCutoverResumeRefusesStartedRecord(t *testing.T) {
 	f := &fakeCutover{id: "run", state: "started", phase: "blocked"}
-	args := []string{"--kubeconfig", "config", "--mac", "example@192.0.2.10", "--home-root", "/Users/example", "--ssh-user", "example", "--inventory", testInventory, "--launchd-label", "com.example.agent:gui", "--mac-binary", "mac-binary", "--resume", "run"}
+	args := []string{"--kubeconfig", "config", "--mac", "example@192.0.2.10", "--home-root", "/src/home/example", "--ssh-user", "example", "--inventory", testInventory, "--launchd-label", "com.example.agent:gui", "--mac-binary", "mac-binary", "--resume", "run"}
 	err := cutover(t.Context(), args, cutoverDeps{ops: f, newID: func() (string, error) { return "new", nil }, fault: f.inject}, io.Discard, io.Discard)
 	if err == nil {
 		t.Fatal("--resume accepted a started record")

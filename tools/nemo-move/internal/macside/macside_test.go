@@ -115,9 +115,9 @@ func TestInventoryAcceptsBinaryContainingSourceHome(t *testing.T) {
 	for _, tc := range []struct {
 		name, content string
 	}{
-		{"sqlite", "SQLite format 3\x00/Users/example/file"},
-		{"nul", "binary\x00/Users/example/file"},
-		{"invalid utf8", "\xff/Users/example/file"},
+		{"sqlite", "SQLite format 3\x00/src/home/example/file"},
+		{"nul", "binary\x00/src/home/example/file"},
+		{"invalid utf8", "\xff/src/home/example/file"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			home, lay := testHome(t)
@@ -131,7 +131,7 @@ func TestInventoryAcceptsBinaryContainingSourceHome(t *testing.T) {
 
 func TestInventoryAcceptsTextAndBinaryWithoutSourceHome(t *testing.T) {
 	for _, tc := range []struct{ name, content string }{
-		{"text path", "cd /Users/example/.example-agent"},
+		{"text path", "cd /src/home/example/.example-agent"},
 		{"binary no path", "SQLite format 3\x00data"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -229,7 +229,7 @@ func TestExportJournals(t *testing.T) {
 }
 
 func TestExportAcceptsBinaryJournalContainingSourceHome(t *testing.T) {
-	for _, content := range []string{"SQLite format 3\x00/Users/example/a", "\xff/Users/example/a", "\x00/Users/example/a"} {
+	for _, content := range []string{"SQLite format 3\x00/src/home/example/a", "\xff/src/home/example/a", "\x00/src/home/example/a"} {
 		home, lay := testHome(t)
 		dir := t.TempDir()
 		writeTestFile(t, dir, "pages.jsonl", content)
@@ -318,6 +318,29 @@ func TestInventoryReportsAllRows(t *testing.T) {
 		if !found[key] {
 			t.Errorf("missing report entry %s", key)
 		}
+	}
+}
+
+func TestInventoryReportsByteCounts(t *testing.T) {
+	home, lay := testHome(t)
+	report, err := Inventory(home, lay, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var total int64
+	for _, item := range report.Rows {
+		if item.Row.Kind == layout.Copy {
+			total += item.Bytes
+		}
+		if item.Row.Path == ".example-agent" && item.Bytes != int64(len("state")) {
+			t.Fatalf(".example-agent bytes = %d, want %d", item.Bytes, len("state"))
+		}
+	}
+	if report.TotalBytes != total {
+		t.Fatalf("TotalBytes = %d, want sum of copy rows %d", report.TotalBytes, total)
+	}
+	if report.TotalBytes == 0 {
+		t.Fatal("TotalBytes is zero for a home with copy files")
 	}
 }
 

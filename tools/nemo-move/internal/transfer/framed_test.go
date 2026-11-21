@@ -47,7 +47,7 @@ func TestFramedArchiveRejectsTampering(t *testing.T) {
 
 func TestFramedArchivePreservesSourceSymlinkManifest(t *testing.T) {
 	var source bytes.Buffer
-	target := "/Users/example/.hermes/state.db"
+	target := testSourceHome + "/.example-agent/state.db"
 	entry := ManifestEntry{Path: "opt/data/link", Type: symlinkType, Mode: 0o777, Size: int64(len(target)), Target: target}
 	encoder := json.NewEncoder(&source)
 	if err := encoder.Encode(Manifest{Roots: []string{dataRoot}}); err != nil {
@@ -80,9 +80,9 @@ func TestFramedArchivePreservesSourceSymlinkManifest(t *testing.T) {
 }
 
 func TestFramedExtractPreservesSourceAndVerifiesRewrittenManifest(t *testing.T) {
-	content := []byte("cd /Users/example/.hermes\nfile=/Users/example/nemo/x\n")
+	content := []byte("cd " + testSourceHome + "/.example-agent\nfile=" + testSourceHome + "/nemo/x\n")
 	hash := sha256.Sum256(content)
-	target := "/Users/example/.hermes/file"
+	target := testSourceHome + "/.example-agent/file"
 	entries := []ManifestEntry{
 		{Path: "opt/data", Type: directoryType, Mode: 0o700},
 		{Path: "opt/data/config.yaml", Type: fileType, Mode: 0o600, Size: int64(len(content)), SHA256: hex.EncodeToString(hash[:])},
@@ -153,12 +153,12 @@ func TestFramedExtractPreservesSourceAndVerifiesRewrittenManifest(t *testing.T) 
 
 func TestRewriteLink(t *testing.T) {
 	for _, tc := range []struct{ input, want string }{
-		{input: "/Users/example/.hermes/state.db", want: "/opt/data/state.db"},
-		{input: "/Users/example/nemo/file", want: "/opt/data/nemo/file"},
+		{input: testSourceHome + "/.example-agent/state.db", want: "/opt/data/state.db"},
+		{input: testSourceHome + "/nemo/file", want: "/opt/data/nemo/file"},
 		{input: "../relative", want: "../relative"},
 	} {
 		t.Run(tc.input, func(t *testing.T) {
-			got, err := rewriteLink(tc.input, testSourceHome)
+			got, err := rewriteLink(tc.input, testSourceHome, testLayout)
 			if err != nil || got != tc.want {
 				t.Fatalf("rewriteLink = %q, %v; want %q", got, err, tc.want)
 			}

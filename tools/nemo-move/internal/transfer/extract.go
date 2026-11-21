@@ -89,7 +89,7 @@ func extract(source io.Reader, root string, opts Options, ownership func(string,
 		}
 		delete(remaining, header.Name)
 		if entry.Type == symlinkType {
-			target, err := rewriteLink(header.Linkname, opts.SourceHome)
+			target, err := rewriteLink(header.Linkname, opts.SourceHome, opts.Layout)
 			if err != nil {
 				return Manifest{}, err
 			}
@@ -125,7 +125,7 @@ func extract(source io.Reader, root string, opts Options, ownership func(string,
 		var rewritten *os.File
 		if entry.Type == fileType {
 			var expected ManifestEntry
-			rewritten, expected, err = rewriteFile(archive, entry, rewriteFilePath(entry.Path), filepath.Join(root, filepath.FromSlash(rewriteTempRoot)), opts.SourceHome)
+			rewritten, expected, err = rewriteFile(archive, entry, rewriteFilePath(entry.Path), filepath.Join(root, filepath.FromSlash(rewriteTempRoot)), opts.SourceHome, opts.Layout)
 			if err != nil {
 				return Manifest{}, fmt.Errorf("rewrite %s: %w", entry.Path, err)
 			}

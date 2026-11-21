@@ -126,7 +126,7 @@ func (r homeMismatchRemote) Run(_ context.Context, _ string, args ...string) (st
 	command := args[len(args)-1]
 	*r.commands = append(*r.commands, command)
 	if command == transfer.HomeCommand {
-		return "/Users/other", nil
+		return "/src/home/other", nil
 	}
 	return "", errors.New("unexpected remote command")
 }

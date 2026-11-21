@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -37,16 +38,22 @@ func TestAtomicManifestWrite(t *testing.T) {
 	}
 }
 
-const testSourceHome = "/Users/example"
+const testSourceHome = "/src/home/example"
 
-// testLayout is a made-up deployment with the same shape as testdata/inventory.cue.
-var testLayout = layout.Layout{
-	Rows: []layout.Row{
-		{Path: ".example-agent", Kind: layout.Copy, Dest: "/opt/data"},
-	},
-	Google:    layout.Google{Source: "/var/lib/example-google/accounts", Dest: "/opt/data/.local/state/example-google", Accounts: []string{"workspace", "personal"}},
-	Journals:  layout.Journals{Dir: "/var/lib/example-journals", Names: []string{"pages.jsonl", "events.jsonl"}},
-	Processes: []string{"example-agent --serve"},
+// testLayout is the made-up deployment in testdata/inventory.cue, loaded by
+// TestMain so every transfer test runs against the same file operators pass
+// with --inventory.
+var testLayout layout.Layout
+
+var testOptions Options
+
+func TestMain(m *testing.M) {
+	lay, err := layout.Load(filepath.Join("..", "..", "testdata", "inventory.cue"))
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "load testdata/inventory.cue:", err)
+		os.Exit(1)
+	}
+	testLayout = lay
+	testOptions = Options{SourceHome: testSourceHome, MacUser: "example", Layout: testLayout}
+	os.Exit(m.Run())
 }
-
-var testOptions = Options{SourceHome: testSourceHome, MacUser: "example", Layout: testLayout}

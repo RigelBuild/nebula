@@ -84,6 +84,20 @@ func TestPaneFailedPaneDeadDisplayStopsTheUnit(t *testing.T) {
 	}
 }
 
+// tmux 3.4 keeps pane_pid after the launcher dies and drops its children file. A dead pane must still be
+// reported as dead, not waited on until the startup timeout.
+func TestPaneDeadWhileTmuxKeepsThePanePIDReportsCauseAtOnce(t *testing.T) {
+	fake := fakeDeps(fakeOptions{stalePanePID: true, deadPane: &deadPane{status: "3", signal: "", output: "launcher says no\n"}})
+	assertDeepEqual(t, Run(context.Background(), startSeatArgs, fake.deps), 1)
+	joined := strings.Join(fake.errors, " ")
+	if !strings.Contains(joined, "exited with status 3") || !strings.Contains(joined, "launcher says no") {
+		t.Fatalf("errors = %q, want the status and the pane output", fake.errors)
+	}
+	if !lastCallIsStop(fake.calls) {
+		t.Fatalf("last call = %+v, want the unit stop", fake.calls[len(fake.calls)-1])
+	}
+}
+
 // The race: the pane dies after the agent is found and before remain-on-exit is cleared.
 func TestPaneDyingAfterTheAgentIsFoundStopsTheUnitAndReportsWhy(t *testing.T) {
 	fake := fakeDeps(fakeOptions{diesAfterAgent: &deadPane{status: "2", signal: "", output: "Error: no module\n"}})

@@ -275,8 +275,16 @@ func readHolderPID(ctx context.Context, unit string, deps Deps) (string, error) 
 }
 
 // agentProcessID returns the agent PID once the pane launcher has forked it. It reports dead when the
-// launcher's pane has no pid, which means the launcher exited before the agent started.
+// launcher's pane is dead, which means the launcher exited before the agent started. tmux 3.4 keeps
+// pane_pid after that exit, so the pane's death is checked before its PID is trusted.
 func agentProcessID(ctx context.Context, launch seatLaunch, deps Deps) (agentPID string, dead bool, err error) {
+	isDead, err := pane.IsDead(ctx, paneSpawn(deps), launch.tmux, launch.socketPath)
+	if err != nil {
+		return "", false, err
+	}
+	if isDead {
+		return "", true, nil
+	}
 	paneInfo, err := deps.Spawn(ctx, launch.tmux, []string{"-N", "-S", launch.socketPath, "display", "-p", "-t", sessionName, "#{pane_pid}"}, false)
 	if err != nil {
 		return "", false, err

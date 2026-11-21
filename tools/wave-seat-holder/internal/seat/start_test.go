@@ -76,6 +76,7 @@ func TestStartUsesSystemdAndTmuxArgvAndReportsBothPIDs(t *testing.T) {
 			"-x", "200", "-y", "50", "-c", "/srv/agent", "--", "omp", "--agent", "one",
 		}},
 		{command: systemctlCommand, args: []string{"--user", "show", "-p", "MainPID", "--value", "test-seat-seat"}},
+		{command: testTmux, args: []string{"-N", "-S", testSocket, "display", "-p", "-t", "seat", "#{pane_dead}"}},
 		{command: testTmux, args: []string{"-N", "-S", testSocket, "display", "-p", "-t", "seat", "#{pane_pid}"}},
 		{command: testTmux, args: []string{"-N", "-S", testSocket, "set-option", "-g", "remain-on-exit", "off"}},
 		{command: testTmux, args: []string{"-N", "-S", testSocket, "display", "-p", "-t", "seat", "#{pane_dead}"}},

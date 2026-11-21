@@ -651,6 +651,10 @@ CREATE TABLE IF NOT EXISTS state_meta (
     key TEXT PRIMARY KEY,
     value TEXT
 );
+-- Session delete reclaims its terminal identity pointers (retire_terminal_receipts) by the session the
+-- pointer value names; partial, so no other state_meta key pays for it.
+CREATE INDEX IF NOT EXISTS idx_state_meta_identity_session
+    ON state_meta(json_extract(value, '$.session_id')) WHERE key GLOB 'gateway.terminal_identity.v1.*';
 
 CREATE TABLE IF NOT EXISTS gateway_routing (
     scope TEXT NOT NULL DEFAULT '',

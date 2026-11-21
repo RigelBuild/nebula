@@ -22,6 +22,7 @@ use std::{
 };
 
 use clap::{ArgAction, Parser, ValueEnum};
+use futures::{StreamExt, stream};
 use grep_cli::DecompressionMatcher;
 use grep_matcher::{Captures, LineTerminator, Matcher};
 use grep_pcre2::{RegexMatcher as PcreMatcher, RegexMatcherBuilder as PcreMatcherBuilder};
@@ -53,7 +54,10 @@ use pi_walker::{
 	exec,
 	grep::{Engine, pcre2_jit_enabled},
 	ignore::{Match as RuleMatch, Rules},
-	walk,
+	walk::{
+		self,
+		tree::{Event, Follow, Order, Tree, TreeOptions},
+	},
 };
 
 #[derive(Parser, Debug)]
@@ -1229,6 +1233,130 @@ struct CollectedFiles {
 	parallelism: usize,
 }
 
+/// Files the search reads in flight at once, per worker, before the walk
+/// pauses: bounds memory by the workers, not by the tree.
+const WALK_WINDOW_PER_WORKER: usize = 16;
+
+/// Opens the path-ordered walk below `root` that [`stream_files`] drains.
+/// A root that cannot be opened is reported and sets `had_error`; `None`
+/// then, as [`collect_files`] reports a failed walk.
+async fn open_tree(
+	host: &mut Host,
+	layer: &pi_walker::Fs,
+	options: &walk::Options,
+	root: &Path,
+	no_messages: bool,
+	had_error: &mut bool,
+) -> Option<Tree> {
+	let tree_options = TreeOptions {
+		hidden:            options.hidden,
+		gitignore:         options.gitignore,
+		skip_git:          options.skip_git,
+		skip_node_modules: options.skip_node_modules,
+		follow:            if options.follow_links { Follow::Always } else { Follow::Roots },
+		detail:            options.detail,
+		order:             Order::Paths,
+		max_depth:         options.max_depth,
+		same_file_system:  options.same_file_system,
+		workers:           options.workers,
+		..TreeOptions::default()
+	};
+	match Tree::new(layer, root, &tree_options).await {
+		Ok(tree) => Some(tree),
+		Err(error) => {
+			*had_error = true;
+			if !no_messages {
+				let _ = writeln!(host.stderr, "rg: {error}");
+			}
+			None
+		},
+	}
+}
+
+/// The files of `tree` that rg searches, streamed in path order as the walk
+/// finds them, so memory follows the consumer's window, not the tree.
+/// Unreadable directories are pushed to `errors` as their report lines.
+fn stream_files(
+	tree: Tree,
+	layer: pi_walker::Fs,
+	root: PathBuf,
+	filter: Arc<PathFilters>,
+	errors: Arc<Mutex<Vec<String>>>,
+) -> impl futures::Stream<Item = PathBuf> + Send + 'static {
+	stream::unfold((tree, layer, root, filter, errors), |(mut tree, layer, root, filter, errors)| async move {
+		loop {
+			let found = match tree.next().await? {
+				Event::Error(error) => {
+					errors
+						.lock()
+						.unwrap_or_else(PoisonError::into_inner)
+						.push(format!("rg: {}: {}", error.path.display(), error.error));
+					None
+				},
+				Event::Entry(entry) => {
+					match entry_action(&filter, entry.abs, entry.file_type, entry.size) {
+						walk::Action::SkipDir => {
+							tree.skip_dir();
+							None
+						},
+						walk::Action::Continue => Some(layer.join(&root, entry.path)),
+						_ => None,
+					}
+				},
+			};
+			if let Some(path) = found {
+				return Some((path, (tree, layer, root, filter, errors)));
+			}
+		}
+	})
+}
+
+/// A directory search's per-file results in report order: the walked files
+/// searched inline then pooled ([`exec::adaptive`]) or streamed through a
+/// bounded window ([`exec::ordered`]).
+trait FileResults {
+	/// The next file's result; `None` once every file is reported.
+	async fn next_file(&mut self) -> Option<FileSearch>;
+	/// Whether the next result is at hand without waiting.
+	fn next_ready(&mut self) -> bool;
+}
+
+impl<It, S, Init, W, Fut> FileResults for exec::Adaptive<It, FileSearch, S, Init, W>
+where
+	It: ExactSizeIterator<Item = PathBuf> + Send + 'static,
+	S: Send + 'static,
+	Init: FnMut() -> S,
+	W: Fn(S, PathBuf) -> Fut + Send + Sync + 'static,
+	Fut: Future<Output = (S, FileSearch)> + Send + 'static,
+{
+	async fn next_file(&mut self) -> Option<FileSearch> {
+		self.next().await
+	}
+
+	fn next_ready(&mut self) -> bool {
+		exec::Adaptive::next_ready(self)
+	}
+}
+
+impl FileResults for exec::Ordered<FileSearch> {
+	async fn next_file(&mut self) -> Option<FileSearch> {
+		StreamExt::next(self).await
+	}
+
+	fn next_ready(&mut self) -> bool {
+		self.ready()
+	}
+}
+
+/// What the walk does with one entry: prune an excluded directory, keep an
+/// included regular file, and pass over the rest.
+fn entry_action(filter: &PathFilters, abs: &Path, file_type: FileType, size: Option<u64>) -> walk::Action {
+	if !filter.includes(abs, file_type, size) {
+		return if file_type == FileType::Dir { walk::Action::SkipDir } else { walk::Action::Skip };
+	}
+	if file_type == FileType::File { walk::Action::Continue } else { walk::Action::Skip }
+}
+
 /// The files below `root` that rg searches or lists, in report order (path
 /// order, or its reverse under `--sortr path`). Unreadable directories are
 /// reported and set `had_error`; `None` when the walk failed (reported).
@@ -1244,18 +1372,7 @@ async fn collect_files(
 	let options = walk_options(cli, filters);
 	let filter = Arc::clone(filters);
 	let collected = walk::collect(&layer, root, &options, true, move |worker, entry| {
-		if !filter.includes(worker.abs(entry), entry.file_type, entry.size) {
-			return if entry.file_type == FileType::Dir {
-				walk::Action::SkipDir
-			} else {
-				walk::Action::Skip
-			};
-		}
-		if entry.file_type == FileType::File {
-			walk::Action::Continue
-		} else {
-			walk::Action::Skip
-		}
+		entry_action(&filter, worker.abs(entry), entry.file_type, entry.size)
 	})
 	.await;
 	match collected {
@@ -1781,8 +1898,10 @@ fn dir_search<M: Clone>(
 	})
 }
 
-/// Searches the files below `root` ([`exec::adaptive`]: inline, then on parallel workers), writing each file's
-/// output in path order.
+/// Searches the files below `root`, writing each file's output in path order.
+/// The default order streams the walk through a window per worker
+/// ([`exec::ordered`]); `--sort`, `--sortr` and `-L` collect the files first
+/// ([`exec::adaptive`]), as the streaming walk orders and reports links apart.
 #[allow(
 	clippy::too_many_arguments,
 	reason = "required by standard walk/configure interfaces and search parameters"
@@ -1801,19 +1920,10 @@ async fn search_dir<M: Matcher<Captures: Send> + Clone + Send + Sync + 'static, 
 	out: &mut W,
 ) -> io::Result<SearchOutcome> {
 	let mut had_error = false;
-	let Some(CollectedFiles { paths, parallelism }) =
-		collect_files(host, cli, filters, root, opts.no_messages, &mut had_error).await
-	else {
-		return Ok(SearchOutcome { any_match: false, had_error });
-	};
 	let line_buffered = cli.line_buffered && !cli.no_line_buffered;
-	let workers = if line_buffered { 1 } else { parallelism };
 	let halt = HaltOnDrop::new();
 	let shared = dir_search(host, cli, matcher, searcher, operand, root, show_names, opts, &halt, false);
-	let mut any_match = false;
-	let mut failed = None;
-	let mut pace = host.output_pace();
-	let mut results = exec::adaptive(paths.into_iter(), workers, exec::INLINE_BUDGET, || shared.worker(), {
+	let work = {
 		let shared = Arc::clone(&shared);
 		move |mut worker: Worker, path: PathBuf| {
 			let shared = Arc::clone(&shared);
@@ -1822,48 +1932,92 @@ async fn search_dir<M: Matcher<Captures: Send> + Clone + Send + Sync + 'static, 
 				(worker, found)
 			}
 		}
-	});
-	while let Some(found) = results.next().await {
-		*stats += &found.stats;
-		if let Err(error) = out.write_all(&found.out) {
-			failed = Some(error);
-			break;
-		}
-		let _ = host.stderr.write_all(&found.err);
-		let delivered = if line_buffered || !results.next_ready() {
-			deliver(host, out).await
-		} else {
-			match out.flush() {
-				Ok(()) => host.pace_output(&mut pace).await,
-				Err(error) => Err(error),
-			}
+	};
+	let follow_links = cli.follow && !cli.no_follow;
+	let sorted = cli.sort.is_some() || cli.sortr.is_some() || cli.sort_files || follow_links;
+	let any_match = if sorted {
+		let Some(CollectedFiles { paths, parallelism }) =
+			collect_files(host, cli, filters, root, opts.no_messages, &mut had_error).await
+		else {
+			return Ok(SearchOutcome { any_match: false, had_error });
 		};
-		if let Err(error) = delivered {
-			failed = Some(error);
-			break;
-		}
-		match found.outcome {
-			Ok(outcome) => {
-				any_match |= outcome.any_match;
-				had_error |= outcome.had_error;
-			},
-			Err(error) => {
-				failed = Some(error);
-				break;
-			},
-		}
-		if opts.quiet && any_match {
-			break;
-		}
-	}
-	drop(results);
-	if let Some(error) = failed {
-		return Err(error);
-	}
+		let workers = if line_buffered { 1 } else { parallelism };
+		let mut results =
+			exec::adaptive(paths.into_iter(), workers, exec::INLINE_BUDGET, || shared.worker(), work);
+		report_files(host, &mut results, None, line_buffered, opts, stats, out, &mut had_error).await?
+	} else {
+		let layer = pi_walker::Fs::new(&host.vfs(), root);
+		let options = walk_options(cli, filters);
+		let Some(tree) = open_tree(host, &layer, &options, root, opts.no_messages, &mut had_error).await
+		else {
+			return Ok(SearchOutcome { any_match: false, had_error });
+		};
+		let workers = if line_buffered { 1 } else { options.parallelism(&layer) };
+		let errors = Arc::new(Mutex::new(Vec::new()));
+		let files = stream_files(tree, layer, root.to_path_buf(), Arc::clone(filters), Arc::clone(&errors));
+		let mut results = exec::ordered(
+			files,
+			workers,
+			workers.saturating_mul(WALK_WINDOW_PER_WORKER),
+			|| shared.worker(),
+			work,
+		);
+		report_files(host, &mut results, Some(&errors), line_buffered, opts, stats, out, &mut had_error)
+			.await?
+	};
 	if host.is_cancelled() {
 		had_error = true;
 	}
 	Ok(SearchOutcome { any_match, had_error })
+}
+
+/// Writes each file's result from `results` in order and returns whether
+/// any file matched. Walk errors pushed to `walk_errors` are reported (and
+/// set `had_error`) before the next file's output.
+#[allow(clippy::too_many_arguments, reason = "the search's output state, passed through")]
+async fn report_files<R: FileResults, W: Write>(
+	host: &mut Host,
+	results: &mut R,
+	walk_errors: Option<&Mutex<Vec<String>>>,
+	line_buffered: bool,
+	opts: &SearchOptions,
+	stats: &mut Stats,
+	out: &mut W,
+	had_error: &mut bool,
+) -> io::Result<bool> {
+	let mut any_match = false;
+	let mut pace = host.output_pace();
+	let report_walk_errors = |host: &mut Host, had_error: &mut bool| {
+		let Some(errors) = walk_errors else { return };
+		let errors = std::mem::take(&mut *errors.lock().unwrap_or_else(PoisonError::into_inner));
+		*had_error |= !errors.is_empty();
+		if !opts.no_messages {
+			for error in errors {
+				// The host's stderr is an in-memory buffer; its write cannot fail.
+				let _ = writeln!(host.stderr, "{error}");
+			}
+		}
+	};
+	while let Some(found) = results.next_file().await {
+		report_walk_errors(host, had_error);
+		*stats += &found.stats;
+		out.write_all(&found.out)?;
+		let _ = host.stderr.write_all(&found.err);
+		if line_buffered || !results.next_ready() {
+			deliver(host, out).await?;
+		} else {
+			out.flush()?;
+			host.pace_output(&mut pace).await?;
+		}
+		let outcome = found.outcome?;
+		any_match |= outcome.any_match;
+		*had_error |= outcome.had_error;
+		if opts.quiet && any_match {
+			return Ok(any_match);
+		}
+	}
+	report_walk_errors(host, had_error);
+	Ok(any_match)
 }
 
 /// Hands everything written to `out` and `host.stderr` so far to the host's destinations.
@@ -2427,6 +2581,27 @@ mod tests {
 		);
 	}
 
+	/// Under `-L` the default order, stderr and exit code match `--sort path`,
+	/// with a dangling link and a link back to a parent in the tree.
+	#[tokio::test(flavor = "multi_thread")]
+	async fn follow_links_search_matches_sorted_order() {
+		let tree = tempfile::tempdir().unwrap();
+		for file in ["real/f.txt", "l-z.txt", "l.txt", "a/b.txt", "ab/q.txt"] {
+			let path = tree.path().join(file);
+			std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+			std::fs::write(path, "hit\n").unwrap();
+		}
+		std::os::unix::fs::symlink("real", tree.path().join("l")).unwrap();
+		std::os::unix::fs::symlink("missing", tree.path().join("dangling")).unwrap();
+		std::os::unix::fs::symlink("..", tree.path().join("a/up")).unwrap();
+
+		let (code, capture) = run_async_util::<Rg>(&["-l", "-L", "hit", "."], "", tree.path()).await;
+		let (sorted_code, sorted) =
+			run_async_util::<Rg>(&["-l", "-L", "--sort", "path", "hit", "."], "", tree.path()).await;
+		assert_eq!(sorted_code, 0, "{}", sorted.err());
+		assert_eq!((code, capture.out(), capture.err()), (sorted_code, sorted.out(), sorted.err()));
+	}
+
 	#[tokio::test(flavor = "multi_thread")]
 	async fn recursive_search_prints_files_in_path_order() {
 		let tree = tempfile::tempdir().unwrap();
@@ -2691,5 +2866,88 @@ mod tests {
 		assert_eq!(capture.out(), "");
 		let err = capture.err();
 		assert!(err.contains("rg: big: pattern file larger than 256 MiB"), "{err}");
+	}
+
+	/// Peak resident memory of this process since the last reset, in bytes.
+	#[cfg(target_os = "linux")]
+	fn reset_peak_rss() -> u64 {
+		std::fs::write("/proc/self/clear_refs", "5").unwrap();
+		status_kib("VmRSS:") * 1024
+	}
+
+	#[cfg(target_os = "linux")]
+	fn status_kib(field: &str) -> u64 {
+		let status = std::fs::read_to_string("/proc/self/status").unwrap();
+		let line = status.lines().find(|line| line.starts_with(field)).unwrap();
+		line[field.len()..].trim().trim_end_matches(" kB").parse().unwrap()
+	}
+
+	/// Peak RSS growth of an `rg -l` search with no match over a fresh tree
+	/// of `dirs` directories of `files_per_dir` empty files.
+	#[cfg(target_os = "linux")]
+	async fn search_peak_growth(dirs: usize, files_per_dir: usize) -> u64 {
+		let tree = tempfile::tempdir().unwrap();
+		for dir in 0..dirs {
+			let path = tree.path().join(format!("d{dir:03}"));
+			std::fs::create_dir(&path).unwrap();
+			for file in 0..files_per_dir {
+				std::fs::File::create(path.join(format!("f{file:04}"))).unwrap();
+			}
+		}
+		let baseline = reset_peak_rss();
+		let (code, capture) = run_async_util::<Rg>(&["-l", "hit", "."], "", tree.path()).await;
+		let growth = (status_kib("VmHWM:") * 1024).saturating_sub(baseline);
+		assert_eq!(code, 1, "{}", capture.err());
+		assert_eq!(capture.out(), "");
+		growth
+	}
+
+	/// Tree size, in directories of 1000 files, that
+	/// [`search_peak_growth_in_this_process`] measures.
+	#[cfg(target_os = "linux")]
+	const PEAK_DIRS_ENV: &str = "PI_RG_PEAK_DIRS";
+
+	/// Child half of [`search_of_a_large_tree_does_not_hold_its_entries`]:
+	/// prints its search's peak RSS growth for the parent to read.
+	#[cfg(target_os = "linux")]
+	#[tokio::test(flavor = "multi_thread")]
+	#[ignore = "run in a child process by search_of_a_large_tree_does_not_hold_its_entries"]
+	async fn search_peak_growth_in_this_process() {
+		let dirs = std::env::var(PEAK_DIRS_ENV).unwrap().parse().unwrap();
+		println!("peak-growth={}", search_peak_growth(dirs, 1000).await);
+	}
+
+	/// Peak RSS growth of a search over `dirs` thousand files, measured in a
+	/// fresh process so no other test's memory counts.
+	#[cfg(target_os = "linux")]
+	fn child_peak_growth(dirs: usize) -> u64 {
+		let test = concat!(module_path!(), "::search_peak_growth_in_this_process");
+		let test = test.split_once("::").unwrap().1;
+		let output = std::process::Command::new(std::env::current_exe().unwrap())
+			.args(["--exact", test, "--ignored", "--nocapture", "--test-threads=1"])
+			.env(PEAK_DIRS_ENV, dirs.to_string())
+			.output()
+			.unwrap();
+		let stdout = String::from_utf8_lossy(&output.stdout);
+		assert!(output.status.success(), "{stdout}{}", String::from_utf8_lossy(&output.stderr));
+		let line = stdout.lines().find_map(|line| line.split_once("peak-growth=").map(|(_, value)| value));
+		assert!(line.is_some(), "no peak-growth line from child {test}:\n{stdout}");
+		line.unwrap_or_default().trim().parse().unwrap()
+	}
+
+	/// A search with no match must not hold the walk's entries: peak memory
+	/// follows the workers, not the tree, so a 200k-file tree costs about as
+	/// much as a 2k-file one (RIG-11718). Each size runs in its own process.
+	#[cfg(target_os = "linux")]
+	#[test]
+	fn search_of_a_large_tree_does_not_hold_its_entries() {
+		let small = child_peak_growth(2);
+		let large = child_peak_growth(200);
+		assert!(
+			large.saturating_sub(small) < 8 << 20,
+			"peak RSS grew by {} MiB for 200k files vs {} MiB for 2k",
+			large >> 20,
+			small >> 20
+		);
 	}
 }

@@ -38,6 +38,7 @@
         fleet-gc-roots = null;
         fleet-switch = "sha256-nFAh8mkwsLGj9kG5oQfDG77/XphG74jLO0IWZCerszY=";
         fork-sync = "sha256-3CiEdm8Db78vQ8JG1KOBt5w55pmxuTs04in8RUhzwoM=";
+        garage-bucket-reconcile = null;
         get-pr-diff = "sha256-wPWPi6JxoMxze13kM2E//CT2pfvHCQDIpIKoDr9B+OM=";
         gh-route = "sha256-7K17JaXFsjf163g5PXCb5ng2gYdotnZ2IDKk8KFjNj0=";
         hk-hook = null;

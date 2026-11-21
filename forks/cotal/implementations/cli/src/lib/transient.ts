@@ -1,4 +1,4 @@
-import { CotalEndpoint, DEV_OWNER, EpEnvelopeError, agentCredentialLifecycleUid, channelBucket, credsClaims, isPublishPermissionDenied, mintCreds, newIdentity, parsePrincipalKey, presenceBucket, principalFromTags, subjectMatches } from "@cotal-ai/core";
+import { CotalEndpoint, DEV_OWNER, EpEnvelopeError, agentCredentialLifecycleUid, channelBucket, credsClaims, isIssuedOneRouteRow, isPublishPermissionDenied, mintCreds, newIdentity, parsePrincipalKey, presenceBucket, principalFromTags, subjectMatches } from "@cotal-ai/core";
 import { CommandFailure, endpointAuth, type Connection } from "@cotal-ai/workspace";
 import { c } from "../ui.js";
 import { connectOrExit, connectOrThrow } from "./connect.js";
@@ -97,7 +97,7 @@ export async function openTransient(
   let credentialPrincipal: { owner: string; actor: string } | undefined;
   if (managerRoster) {
     const remedy = "run it inside the agent session or use an operator credential";
-    if (grants.some((subject) => subject.includes(".ep.v1.one.")))
+    if (grants.some(isIssuedOneRouteRow))
       throw new CommandFailure("refused", "PERMISSION_DENIED", "an issued agent credential cannot read the roster from a one-shot CLI call", { target: { space: conn.space }, remedy });
     const key = principalFromTags(claims?.nats?.tags);
     const principal = key === null ? null : parsePrincipalKey(key);

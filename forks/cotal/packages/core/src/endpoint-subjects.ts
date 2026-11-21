@@ -227,6 +227,11 @@ export function epPlaneTokens(caller: EpCaller): string[] {
  *  issued-bound rail encoding, not the protocol or the workflow language. */
 export const EP_RAIL_V1 = "v1";
 
+/** Whether a NATS publish-allow row names the issued rail's `one` (class-queue) route. */
+export function isIssuedOneRouteRow(row: string): boolean {
+  return row.includes(`.ep.${EP_RAIL_V1}.one.`);
+}
+
 // ---- request / reply builders (§13.2 subject table) ----------------------------------------
 
 /** Where a request routes (never which verb it is — the verb rides the envelope, §13.3/§13.5):

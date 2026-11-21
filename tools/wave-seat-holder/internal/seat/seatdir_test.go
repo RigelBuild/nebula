@@ -84,6 +84,32 @@ func TestSeatConfigSymlinkPlantedAtTheConfigPathIsRefusedAndTargetUntouched(t *t
 	assertDeepEqual(t, modeOf(t, victim), fs.FileMode(0o644))
 }
 
+func TestSeatConfigHardlinkPlantedAtTheConfigPathIsRefusedAndTargetUntouched(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "seats")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	victim := filepath.Join(root, "victim")
+	const original = "do not touch\n"
+	if err := os.WriteFile(victim, []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Link(victim, filepath.Join(dir, "seat.conf")); err != nil {
+		t.Fatal(err)
+	}
+	deps := Deps{Files: realFiles()}
+	if _, err := writeSeatConfig(deps, dir, "seat"); err == nil {
+		t.Fatal("writeSeatConfig over a planted hardlink returned nil error")
+	}
+	got, err := os.ReadFile(victim)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertDeepEqual(t, string(got), original)
+	assertDeepEqual(t, modeOf(t, victim), fs.FileMode(0o644))
+}
+
 func TestWritePrivateFileTruncatesAnExistingLooseFileToPrivateMode(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "seat.conf")
 	if err := os.WriteFile(path, []byte("an old, longer, looser config\n"), 0o644); err != nil {

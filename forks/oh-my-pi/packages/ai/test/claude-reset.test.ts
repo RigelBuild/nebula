@@ -137,6 +137,51 @@ describe("listClaudeResetCredits", () => {
 		});
 	});
 
+	it("counts a grant that clears both weekly windows as full, not fable", async () => {
+		const payload = cedarPayload();
+		payload.cedar_ember.grants = [
+			{
+				...payload.cedar_ember.grants[0],
+				id: "grant_both",
+				resets_left: 1,
+				clears: ["five_hour", "seven_day", "seven_day_overage_included"],
+			},
+		];
+		payload.cedar_ember.next_grant_id = "grant_both";
+		const { fetch } = recordingFetch(() => json(200, payload));
+		const result = await listClaudeResetCredits({ accessToken: "token", orgId: "org_1", fetch });
+		expect(result).toMatchObject({ availableCount: 1, availableByScope: { full: 1, fable: 0 } });
+	});
+
+	it("leaves expired and spent grants out of both scope buckets", async () => {
+		const payload = cedarPayload();
+		payload.cedar_ember.grants = [
+			{
+				...payload.cedar_ember.grants[0],
+				id: "grant_expired",
+				resets_left: 2,
+				ends_at: "2000-01-01T00:00:00Z",
+				clears: ["five_hour", "seven_day_overage_included"],
+			},
+			{
+				...payload.cedar_ember.grants[0],
+				id: "grant_spent",
+				resets_left: 0,
+				clears: ["five_hour", "seven_day_overage_included"],
+			},
+			{
+				...payload.cedar_ember.grants[0],
+				id: "grant_full",
+				resets_left: 1,
+				clears: ["five_hour", "seven_day"],
+			},
+		];
+		payload.cedar_ember.next_grant_id = "grant_full";
+		const { fetch } = recordingFetch(() => json(200, payload));
+		const result = await listClaudeResetCredits({ accessToken: "token", orgId: "org_1", fetch });
+		expect(result).toMatchObject({ availableCount: 1, availableByScope: { full: 1, fable: 0 } });
+	});
+
 	it("parses discovery quota evidence with the same normalized model windows as ordinary usage", async () => {
 		const { fetch, calls } = recordingFetch(() =>
 			json(200, {

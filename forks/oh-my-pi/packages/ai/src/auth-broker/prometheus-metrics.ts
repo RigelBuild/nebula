@@ -501,7 +501,7 @@ export function renderUsageMetrics(
 		},
 		{
 			name: "llm_usage_reset_credits_available",
-			help: "Saved rate-limit resets an account can redeem right now.",
+			help: 'Saved rate-limit resets an account can redeem right now. The unlabelled series is the total across scopes; scope="full" and scope="fable" break it down.',
 			samples: [],
 		},
 		{

@@ -143,6 +143,23 @@ describe("renderUsageMetrics", () => {
 		expect(empty).toContain(`llm_usage_reset_credits_available{${base},scope="fable"} 0`);
 	});
 
+	test("a report without a scope split emits only the unlabelled total", () => {
+		const out = renderUsageMetrics([codexReport()]);
+		expect(out).toContain(
+			'llm_usage_reset_credits_available{provider="openai-codex",account="acct-codex-9",org="",email="c@example.com"} 3',
+		);
+		expect(out).not.toMatch(/llm_usage_reset_credits_available\{[^}]*scope=/);
+	});
+
+	test("the help text says the unlabelled series is the total across scopes", () => {
+		const out = renderUsageMetrics([
+			{ ...claudeReport(), resetCredits: { availableCount: 1, availableByScope: { full: 1, fable: 0 } } },
+		]);
+		expect(out).toContain(
+			'# HELP llm_usage_reset_credits_available Saved rate-limit resets an account can redeem right now. The unlabelled series is the total across scopes; scope="full" and scope="fable" break it down.',
+		);
+	});
+
 	test('absent status maps to -1, and a windowless limit emits window=""', () => {
 		const out = renderUsageMetrics([codexReport()]);
 		expect(out).toContain(

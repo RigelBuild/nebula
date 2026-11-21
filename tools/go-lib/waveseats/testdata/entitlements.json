@@ -1,0 +1,7 @@
+{
+	"lead": {
+		"revision": 1,
+		"roles": ["build.coordination.lead"],
+		"routing": { "claude": [["team-build"], "shared"] }
+	}
+}

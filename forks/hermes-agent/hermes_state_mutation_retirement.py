@@ -429,8 +429,8 @@ def prune_retired_tombstones(conn, older_than=RETRY_HORIZON_S):
         row = json.loads(raw)
         doomed = [key, RESULT_PREFIX + row['admission_id']]
         # A live session's pruned row keeps its identity pointer past the horizon, so its retry is refused
-        # (``retry_terminal_admission``) and never run again. A deleted session's pointer is reclaimed as before.
-        if retired_in(conn, row['target_session_id']):
+        # and never run again. The pointer goes only with its session row (a deleted session), however it was retired.
+        if conn.execute('SELECT 1 FROM sessions WHERE id=?', (row['target_session_id'],)).fetchone() is None:
             doomed.append(identity_key(row['principal_id'], row['target_session_id'], row['request_id']))
         conn.execute(f"DELETE FROM state_meta WHERE key IN ({','.join('?' * len(doomed))})", doomed)
     conn.execute(f'DELETE FROM state_meta WHERE key GLOB ? AND {_EXPIRED}', (WORKER_PREFIX + '*', cutoff))
@@ -469,26 +469,32 @@ PRUNE_BATCH_LIMIT = 500  # admission rows one prune pass may tombstone; the rest
 
 
 def prunable_terminal_admissions(conn, older_than=RETRY_HORIZON_S, limit=None):
+    """Up to *limit* admission ids ``prune_terminal_admissions`` may tombstone (see the comment above).
+    Pages by target: the tip's age is tested once per target, then that target's rows are read with a
+    SQL ``LIMIT`` for the remaining budget. A pass reads at most *limit* aged rows, not the whole backlog."""
     if limit is None:
         limit = PRUNE_BATCH_LIMIT
-    """Up to *limit* admission ids ``prune_terminal_admissions`` may tombstone (see the comment above).
-    The age test runs here, not in SQL, so *limit* counts only rows that have aged out."""
-    cutoff, tips, ids = time.time() - older_than, {}, []
-    for admission_id, target in conn.execute(_prunable_admissions_sql()).fetchall():
-        if target not in tips:
-            tips[target] = _tip_last_active(conn, target)
-        if tips[target] is not None and tips[target] < cutoff:
-            ids.append(admission_id)
-            if len(ids) >= limit:
-                break
+    cutoff, ids = time.time() - older_than, []
+    targets = [row[0] for row in conn.execute(
+        "SELECT DISTINCT a.target_session_id FROM session_admissions a WHERE a.status = 'terminal' "
+        "ORDER BY a.target_session_id").fetchall()]
+    for target in targets:
+        if len(ids) >= limit:
+            break
+        tip_at = _tip_last_active(conn, target)
+        if tip_at is None or tip_at >= cutoff:
+            continue
+        rows = conn.execute(_prunable_admissions_sql() + " AND a.target_session_id = ? "
+                            "ORDER BY a.seq LIMIT ?", (target, limit - len(ids))).fetchall()
+        ids.extend(row[0] for row in rows)
     return ids
 
 
 def prune_terminal_admissions(conn, older_than=RETRY_HORIZON_S, limit=None):
-    if limit is None:
-        limit = PRUNE_BATCH_LIMIT
     """Tombstone then delete up to *limit* prunable terminal admission rows, in *conn*'s transaction.
     Returns the number pruned. The tombstones are written before the rows they replace go."""
+    if limit is None:
+        limit = PRUNE_BATCH_LIMIT
     from hermes_state_terminal import ADMISSION_PREFIX, identity_key
     from hermes_state_media import retire_media
     ids = prunable_terminal_admissions(conn, older_than, limit)

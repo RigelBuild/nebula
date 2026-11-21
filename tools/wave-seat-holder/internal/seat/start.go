@@ -4,12 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io/fs"
 	"log/slog"
 	"path/filepath"
 	"regexp"
 	"strings"
-	"syscall"
 	"time"
 	"unicode"
 
@@ -142,43 +140,24 @@ func seatAlreadyLive(name string, deps Deps) int {
 	return 4
 }
 
-// writeSeatConfig creates the seat's directory and writes the embedded tmux configuration to <directory>/<name>.conf
+// writeSeatConfig creates the seat's directory and writes the embedded tmux configuration to <name>.conf inside it,
 // at mode 0600. The file sits beside the seat's socket, so no other seat shares it. It returns the file's path.
+//
+// Every step after the mkdir is relative to one open directory handle, so a path swapped for a link after the
+// check cannot redirect the write. The config is recreated, not reopened, so a planted hardlink is never written.
 func writeSeatConfig(deps Deps, directory, name string) (string, error) {
 	if err := deps.Files.Mkdir(directory, 0o700); err != nil {
 		return "", err
 	}
-	if err := checkSeatDirectory(deps.Files, directory); err != nil {
+	dir, err := deps.Files.OpenSeatDir(directory)
+	if err != nil {
 		return "", err
 	}
-	if err := deps.Files.Chmod(directory, 0o700); err != nil {
-		return "", err
-	}
-	path := filepath.Join(directory, name+".conf")
-	if err := deps.Files.WriteFile(path, seatConfig, 0o600); err != nil {
+	defer dir.Close()
+	if err := dir.WriteFile(name+".conf", seatConfig); err != nil {
 		return "", fmt.Errorf("write seat config: %w", err)
 	}
-	return path, nil
-}
-
-// checkSeatDirectory refuses a seat directory that is not a real directory owned by the holder's uid. Lstat does
-// not follow a symlink, so a planted link fails here rather than redirecting the config write.
-func checkSeatDirectory(files Files, directory string) error {
-	info, err := files.Lstat(directory)
-	if err != nil {
-		return err
-	}
-	if !info.IsDir() || info.Mode()&fs.ModeSymlink != 0 {
-		return fmt.Errorf("seat directory %s is not a real directory", directory)
-	}
-	stat, ok := info.Sys().(*syscall.Stat_t)
-	if !ok {
-		return fmt.Errorf("seat directory %s has no owner information", directory)
-	}
-	if uid := files.Getuid(); int(stat.Uid) != uid {
-		return fmt.Errorf("seat directory %s is owned by uid %d, not %d", directory, stat.Uid, uid)
-	}
-	return nil
+	return filepath.Join(directory, name+".conf"), nil
 }
 
 // envOr returns the variable's value when it is set, even when empty. It falls back only when unset.

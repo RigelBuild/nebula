@@ -154,16 +154,9 @@ func fakeFiles(fake *fakeHolder, options fakeOptions, live map[string]bool, chil
 			fake.mkdirs = append(fake.mkdirs, recordedMkdir{path: path, perm: perm})
 			return nil
 		},
-		WriteFile: func(path string, data []byte, perm fs.FileMode) error {
-			if options.writeErr != nil {
-				return options.writeErr
-			}
-			fake.writes = append(fake.writes, recordedWrite{path: path, data: append([]byte(nil), data...), perm: perm})
-			return nil
+		OpenSeatDir: func(path string) (SeatDir, error) {
+			return fakeSeatDir{dir: path, fake: fake, options: options}, nil
 		},
-		Lstat:  func(string) (fs.FileInfo, error) { return ownedSeatDirInfo(), nil },
-		Chmod:  func(string, fs.FileMode) error { return nil },
-		Getuid: func() int { return fakeUID },
 		Readdir: func(string) ([]string, error) {
 			if options.socketNames == nil {
 				return nil, fs.ErrNotExist

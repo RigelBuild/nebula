@@ -14,14 +14,19 @@ type CommandResult = pane.Result
 
 // Files is the filesystem and socket access the holder uses.
 type Files struct {
-	Mkdir     func(path string, perm fs.FileMode) error
-	Lstat     func(path string) (fs.FileInfo, error)
-	Chmod     func(path string, perm fs.FileMode) error
-	Getuid    func() int
-	Readdir   func(path string) ([]string, error)
-	ReadText  func(path string) (string, error)
-	WriteFile func(path string, data []byte, perm fs.FileMode) error
-	Connect   func(ctx context.Context, path string) bool
+	Mkdir    func(path string, perm fs.FileMode) error
+	Readdir  func(path string) ([]string, error)
+	ReadText func(path string) (string, error)
+	Connect  func(ctx context.Context, path string) bool
+	// OpenSeatDir opens the seat directory and checks that it is a real directory owned by the holder's uid.
+	OpenSeatDir func(path string) (SeatDir, error)
+}
+
+// SeatDir is an open seat directory. Every operation is relative to its file descriptor, never a path.
+type SeatDir interface {
+	// WriteFile replaces name inside the directory with data at mode 0600, refusing any link or non-regular file.
+	WriteFile(name string, data []byte) error
+	Close() error
 }
 
 // Deps is every outside effect the holder uses, so tests can replace each one.

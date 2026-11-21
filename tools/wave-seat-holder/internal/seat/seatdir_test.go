@@ -8,9 +8,9 @@ import (
 	"testing"
 )
 
-// realFiles is the production filesystem, so these tests exercise real modes, symlinks and ownership.
+// realFiles is the production filesystem, so these tests exercise real modes, symlinks, hardlinks and ownership.
 func realFiles() Files {
-	return Files{Mkdir: os.MkdirAll, Lstat: os.Lstat, Chmod: os.Chmod, Getuid: os.Getuid, WriteFile: writePrivateFile}
+	return Files{Mkdir: os.MkdirAll, OpenSeatDir: openSeatDirFiles}
 }
 
 // modeOf returns the permission bits of path, following no symlink.
@@ -58,7 +58,24 @@ func TestSeatDirectorySymlinkIsRefused(t *testing.T) {
 	}
 }
 
-func TestSeatConfigSymlinkPlantedAtTheConfigPathIsRefusedAndTargetUntouched(t *testing.T) {
+func TestSeatDirectoryOwnedByAnotherUIDIsRefused(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "seats")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	restore := currentUID
+	currentUID = func() int { return os.Getuid() + 1 }
+	t.Cleanup(func() { currentUID = restore })
+	deps := Deps{Files: realFiles()}
+	if _, err := writeSeatConfig(deps, dir, "seat"); err == nil {
+		t.Fatal("writeSeatConfig in a directory owned by another uid returned nil error")
+	}
+	if _, err := os.Lstat(filepath.Join(dir, "seat.conf")); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("seat.conf was written into a directory owned by another uid: %v", err)
+	}
+}
+
+func TestSeatConfigSymlinkPlantedAtTheConfigPathIsReplacedAndTargetUntouched(t *testing.T) {
 	root := t.TempDir()
 	dir := filepath.Join(root, "seats")
 	if err := os.Mkdir(dir, 0o700); err != nil {
@@ -73,8 +90,8 @@ func TestSeatConfigSymlinkPlantedAtTheConfigPathIsRefusedAndTargetUntouched(t *t
 		t.Fatal(err)
 	}
 	deps := Deps{Files: realFiles()}
-	if _, err := writeSeatConfig(deps, dir, "seat"); err == nil {
-		t.Fatal("writeSeatConfig over a planted symlink returned nil error")
+	if _, err := writeSeatConfig(deps, dir, "seat"); err != nil {
+		t.Fatalf("writeSeatConfig: %v", err)
 	}
 	got, err := os.ReadFile(victim)
 	if err != nil {
@@ -82,9 +99,10 @@ func TestSeatConfigSymlinkPlantedAtTheConfigPathIsRefusedAndTargetUntouched(t *t
 	}
 	assertDeepEqual(t, string(got), original)
 	assertDeepEqual(t, modeOf(t, victim), fs.FileMode(0o644))
+	assertDeepEqual(t, modeOf(t, filepath.Join(dir, "seat.conf")), fs.FileMode(0o600))
 }
 
-func TestSeatConfigHardlinkPlantedAtTheConfigPathIsRefusedAndTargetUntouched(t *testing.T) {
+func TestSeatConfigHardlinkPlantedAtTheConfigPathIsReplacedAndTargetUntouched(t *testing.T) {
 	root := t.TempDir()
 	dir := filepath.Join(root, "seats")
 	if err := os.Mkdir(dir, 0o700); err != nil {
@@ -99,8 +117,8 @@ func TestSeatConfigHardlinkPlantedAtTheConfigPathIsRefusedAndTargetUntouched(t *
 		t.Fatal(err)
 	}
 	deps := Deps{Files: realFiles()}
-	if _, err := writeSeatConfig(deps, dir, "seat"); err == nil {
-		t.Fatal("writeSeatConfig over a planted hardlink returned nil error")
+	if _, err := writeSeatConfig(deps, dir, "seat"); err != nil {
+		t.Fatalf("writeSeatConfig: %v", err)
 	}
 	got, err := os.ReadFile(victim)
 	if err != nil {
@@ -108,18 +126,25 @@ func TestSeatConfigHardlinkPlantedAtTheConfigPathIsRefusedAndTargetUntouched(t *
 	}
 	assertDeepEqual(t, string(got), original)
 	assertDeepEqual(t, modeOf(t, victim), fs.FileMode(0o644))
+	assertDeepEqual(t, modeOf(t, filepath.Join(dir, "seat.conf")), fs.FileMode(0o600))
 }
 
-func TestWritePrivateFileTruncatesAnExistingLooseFileToPrivateMode(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "seat.conf")
+func TestWriteSeatFileTruncatesAnExistingLooseFileToPrivateMode(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "seat.conf")
 	if err := os.WriteFile(path, []byte("an old, longer, looser config\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Chmod(path, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := writePrivateFile(path, seatConfig, 0o600); err != nil {
-		t.Fatalf("writePrivateFile: %v", err)
+	seatDir, err := openSeatDirectory(dir)
+	if err != nil {
+		t.Fatalf("openSeatDirectory: %v", err)
+	}
+	defer seatDir.Close()
+	if err := seatDir.WriteFile("seat.conf", seatConfig); err != nil {
+		t.Fatalf("WriteFile: %v", err)
 	}
 	got, err := os.ReadFile(path)
 	if err != nil {

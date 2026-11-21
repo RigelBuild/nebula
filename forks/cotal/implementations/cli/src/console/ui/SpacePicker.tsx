@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Box, Text, useApp, useInput, useStdout } from "ink";
 import { listSpaces, deleteSpace, type SpaceAuth, type SpaceInfo } from "@cotal-ai/core";
 import { findMesh, getSpaceAuth, workspaceSecretStore } from "@cotal-ai/workspace";
@@ -62,18 +62,22 @@ export function SpacePicker({
 
   const list = spaces ?? [];
   const { index: selClamped, up, down } = useListCursor(list.length);
+  // Ink binds the key handler after paint; read the latest rows at press time.
+  const latest = useRef(list);
+  latest.current = list;
+  const latestIndex = useRef(selClamped);
+  latestIndex.current = selClamped;
 
-  useInput(
-    (input, key) => {
-      if (input === "q") return exit();
-      if (input === "r") return setNonce((n) => n + 1);
-      if (input === "D" && canWrite && list.length) return setDel(list[selClamped]);
-      if (key.upArrow || input === "k") return up();
-      if (key.downArrow || input === "j") return down();
-      if (key.return && list.length) return onSelect(list[selClamped].space);
-    },
-    { isActive: !del }, // the Confirm overlay owns input while a deletion is pending
-  );
+  useInput((input, key) => {
+    const rows = latest.current;
+    const index = latestIndex.current;
+    if (input === "q") return exit();
+    if (input === "r") return setNonce((n) => n + 1);
+    if (input === "D" && canWrite && rows.length) return setDel(rows[index]);
+    if (key.upArrow || input === "k") return up();
+    if (key.downArrow || input === "j") return down();
+    if (key.return && rows.length) return onSelect(rows[index].space);
+  }, { isActive: !del }); // the Confirm overlay owns input while a deletion is pending
 
   if (del)
     return (

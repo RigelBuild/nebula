@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"strings"
 	"testing"
 )
 
@@ -75,22 +76,27 @@ func TestLinkTableMatchesAgentConfig(t *testing.T) {
 }
 
 func TestLoadLinksRejectsInvalid(t *testing.T) {
-	for _, tc := range []struct{ name, input string }{
-		{"empty source", `links: [{src: "", dst: ".x"}]`},
-		{"empty destination", `links: [{src: "x", dst: ""}]`},
-		{"unknown field", `links: [{src: "x", dst: ".x", extra: true}]`},
-		{"source escapes repo root", `links: [{src: "../../etc/passwd", dst: ".x"}]`},
-		{"destination escapes profile", `links: [{src: "x", dst: "../../evil"}]`},
-		{"absolute destination", `links: [{src: "x", dst: "/etc/passwd"}]`},
-		{"appdata destination escapes", `links: [{src: "x", dst: "%APPDATA%/../../evil"}]`},
+	for _, tc := range []struct{ name, input, wantErr string }{
+		{"empty source", `links: [{src: "", dst: ".x"}]`, "validate link table"},
+		{"empty destination", `links: [{src: "x", dst: ""}]`, "validate link table"},
+		{"unknown field", `links: [{src: "x", dst: ".x", extra: true}]`, "validate link table"},
+		{"source escapes repo root", `links: [{src: "../../etc/passwd", dst: ".x"}]`, "link source must be a path inside --repo-root"},
+		{"destination escapes profile", `links: [{src: "x", dst: "../../evil"}]`, "link destination must stay inside its profile root"},
+		{"absolute destination", `links: [{src: "x", dst: "/etc/passwd"}]`, "link destination must stay inside its profile root"},
+		{"appdata destination escapes", `links: [{src: "x", dst: "%APPDATA%/../../evil"}]`, "link destination must stay inside its profile root"},
+		{"appdata destination escapes one level", `links: [{src: "x", dst: "%APPDATA%/../evil"}]`, "link destination must stay inside its profile root"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "links.cue")
 			if err := os.WriteFile(path, []byte(tc.input), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := loadLinks(path); err == nil {
+			_, err := loadLinks(path)
+			if err == nil {
 				t.Fatal("loadLinks() succeeded on an invalid link table")
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("loadLinks() error = %v, want substring %q", err, tc.wantErr)
 			}
 		})
 	}

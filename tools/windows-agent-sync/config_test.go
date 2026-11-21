@@ -61,23 +61,28 @@ func TestLoadLayoutAcceptsValid(t *testing.T) {
 
 func TestLoadLayoutRejectsInvalid(t *testing.T) {
 	for _, tc := range []struct {
-		name   string
-		source string
+		name    string
+		source  string
+		wantErr string
 	}{
-		{"parent escape", layoutSource(withField("pins", `"../x"`))},
-		{"absolute path", layoutSource(withField("mcp", `"/abs"`))},
-		{"nested parent escape", layoutSource(withField("secretMap", `"a/../../x"`))},
-		{"empty value", layoutSource(withField("linkTable", `""`))},
-		{"unknown field", layoutSource(withField("extra", `"x"`))},
-		{"missing field", layoutSource(withField("nebulaLock", ""))},
+		{"parent escape", layoutSource(withField("pins", `"../x"`)), "layout pins must be a path inside --repo-root"},
+		{"absolute path", layoutSource(withField("mcp", `"/abs"`)), "layout mcp must be a path inside --repo-root"},
+		{"nested parent escape", layoutSource(withField("secretMap", `"a/../../x"`)), "layout secretMap must be a path inside --repo-root"},
+		{"empty value", layoutSource(withField("linkTable", `""`)), "validate layout"},
+		{"unknown field", layoutSource(withField("extra", `"x"`)), "validate layout"},
+		{"missing field", layoutSource(withField("nebulaLock", "")), "validate layout"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "layout.cue")
 			if err := os.WriteFile(path, []byte(tc.source), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := loadLayout(path); err == nil {
+			_, err := loadLayout(path)
+			if err == nil {
 				t.Fatalf("loadLayout() accepted %q", tc.source)
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("loadLayout() error = %v, want substring %q", err, tc.wantErr)
 			}
 		})
 	}

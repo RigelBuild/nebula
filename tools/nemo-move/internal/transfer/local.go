@@ -202,11 +202,8 @@ func verifyAsRuntimeUser(ctx context.Context, root string, manifest Manifest, la
 	if err := verifyGoogleTokens(root, lay); err != nil {
 		return err
 	}
-	for _, row := range lay.Rows {
-		if row.Kind != layout.Copy {
-			continue
-		}
-		if err := verifyJujutsuRepositories(ctx, filepath.Join(root, filepath.FromSlash(strings.TrimPrefix(row.Dest, "/"))), run); err != nil {
+	for _, dest := range topLevelCopyDests(lay) {
+		if err := verifyJujutsuRepositories(ctx, root, strings.TrimPrefix(dest, "/"), run); err != nil {
 			return err
 		}
 	}
@@ -257,19 +254,28 @@ func localCommand(ctx context.Context, name string, args ...string) (string, err
 	return output.String(), nil
 }
 
-func verifyJujutsuRepositories(ctx context.Context, root string, run CommandRunner) error {
-	if _, err := os.Stat(root); errors.Is(err, os.ErrNotExist) {
+func verifyJujutsuRepositories(ctx context.Context, root, dest string, run CommandRunner) error {
+	walkRoot := filepath.Join(root, filepath.FromSlash(dest))
+	if _, err := os.Stat(walkRoot); errors.Is(err, os.ErrNotExist) {
 		return nil
 	} else if err != nil {
 		return fmt.Errorf("stat Nemo repositories: %w", err)
 	}
-	return filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
+	return filepath.WalkDir(walkRoot, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return fmt.Errorf("walk Nemo repositories: %w", walkErr)
 		}
 		if !entry.IsDir() {
 			return nil
 		}
+		relative, err := filepath.Rel(root, path)
+		if err != nil {
+			return fmt.Errorf("make Nemo repository path relative: %w", err)
+		}
+		if rel := filepath.ToSlash(relative); rel == dataRoot+"/lost+found" || rel == rewriteTempRoot {
+			return filepath.SkipDir
+		}
+
 		if _, err := os.Stat(filepath.Join(path, ".jj")); err == nil {
 			if _, err := run(ctx, "jj", "status", "--repository", path); err != nil {
 				return fmt.Errorf("jj status in %s: %w", path, err)
@@ -278,6 +284,25 @@ func verifyJujutsuRepositories(ctx context.Context, root string, run CommandRunn
 		}
 		return nil
 	})
+}
+
+// topLevelCopyDests returns each copy dest that is not nested under another
+// copy dest, so a parent walk covers its children once.
+func topLevelCopyDests(lay layout.Layout) []string {
+	var dests []string
+	for _, row := range lay.Rows {
+		if row.Kind != layout.Copy || slices.ContainsFunc(dests, func(d string) bool { return isWithin(row.Dest, d) }) {
+			continue
+		}
+		dests = slices.DeleteFunc(dests, func(d string) bool { return isWithin(d, row.Dest) })
+		dests = append(dests, row.Dest)
+	}
+	return dests
+}
+
+// isWithin reports whether path is dir or lies under it.
+func isWithin(path, dir string) bool {
+	return path == dir || strings.HasPrefix(path, dir+"/")
 }
 
 func ReadArchiveManifest(reader io.Reader) (Manifest, error) {

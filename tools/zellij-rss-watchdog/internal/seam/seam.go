@@ -23,6 +23,8 @@ type Config struct {
 	LogDirectory string
 	// JournalUnit is the user systemd unit whose last ten minutes of journal are captured.
 	JournalUnit string
+	// ClientTmpDir is the existing directory the zellij client-list command uses as TMPDIR.
+	ClientTmpDir string
 }
 
 // UserLogEntry is one regular file in the zellij log directory.

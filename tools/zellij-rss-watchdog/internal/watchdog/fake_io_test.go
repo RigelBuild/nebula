@@ -54,6 +54,7 @@ func newFakeIO() *fakeIO {
 			Session:        testSession,
 			LogDirectory:   "/tmp/example-log",
 			JournalUnit:    testJournalUnit,
+			ClientTmpDir:   "/example/client-tmp",
 		},
 		clockFn:    func() int64 { return fakeNowMS },
 		identityFn: func() string { return "123:456" },
@@ -215,7 +216,7 @@ func (f *fakeIO) link(path string) {
 
 // Example values only: the operator sets the real user and session with required flags.
 const (
-	testUser    = "example-user"
+	testUser        = "example-user"
 	testSession     = "example-session"
 	testJournalUnit = "example-unit"
 )

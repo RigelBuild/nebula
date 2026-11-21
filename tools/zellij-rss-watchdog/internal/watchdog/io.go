@@ -32,7 +32,7 @@ type systemIO struct {
 
 func newSystemIO(cfg seam.Config, stdout, stderr io.Writer) *systemIO {
 	return &systemIO{
-		cfg: cfg,
+		cfg:    cfg,
 		stdout: stdout,
 		stderr: stderr,
 	}

@@ -80,7 +80,7 @@ func sessionServerIdentity(procRoot, runtimeDir, session string, fsys procReader
 // start time is stable across a re-check. A read error ends this pid's check; only a
 // vanished process is not incomplete.
 func sessionPIDIdentity(procRoot, pid string, socket *regexp.Regexp, fsys procReader) (identity string, ok, incomplete bool) {
-	isDevbox := func() (bool, error) {
+	isSessionServer := func() (bool, error) {
 		cmdline, err := fsys.readText(fmt.Sprintf("%s/%s/cmdline", procRoot, pid))
 		if err != nil {
 			return false, err
@@ -96,7 +96,7 @@ func sessionPIDIdentity(procRoot, pid string, socket *regexp.Regexp, fsys procRe
 		}
 		return StatStartTime(stat), nil
 	}
-	match, err := isDevbox()
+	match, err := isSessionServer()
 	if err != nil {
 		return "", false, !exited(err)
 	}
@@ -107,7 +107,7 @@ func sessionPIDIdentity(procRoot, pid string, socket *regexp.Regexp, fsys procRe
 	if err != nil {
 		return "", false, !exited(err)
 	}
-	match, err = isDevbox()
+	match, err = isSessionServer()
 	if err != nil {
 		return "", false, !exited(err)
 	}

@@ -94,7 +94,7 @@ func captureUnitJournal(ctx context.Context, io seam.IO, directory string) error
 		"--no-pager",
 	})
 	if err != nil {
-		return err
+		return fmt.Errorf("journal for unit %s: %w", io.Config().JournalUnit, err)
 	}
 	return io.WriteText(filepath.Join(directory, "unit-journal.txt"), result.Stdout)
 }
@@ -104,7 +104,7 @@ func captureZellijClients(ctx context.Context, io seam.IO, directory string) err
 	session := io.Config().Session
 	result, err := RunAsUser(ctx, io, []string{
 		EnvCommand,
-		"TMPDIR=" + io.Config().RuntimeDir + "/zellij-rss-watchdog",
+		"TMPDIR=" + io.Config().ClientTmpDir,
 		"ZELLIJ_SESSION_NAME=" + session,
 		"XDG_RUNTIME_DIR=" + io.Config().RuntimeDir,
 		"zellij",

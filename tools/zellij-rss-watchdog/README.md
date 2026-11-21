@@ -1,14 +1,14 @@
 # zellij-rss-watchdog
 
-Captures diagnostics when a zellij server exceeds its rolling RSS baseline. It samples one server, identified by the user that owns it and its session name. `--journal-unit` names the user systemd unit whose journal goes into each capture. All three are required flags with no default.
+Captures diagnostics when a zellij server exceeds its rolling RSS baseline. It samples one server, identified by the user that owns it and its session name. `--journal-unit` names the user systemd unit whose journal goes into each capture. `--client-tmpdir` names an existing directory, writable by that user, used as `TMPDIR` for the zellij client-list command; the tool exits 2 if it is missing. All four are required flags with no default.
 
 ## Usage
 
 ```bash
-zellij-rss-watchdog --user <account> --session <session-name> --journal-unit <unit>
+zellij-rss-watchdog --user <account> --session <session-name> --journal-unit <unit> --client-tmpdir <dir>
 ```
 
-Set `XDG_RUNTIME_DIR` when the runtime directory is not `/run/user/<uid>`. Set `WAVE_SUPERVISOR_RELAUNCH` to an absolute path of the relaunch tool; without it, restart requests are logged and skipped.
+The tool runs as root. The zellij log directory (`/tmp/zellij-<uid>/zellij-log`) and the default runtime directory (`/run/user/<uid>`) use the uid of `--user`. Set `XDG_RUNTIME_DIR` when the runtime directory differs. Set `WAVE_SUPERVISOR_RELAUNCH` to an absolute path of the relaunch tool; without it, restart requests are logged and skipped.
 
 Captures are written under `/var/lib/zellij-rss-watchdog`, the newest three are kept, directories are mode 0750 and files 0640. Raw memory dumps (`mapping-*.raw`) stay 0600 until they are reduced and deleted. On each start, the tool deletes raw dumps left by a killed capture and re-applies these modes to older captures.
 

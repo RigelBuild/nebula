@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"os/user"
 	"path/filepath"
 	"time"
 
@@ -18,7 +19,7 @@ import (
 
 // Run is the testable entry point: it samples until ctx is cancelled and returns an exit code.
 func Run(ctx context.Context, args []string, getenv func(string) string, stdout, stderr io.Writer) int {
-	cfg, err := parseConfig(args, getenv)
+	cfg, err := parseConfig(args, getenv, lookupUID)
 	if err != nil {
 		if _, werr := fmt.Fprintf(stderr, "zellij-rss-watchdog: %v\n", err); werr != nil {
 			slog.Error("writing usage error", "error", werr)
@@ -28,40 +29,64 @@ func Run(ctx context.Context, args []string, getenv func(string) string, stdout,
 	return runWatchdog(ctx, newSystemIO(cfg, stdout, stderr))
 }
 
-// parseConfig reads the required --user, --session and --journal-unit flags. None has a
-// default: the user, session name and journal unit belong to the operator's host. The log directory follows the
-// uid, and the runtime dir follows XDG_RUNTIME_DIR, with the uid as the fallback.
-func parseConfig(args []string, getenv func(string) string) (seam.Config, error) {
+// lookupUID returns the numeric uid of the named account.
+func lookupUID(name string) (string, error) {
+	account, err := user.Lookup(name)
+	if err != nil {
+		return "", fmt.Errorf("looking up --user %q: %w", name, err)
+	}
+	return account.Uid, nil
+}
+
+// parseConfig reads the required --user, --session, --journal-unit and --client-tmpdir
+// flags. None has a default: they belong to the operator's host. The tool runs as root,
+// so the log directory and the runtime-dir fallback follow the uid of --user, not the
+// process uid. XDG_RUNTIME_DIR overrides the runtime dir. --client-tmpdir must exist.
+func parseConfig(args []string, getenv func(string) string, uidOf func(string) (string, error)) (seam.Config, error) {
 	flags := flag.NewFlagSet("zellij-rss-watchdog", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
-	user := flags.String("user", "", "account that owns the zellij server (required)")
+	account := flags.String("user", "", "account that owns the zellij server (required)")
 	session := flags.String("session", "", "zellij session name whose server is sampled (required)")
 	journal := flags.String("journal-unit", "", "user systemd unit whose journal is captured (required)")
+	clientTmp := flags.String("client-tmpdir", "", "existing directory used as TMPDIR for the zellij client-list command (required)")
 	if err := flags.Parse(args); err != nil {
 		return seam.Config{}, fmt.Errorf("parsing flags: %w", err)
 	}
 	if flags.NArg() != 0 {
 		return seam.Config{}, fmt.Errorf("unexpected arguments: %v", flags.Args())
 	}
-	if *user == "" || *session == "" || *journal == "" {
-		return seam.Config{}, errors.New("--user, --session and --journal-unit are required")
+	if *account == "" || *session == "" || *journal == "" || *clientTmp == "" {
+		return seam.Config{}, errors.New(requiredFlagsMessage)
 	}
-	uid := os.Getuid()
+	info, err := os.Stat(*clientTmp)
+	if err != nil {
+		return seam.Config{}, fmt.Errorf("--client-tmpdir: %w", err)
+	}
+	if !info.IsDir() {
+		return seam.Config{}, fmt.Errorf("--client-tmpdir %s is not a directory", *clientTmp)
+	}
+	uid, err := uidOf(*account)
+	if err != nil {
+		return seam.Config{}, err
+	}
 	runtimeDir := getenv("XDG_RUNTIME_DIR")
 	if runtimeDir == "" {
-		runtimeDir = fmt.Sprintf("/run/user/%d", uid)
+		runtimeDir = "/run/user/" + uid
 	}
 	return seam.Config{
 		ProcRoot:       "/proc",
 		RuntimeDir:     runtimeDir,
 		CaptureRoot:    "/var/lib/zellij-rss-watchdog",
 		RelaunchBinary: getenv("WAVE_SUPERVISOR_RELAUNCH"),
-		User:           *user,
+		User:           *account,
 		Session:        *session,
-		LogDirectory:   fmt.Sprintf("/tmp/zellij-%d/zellij-log", uid),
+		LogDirectory:   "/tmp/zellij-" + uid + "/zellij-log",
 		JournalUnit:    *journal,
+		ClientTmpDir:   *clientTmp,
 	}, nil
 }
+
+const requiredFlagsMessage = "--user, --session, --journal-unit and --client-tmpdir are required"
 
 // runWatchdog samples the session server every sampleIntervalMS until ctx is cancelled.
 func runWatchdog(ctx context.Context, io seam.IO) int {

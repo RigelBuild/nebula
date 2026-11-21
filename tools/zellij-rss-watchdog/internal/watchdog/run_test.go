@@ -5,7 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -27,43 +27,87 @@ type cancelledSleepIO struct {
 
 func (f *cancelledSleepIO) Sleep(context.Context, time.Duration) error { return context.Canceled }
 
-func TestRunRejectsMissingOrExtraFlagsWithExitTwo(t *testing.T) {
+func TestRunRejectsBadFlagsWithExitTwo(t *testing.T) {
+	tmp := t.TempDir()
+	missing := filepath.Join(tmp, "absent")
+	required := "zellij-rss-watchdog: " + requiredFlagsMessage + "\n"
 	cases := []struct {
 		name string
 		args []string
 		want string
 	}{
-		{name: "no flags", args: nil, want: "--user, --session and --journal-unit are required"},
-		{name: "missing user", args: []string{"--session", "example-session", "--journal-unit", "example-unit"}, want: "--user, --session and --journal-unit are required"},
-		{name: "missing session", args: []string{"--user", "example-user", "--journal-unit", "example-unit"}, want: "--user, --session and --journal-unit are required"},
-		{name: "missing journal unit", args: []string{"--user", "example-user", "--session", "example-session"}, want: "--user, --session and --journal-unit are required"},
-		{name: "positional argument", args: []string{"--user", "example-user", "--session", "example-session", "extra"}, want: "unexpected arguments"},
+		{name: "no flags", args: nil, want: required},
+		{name: "missing user", args: []string{"--session", "s", "--journal-unit", "u", "--client-tmpdir", tmp}, want: required},
+		{name: "missing session", args: []string{"--user", "a", "--journal-unit", "u", "--client-tmpdir", tmp}, want: required},
+		{name: "missing journal unit", args: []string{"--user", "a", "--session", "s", "--client-tmpdir", tmp}, want: required},
+		{name: "missing client tmpdir", args: []string{"--user", "a", "--session", "s", "--journal-unit", "u"}, want: required},
+		{name: "client tmpdir absent", args: []string{"--user", "a", "--session", "s", "--journal-unit", "u", "--client-tmpdir", missing}, want: "zellij-rss-watchdog: --client-tmpdir: stat " + missing + ": no such file or directory\n"},
+		{name: "unknown flag", args: []string{"--once"}, want: "zellij-rss-watchdog: parsing flags: flag provided but not defined: -once\n"},
+		{name: "positional argument", args: []string{"--user", "a", "extra"}, want: "zellij-rss-watchdog: unexpected arguments: [extra]\n"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			var stderr bytes.Buffer
-			code := Run(context.Background(), tc.args, func(string) string { return "" }, &bytes.Buffer{}, &stderr)
+			code := Run(t.Context(), tc.args, func(string) string { return "" }, &bytes.Buffer{}, &stderr)
 			if code != 2 {
 				t.Fatalf("Run returned %d, want 2", code)
 			}
-			if !strings.Contains(stderr.String(), tc.want) {
-				t.Fatalf("stderr = %q, want it to contain %q", stderr.String(), tc.want)
+			if stderr.String() != tc.want {
+				t.Fatalf("stderr = %q, want %q", stderr.String(), tc.want)
 			}
 		})
 	}
 }
 
-func TestParseConfigBuildsTheSessionPaths(t *testing.T) {
-	cfg, err := parseConfig([]string{"--user", testUser, "--session", testSession, "--journal-unit", testJournalUnit}, func(string) string { return "" })
-	if err != nil {
-		t.Fatalf("parseConfig: %v", err)
+// TestParseConfigBuildsPathsFromTheUserUID checks the paths follow the uid of --user,
+// not the process uid: the tool runs as root.
+func TestParseConfigBuildsPathsFromTheUserUID(t *testing.T) {
+	tmp := t.TempDir()
+	uidOf := func(name string) (string, error) {
+		if name != testUser {
+			return "", fmt.Errorf("unexpected user %q", name)
+		}
+		return "4242", nil
 	}
-	if cfg.User != testUser || cfg.Session != testSession || cfg.JournalUnit != testJournalUnit {
-		t.Fatalf("user, session = %q, %q", cfg.User, cfg.Session)
+	args := []string{"--user", testUser, "--session", testSession, "--journal-unit", testJournalUnit, "--client-tmpdir", tmp}
+	cases := []struct {
+		name        string
+		xdg         string
+		wantRuntime string
+	}{
+		{name: "XDG_RUNTIME_DIR unset", xdg: "", wantRuntime: "/run/user/4242"},
+		{name: "XDG_RUNTIME_DIR set", xdg: "/example/runtime", wantRuntime: "/example/runtime"},
 	}
-	want := fmt.Sprintf("/tmp/zellij-%d/zellij-log", os.Getuid())
-	if cfg.LogDirectory != want {
-		t.Fatalf("LogDirectory = %q, want %q", cfg.LogDirectory, want)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			getenv := func(key string) string {
+				if key == "XDG_RUNTIME_DIR" {
+					return tc.xdg
+				}
+				return ""
+			}
+			cfg, err := parseConfig(args, getenv, uidOf)
+			if err != nil {
+				t.Fatalf("parseConfig: %v", err)
+			}
+			if cfg.User != testUser || cfg.Session != testSession || cfg.JournalUnit != testJournalUnit || cfg.ClientTmpDir != tmp {
+				t.Fatalf("cfg = %+v", cfg)
+			}
+			if cfg.LogDirectory != "/tmp/zellij-4242/zellij-log" {
+				t.Fatalf("LogDirectory = %q, want /tmp/zellij-4242/zellij-log", cfg.LogDirectory)
+			}
+			if cfg.RuntimeDir != tc.wantRuntime {
+				t.Fatalf("RuntimeDir = %q, want %q", cfg.RuntimeDir, tc.wantRuntime)
+			}
+		})
+	}
+}
+
+func TestParseConfigFailsForAnUnknownUser(t *testing.T) {
+	args := []string{"--user", "example-absent-user", "--session", testSession, "--journal-unit", testJournalUnit, "--client-tmpdir", t.TempDir()}
+	_, err := parseConfig(args, func(string) string { return "" }, lookupUID)
+	if err == nil || !strings.Contains(err.Error(), `looking up --user "example-absent-user"`) {
+		t.Fatalf("err = %v, want a --user lookup failure", err)
 	}
 }
 

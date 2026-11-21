@@ -12,8 +12,8 @@ import (
 const (
 	testProcRoot   = "/proc"
 	testRuntimeDir = "/run/user/1000"
-	sessionServer   = "/run/user/1000/zellij/contract_version_1/example-session"
-	testSession     = "example-session"
+	sessionServer  = "/run/user/1000/zellij/contract_version_1/example-session"
+	testSession    = "example-session"
 )
 
 // fakeProc serves /proc reads from a map keyed by path. A key mapped to an error returns it.

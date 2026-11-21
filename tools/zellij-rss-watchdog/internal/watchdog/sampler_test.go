@@ -373,7 +373,7 @@ func TestUserOwnedCommandsUseExactArgvAndEnvironment(t *testing.T) {
 		},
 		{
 			"-u", "example-user", "--", "timeout", "--kill-after=2", "25",
-			"env", "TMPDIR=/run/user/1000/zellij-rss-watchdog", "ZELLIJ_SESSION_NAME=example-session", "XDG_RUNTIME_DIR=/run/user/1000",
+			"env", "TMPDIR=/example/client-tmp", "ZELLIJ_SESSION_NAME=example-session", "XDG_RUNTIME_DIR=/run/user/1000",
 			"zellij", "--session", "example-session", "action", "list-clients",
 		},
 	}

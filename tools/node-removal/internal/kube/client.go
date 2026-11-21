@@ -67,7 +67,16 @@ func newInClusterClient(getenv func(string) string, fsys fs.FS) (Client, error) 
 	return &inClusterClient{
 		base: "https://" + net.JoinHostPort(host, port),
 		fsys: fsys,
-		http: &http.Client{Transport: transport},
+		http: &http.Client{
+			Transport: transport,
+			// Following a redirect would resend the service-account token to whatever
+			// host the apiserver names. Go strips Authorization only when the host
+			// changes, so a redirect to another port would still leak it. Return the
+			// 3xx instead; the non-2xx path reports it.
+			CheckRedirect: func(*http.Request, []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		},
 	}, nil
 }
 

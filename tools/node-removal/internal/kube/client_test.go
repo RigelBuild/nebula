@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -208,5 +209,63 @@ func TestMissingTokenFailsTheRequestNotTheConstructor(t *testing.T) {
 	case got := <-seen:
 		t.Fatalf("request reached the apiserver: %+v", got)
 	default:
+	}
+}
+
+// TestRequestDoesNotFollowRedirects: a 3xx from the apiserver must not send the
+// service-account token to the redirect target. The client returns the 3xx as its
+// response, so the caller's non-2xx path reports it.
+func TestRequestDoesNotFollowRedirects(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name   string
+		status int
+	}{
+		{name: "301 moved permanently", status: http.StatusMovedPermanently},
+		{name: "302 found", status: http.StatusFound},
+		{name: "307 temporary redirect", status: http.StatusTemporaryRedirect},
+		{name: "308 permanent redirect", status: http.StatusPermanentRedirect},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			var targetRequests, targetAuthorized atomic.Int32
+			target := httptest.NewTLSServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+				targetRequests.Add(1)
+				if r.Header.Get("Authorization") != "" {
+					targetAuthorized.Add(1)
+				}
+			}))
+			t.Cleanup(target.Close)
+			redirector := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				http.Redirect(w, r, target.URL+r.URL.Path, tt.status)
+			}))
+			t.Cleanup(redirector.Close)
+
+			const token = "service-account-token"
+			dir := t.TempDir()
+			// The CA bundle trusts both servers, so a followed redirect reaches the
+			// target instead of failing the TLS handshake.
+			writeFile(t, dir, "ca.crt", append(serverCA(redirector), serverCA(target)...))
+			writeFile(t, dir, "token", []byte(token))
+			client, err := newInClusterClient(serverEnv(t, redirector), os.DirFS(dir))
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			resp, err := client.Post("/api/v1/namespaces/ns/pods/p/eviction", map[string]any{"unschedulable": true})
+			if n := targetRequests.Load(); n != 0 {
+				t.Errorf("redirect target received %d requests, %d with Authorization; want 0", n, targetAuthorized.Load())
+			}
+			if err != nil {
+				t.Fatalf("Post() error = %v, want the %d returned as a response", err, tt.status)
+			}
+			if resp.Status != tt.status || resp.OK() {
+				t.Fatalf("status = %d, want %d as a non-2xx response", resp.Status, tt.status)
+			}
+			if strings.Contains(string(resp.Body), token) {
+				t.Errorf("response body %q contains the bearer token", resp.Body)
+			}
+		})
 	}
 }

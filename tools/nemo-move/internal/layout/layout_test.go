@@ -1,6 +1,7 @@
 package layout
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -89,6 +90,18 @@ func TestFromJSONRejectsBadAccountName(t *testing.T) {
 		}
 		if _, err := FromJSON(text); err == nil {
 			t.Fatalf("FromJSON accepted account %q", account)
+		}
+	}
+}
+
+// Parse is the path the export uses (Load reads a CUE file through it), so a
+// hostile account name must fail there too, not only in FromJSON. Each name
+// would reach the staging script's argument list if it passed.
+func TestParseRejectsBadAccountName(t *testing.T) {
+	for _, account := range []string{"work space", "x;rm -rf ~", "$(id)", "a'b", "`id`", "-leading", "a/b", "..", ""} {
+		text := strings.Replace(validLayout, `accounts: ["workspace"]`, "accounts: ["+strconv.Quote(account)+"]", 1)
+		if _, err := Parse([]byte(text)); err == nil {
+			t.Fatalf("Parse accepted account %q", account)
 		}
 	}
 }

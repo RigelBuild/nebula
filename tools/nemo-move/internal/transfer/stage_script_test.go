@@ -13,7 +13,14 @@ import (
 // the Google source, as stageShell passes them.
 func runStageScript(t *testing.T, home, base, source string) (string, error) {
 	t.Helper()
-	args := []string{"-c", stageCredentialsScript, "sh", home, base, "example-user:staff", source, "workspace"}
+	return runStageScriptFor(t, home, base, source, "workspace")
+}
+
+// runStageScriptFor runs stageCredentialsScript with the given account names as
+// positional arguments, as stageShell passes them.
+func runStageScriptFor(t *testing.T, home, base, source string, accounts ...string) (string, error) {
+	t.Helper()
+	args := append([]string{"-c", stageCredentialsScript, "sh", home, base, "example-user:staff", source}, accounts...)
 	out, err := exec.CommandContext(t.Context(), "/bin/sh", args...).CombinedOutput()
 	return string(out), err
 }
@@ -88,6 +95,64 @@ func TestStageScriptKeepsPathsItDidNotCreate(t *testing.T) {
 	for _, entry := range entries {
 		if strings.HasPrefix(entry.Name(), ".nemo-move-staging.") || strings.HasPrefix(entry.Name(), ".nemo-move-old.") {
 			t.Fatalf("failed run left its mktemp directory %s behind", entry.Name())
+		}
+	}
+}
+
+// requireStageTools skips when a tool the script names by absolute path is
+// missing. Without them the script exits before its account loop, so a test
+// that relies on the loop would pass vacuously.
+func requireStageTools(t *testing.T) {
+	t.Helper()
+	for _, tool := range []string{"/bin/mkdir", "/bin/test", "/usr/bin/mktemp"} {
+		if _, err := os.Stat(tool); err != nil {
+			t.Skipf("script needs %s, absent on this host; run on macOS", tool)
+		}
+	}
+}
+
+// Account names reach the script as positional arguments, so shell syntax in a
+// name is never evaluated. Each name below would create the marker file if the
+// loop expanded it through a shell.
+func TestStageScriptNeverEvaluatesAccountNames(t *testing.T) {
+	requireStageTools(t)
+	for name, tmpl := range map[string]string{
+		"command substitution": "$(touch MARKER)",
+		"backquote":            "`touch MARKER`",
+		"semicolon":            "a;touch MARKER",
+	} {
+		t.Run(name, func(t *testing.T) {
+			home := t.TempDir()
+			marker := filepath.Join(home, "marker")
+			account := strings.ReplaceAll(tmpl, "MARKER", marker)
+			base := filepath.Join(home, ".local", "state", "nemo-move-staging")
+			out, err := runStageScriptFor(t, home, base, filepath.Join(home, "src"), account)
+			if err == nil {
+				t.Fatalf("script accepted a missing source for %q:\n%s", account, out)
+			}
+			if _, statErr := os.Stat(marker); statErr == nil {
+				t.Fatalf("shell evaluated account name %q", account)
+			}
+		})
+	}
+}
+
+// The staging script names its temporary and previous directories with mktemp.
+// A fixed name, such as <base>.old or a $$-suffixed temp, lets a planted
+// symlink redirect the root move and removal. This is a text check: the
+// symlink-redirect path itself runs only as root on macOS.
+func TestStageScriptUsesMktempNames(t *testing.T) {
+	for _, want := range []string{
+		`temp=$(/usr/bin/mktemp -d "$parent/.nemo-move-staging.XXXXXX")`,
+		`old=$(/usr/bin/mktemp -d "$parent/.nemo-move-old.XXXXXX")`,
+	} {
+		if !strings.Contains(stageCredentialsScript, want) {
+			t.Fatalf("staging script lacks %s", want)
+		}
+	}
+	for _, fixed := range []string{"$$", `"$base.old"`} {
+		if strings.Contains(stageCredentialsScript, fixed) {
+			t.Fatalf("staging script uses predictable path %s", fixed)
 		}
 	}
 }

@@ -8,7 +8,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -329,4 +331,71 @@ func TestPostFormLeavesBodyReadUnbounded(t *testing.T) {
 			t.Fatalf("postForm() = %d, %q, %v; want 200 with the full body", status, body, err)
 		}
 	})
+}
+
+// hostTransport sends api.linear.app to the source server and lets every other
+// host reach its own address, so a redirect Location hits the target server.
+type hostTransport struct {
+	base   http.RoundTripper
+	source string
+}
+
+func (t hostTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	if request.URL.Host != "api.linear.app" {
+		return t.base.RoundTrip(request)
+	}
+	clone := request.Clone(request.Context())
+	clone.URL = &url.URL{Scheme: "http", Host: t.source, Path: request.URL.Path}
+	clone.Host = t.source
+	return t.base.RoundTrip(clone)
+}
+
+func TestMintAppTokenDoesNotFollowRedirects(t *testing.T) {
+	const secret = "client-secret-xyz"
+	creds := Credentials{ClientID: "client-id-abc", ClientSecret: secret}
+	basic := base64.StdEncoding.EncodeToString([]byte("client-id-abc:" + secret))
+	tests := []struct {
+		name   string
+		status int
+	}{
+		{name: "301 Moved Permanently", status: http.StatusMovedPermanently},
+		{name: "302 Found", status: http.StatusFound},
+		{name: "307 Temporary Redirect", status: http.StatusTemporaryRedirect},
+		{name: "308 Permanent Redirect", status: http.StatusPermanentRedirect},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var targetHits atomic.Int32
+			target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				targetHits.Add(1)
+				if _, err := io.WriteString(w, `{"access_token":"reached-target"}`); err != nil {
+					t.Errorf("writing target response: %v", err)
+				}
+			}))
+			t.Cleanup(target.Close)
+			source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Location", target.URL+r.URL.Path)
+				w.WriteHeader(test.status)
+			}))
+			t.Cleanup(source.Close)
+
+			client := &http.Client{Transport: hostTransport{base: http.DefaultTransport, source: strings.TrimPrefix(source.URL, "http://")}}
+			_, err := MintAppToken(t.Context(), client, creds, "read")
+			if hits := targetHits.Load(); hits != 0 {
+				t.Errorf("redirect target got %d request(s), want 0", hits)
+			}
+			if client.CheckRedirect != nil {
+				t.Error("MintAppToken set CheckRedirect on the caller's client")
+			}
+			if err == nil {
+				t.Fatal("MintAppToken() succeeded, want the redirect status as an error")
+			}
+			if !strings.Contains(err.Error(), strconv.Itoa(test.status)) {
+				t.Errorf("error = %v, want status %d", err, test.status)
+			}
+			if strings.Contains(err.Error(), secret) || strings.Contains(err.Error(), basic) {
+				t.Errorf("error exposes client credentials: %v", err)
+			}
+		})
+	}
 }

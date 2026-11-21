@@ -122,6 +122,16 @@ func RevokeAppToken(ctx context.Context, client *http.Client, credentials Creden
 	return nil
 }
 
+// noRedirect returns a shallow copy of client that never follows a redirect. Go
+// keeps Authorization on a same-host redirect to another port, so following one
+// would resend the client secret. The 3xx then reaches the caller as the response
+// status. The copy leaves the caller's client unchanged.
+func noRedirect(client *http.Client) *http.Client {
+	inner := *client
+	inner.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	return &inner
+}
+
 // postForm sends a Basic-authenticated form POST and returns the status and full body.
 func postForm(ctx context.Context, client *http.Client, endpoint string, credentials Credentials, form url.Values) (int, []byte, error) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(form.Encode()))
@@ -138,7 +148,7 @@ func postForm(ctx context.Context, client *http.Client, endpoint string, credent
 	requestCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	timer := time.AfterFunc(headerWait, cancel)
-	response, err := client.Do(request.WithContext(requestCtx))
+	response, err := noRedirect(client).Do(request.WithContext(requestCtx))
 	timer.Stop()
 	if err != nil {
 		return 0, nil, fmt.Errorf("sending Linear OAuth request: %w", err)

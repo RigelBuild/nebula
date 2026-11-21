@@ -14,7 +14,10 @@ import (
 
 var testNow = time.Date(2026, time.November, 17, 12, 0, 0, 0, time.UTC)
 
-// setWorkspace creates root/seat/name as a directory with the given mtime.
+// setWorkspace creates root/seat/name as a directory with the given mtime and
+// returns its path with symlinks resolved, the form /proc reports a cwd in.
+// An unresolved temp dir (macOS /tmp is a symlink) would not match the
+// resolved root prune compares against.
 func setWorkspace(t *testing.T, root, seat, name string, mtime time.Time) string {
 	t.Helper()
 	path := filepath.Join(root, seat, name)
@@ -24,7 +27,11 @@ func setWorkspace(t *testing.T, root, seat, name string, mtime time.Time) string
 	if err := os.Chtimes(path, mtime, mtime); err != nil {
 		t.Fatal(err)
 	}
-	return path
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resolved
 }
 
 // makeProcTable creates a fake process table with one directory per name.

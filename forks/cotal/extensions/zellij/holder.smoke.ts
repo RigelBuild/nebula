@@ -17,7 +17,14 @@ type FixtureOptions = {
   readonly startOutput?: string;
   readonly systemctlError?: Error;
   readonly onExec?: (file: string, args: string[], proc: Map<number, string>) => void;
+  /** Fake `systemctl show` answer for the seat unit; absent means the unit is gone. */
+  readonly unit?: () => Partial<UnitState> | undefined;
+  /** Fake `cgroup.procs` contents; absent means the cgroup is gone. */
+  readonly cgroupProcs?: string;
+  readonly unitShowError?: Error;
 };
+
+type UnitState = { LoadState: string; ActiveState: string; SubState: string; Result: string; ControlGroup: string };
 
 const holder = "/fake/wave-seat-holder";
 const seatName = "ztest-holder";
@@ -54,11 +61,18 @@ function fixture(options: FixtureOptions = {}) {
         if (options.startError !== undefined) throw options.startError;
         return options.startOutput ?? "101 202\n";
       }
+      if (file === "systemctl" && options.unitShowError !== undefined && args[1] === "show") throw options.unitShowError;
+      if (file === "systemctl" && args[1] === "show") return unitShow(options.unit?.());
       if (file === "systemctl" && options.systemctlError !== undefined) throw options.systemctlError;
       return "";
     },
     fs: {
       readFileSync: (path: string) => {
+        if (/\/cgroup\.procs$/.test(path)) {
+          const procs = options.cgroupProcs?.();
+          if (procs === undefined) throw Object.assign(new Error("not found"), { code: "ENOENT" });
+          return procs;
+        }
         const match = /^\/proc\/(\d+)\/stat$/.exec(path);
         const pid = match?.[1] === undefined ? undefined : Number(match[1]);
         const content = pid === undefined ? undefined : proc.get(pid);
@@ -80,6 +94,13 @@ function fixture(options: FixtureOptions = {}) {
     for (const dir of launcherDirs) rmSync(dir, { recursive: true, force: true });
   };
   return { runtime, proc, calls, sleeps, kills, spawn, cleanup };
+}
+
+function unitShow(state: Partial<UnitState> | undefined): string {
+  const full: UnitState = state === undefined
+    ? { LoadState: "not-found", ActiveState: "inactive", SubState: "dead", Result: "success", ControlGroup: "" }
+    : { LoadState: "loaded", ActiveState: "inactive", SubState: "dead", Result: "success", ControlGroup: "/seat", ...state };
+  return `LoadState=${full.LoadState}\nActiveState=${full.ActiveState}\nSubState=${full.SubState}\nResult=${full.Result}\nControlGroup=${full.ControlGroup}\n`;
 }
 
 async function check(name: string, run: () => void | Promise<void>): Promise<void> {
@@ -352,6 +373,91 @@ await check("waitForExit checks again after each one-second poll", async () => {
     f.cleanup();
   }
 });
+
+await check("waitForWorkExit resolves for an inactive unit with an empty cgroup", async () => {
+  const f = fixture({ unit: () => ({ ActiveState: "inactive", SubState: "dead" }), cgroupProcs: () => "" });
+  try {
+    const handle = f.spawn();
+    f.proc.clear();
+    assert.ok(handle.waitForWorkExit, "linux handle must expose waitForWorkExit");
+    await handle.waitForWorkExit();
+    assert.ok(f.calls.some((call) => call.file === "systemctl" && call.args[1] === "show"));
+    assert.equal(f.calls.some((call) => call.args[1] === "reset-failed"), false);
+  } finally {
+    f.cleanup();
+  }
+});
+
+await check("waitForWorkExit resolves for a failed oom-kill unit and resets it for restart", async () => {
+  const f = fixture({ unit: () => ({ ActiveState: "failed", SubState: "failed", Result: "oom-kill", ControlGroup: "/seat" }), cgroupProcs: () => "" });
+  try {
+    const handle = f.spawn();
+    f.proc.clear();
+    assert.ok(handle.waitForWorkExit, "linux handle must expose waitForWorkExit");
+    await handle.waitForWorkExit();
+    assert.deepEqual(f.calls.at(-1), { file: "systemctl", args: ["--user", "reset-failed", `wave-seat-${seatName}`] });
+  } finally {
+    f.cleanup();
+  }
+});
+
+await check("waitForWorkExit keeps polling while the unit is active and resolves only after unit and cgroup end", async () => {
+  let polls = 0;
+  let unit: Partial<UnitState> | undefined = { ActiveState: "active", SubState: "running", ControlGroup: "/seat" };
+  let procs: string | undefined = "303\n";
+  const f = fixture({
+    unit: () => unit,
+    cgroupProcs: () => procs,
+    onSleep: () => {
+      polls++;
+      if (polls === 2) unit = { ActiveState: "inactive", SubState: "dead", ControlGroup: "/seat" };
+      if (polls === 3) procs = "";
+    },
+  });
+  try {
+    const handle = f.spawn();
+    f.proc.clear();
+    assert.ok(handle.waitForWorkExit, "linux handle must expose waitForWorkExit");
+    await handle.waitForWorkExit();
+    assert.ok(polls >= 3, `must poll through active and survivor states, polled ${polls}`);
+  } finally {
+    f.cleanup();
+  }
+});
+
+await check("waitForWorkExit holds a failed unit open while a detached survivor keeps its cgroup", async () => {
+  let polls = 0;
+  let procs: string | undefined = "303\n";
+  const f = fixture({
+    unit: () => ({ ActiveState: "failed", SubState: "failed", Result: "exit-code", ControlGroup: "/seat" }),
+    cgroupProcs: () => procs,
+    onSleep: () => { polls++; if (polls === 2) procs = ""; },
+  });
+  try {
+    const handle = f.spawn();
+    f.proc.clear();
+    assert.ok(handle.waitForWorkExit, "linux handle must expose waitForWorkExit");
+    await handle.waitForWorkExit();
+    assert.ok(polls >= 2, `must wait for the survivor to leave the cgroup, polled ${polls}`);
+  } finally {
+    f.cleanup();
+  }
+});
+
+await check("waitForWorkExit rejects when systemctl cannot be read", async () => {
+  const f = fixture({ unitShowError: new Error("systemctl: bus unavailable") });
+  try {
+    const handle = f.spawn();
+    f.proc.clear();
+    assert.ok(handle.waitForWorkExit, "linux handle must expose waitForWorkExit");
+    await assert.rejects(handle.waitForWorkExit(), /bus unavailable/);
+  } finally {
+    f.cleanup();
+  }
+});
+
+
+
 
 await check("reap escalates after 30 seconds and reports a forced teardown", async () => {
   const f = fixture({ onExec: (file, args, proc) => { if (file === "systemctl" && args[1] === "kill") proc.clear(); } });

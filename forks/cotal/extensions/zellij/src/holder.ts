@@ -75,6 +75,22 @@ function parseStartOutput(stdout: string): { holderPid: number; agentPid: number
   return { holderPid, agentPid };
 }
 
+const UNIT_SHOW_ARGS = ["--user", "show", "-p", "ActiveState", "-p", "ControlGroup"] as const;
+const LIVE_UNIT_STATES: Record<string, true> = { active: true, activating: true, deactivating: true, reloading: true };
+
+/** Parse `systemctl show -p ActiveState -p ControlGroup`. A missing field throws, so a half-read unit never resolves. */
+function parseUnitShow(stdout: string): { ActiveState: string; ControlGroup: string } {
+  const fields = new Map(stdout.split("\n").flatMap((line) => {
+    const cut = line.indexOf("=");
+    return cut < 0 ? [] : [[line.slice(0, cut), line.slice(cut + 1)] as const];
+  }));
+  const ActiveState = fields.get("ActiveState");
+  const ControlGroup = fields.get("ControlGroup");
+  if (ActiveState === undefined || ActiveState === "" || ControlGroup === undefined)
+    throw new Error(`holder runtime: could not read unit state ${JSON.stringify(stdout)}`);
+  return { ActiveState, ControlGroup };
+}
+
 function parseReference(reference: RuntimeReference): { name: string; holder: ProcessIdentity; agent: ProcessIdentity } | undefined {
   if (reference.kind !== "holder") return undefined;
   const match = /^([A-Za-z0-9_.-]+):([1-9]\d*):(\d+):([1-9]\d*):(\d+)$/u.exec(reference.id);
@@ -92,6 +108,7 @@ function parseReference(reference: RuntimeReference): { name: string; holder: Pr
 export class HolderRuntime implements Runtime {
   readonly kind = "holder" as const;
   readonly streamsTerminal = false;
+  readonly supportsWorkClosure: boolean;
   private readonly command: () => string | undefined;
   private readonly prefix: () => string;
   private readonly exec: HolderExec;
@@ -112,6 +129,7 @@ export class HolderRuntime implements Runtime {
     this.platform = options.platform ?? process.platform;
     this.waveHost = options.waveHostCommand ?? (() => process.env.WAVE_HOST_COMMAND ?? "wave-host");
     this.kill = options.kill ?? defaultKill;
+    this.supportsWorkClosure = this.platform !== "darwin";
   }
 
   spawn(name: string, spec: LaunchSpec, cwd: string): AgentHandle {
@@ -188,6 +206,7 @@ export class HolderRuntime implements Runtime {
         waitForExit: async () => {
           while (status() !== "exited") await this.sleep(POLL_MS);
         },
+        ...(this.platform === "darwin" ? {} : { waitForWorkExit: () => this.waitForUnitWorkExit(name) }),
         attach: () => {
           throw new Error("holder runtime: attach with wave-seat-holder attach");
         },
@@ -303,6 +322,44 @@ export class HolderRuntime implements Runtime {
     } catch (error) {
       if (!this.areGone(identities)) throw error;
     }
+  }
+
+  /** Resolve once the seat unit's work has ended. Rule: the unit is `inactive` or `failed` AND its cgroup holds no
+   *  process. The cgroup is the containment, so a detached survivor keeps the wait open. A live or transitioning
+   *  unit keeps polling; an unknown state, a failed `systemctl`, or an unreadable cgroup rejects. A proven `failed`
+   *  unit is reset so the same name can start again. */
+  private async waitForUnitWorkExit(name: string): Promise<void> {
+    const unit = `${this.prefix()}${name}`;
+    for (;;) {
+      const state = parseUnitShow(this.exec("systemctl", [...UNIT_SHOW_ARGS, unit], { encoding: "utf8", timeout: START_TIMEOUT_MS }));
+      const terminal = state.ActiveState === "inactive" || state.ActiveState === "failed";
+      if (!terminal) {
+        if (LIVE_UNIT_STATES[state.ActiveState] !== true)
+          throw new Error(`holder runtime: unit ${unit} is in unknown state ${state.ActiveState}`);
+        await this.sleep(POLL_MS);
+        continue;
+      }
+      if (!this.cgroupEmpty(state.ControlGroup)) {
+        await this.sleep(POLL_MS);
+        continue;
+      }
+      if (state.ActiveState === "failed") this.exec("systemctl", ["--user", "reset-failed", unit], { encoding: "utf8" });
+      return;
+    }
+  }
+
+  /** True when the cgroup holds no process. A missing cgroup is empty; any other read error throws, so the caller
+   *  never resolves on it. */
+  private cgroupEmpty(controlGroup: string): boolean {
+    if (controlGroup === "") return true;
+    let procs: string;
+    try {
+      procs = this.fs.readFileSync(`/sys/fs/cgroup${controlGroup}/cgroup.procs`, "utf8");
+    } catch (error) {
+      if (isMissingProcess(error)) return true;
+      throw error;
+    }
+    return procs.trim() === "";
   }
 
   /** The graceful, platform-correct stop of a seat's job. Darwin removes its launchd job; Linux stops the unit. */

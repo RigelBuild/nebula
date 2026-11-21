@@ -160,6 +160,13 @@ def admit_session_input(db, *, epoch: int, principal_id: str, session_id: str,
             if _replay_guard is not None:
                 _replay_guard(conn)
             return _row(old)
+        # A prune may have committed since the read above: decide the terminal identity again on this
+        # transaction, so a pruned request is never admitted as new.
+        from hermes_state_terminal import pointed_terminal_admission
+        retired = pointed_terminal_admission(conn, principal_id=principal_id, session_id=session_id,
+                                             request_id=request_id, digest=digest)
+        if retired is not None:
+            return retired
         queued = conn.execute('''SELECT COUNT(*) FROM session_admissions WHERE target_session_id=?
             AND status='queued' ''', (session_id,)).fetchone()[0]
         # Main's cap holds in both states: a FIFO paused behind an unknown turn runs every accepted

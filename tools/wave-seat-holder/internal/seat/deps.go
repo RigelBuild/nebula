@@ -15,6 +15,9 @@ type CommandResult = pane.Result
 // Files is the filesystem and socket access the holder uses.
 type Files struct {
 	Mkdir     func(path string, perm fs.FileMode) error
+	Lstat     func(path string) (fs.FileInfo, error)
+	Chmod     func(path string, perm fs.FileMode) error
+	Getuid    func() int
 	Readdir   func(path string) ([]string, error)
 	ReadText  func(path string) (string, error)
 	WriteFile func(path string, data []byte, perm fs.FileMode) error

@@ -212,6 +212,36 @@ def test_reviewer_allow_inside_grant_skips_the_prompt(monkeypatch, clock):
     assert shown == [], "a reviewer ALLOW inside a live grant must not re-prompt"
 
 
+def test_reviewer_unavailable_inside_live_grant_prompts(monkeypatch, clock):
+    """A reviewer outage is not an ESCALATE: the live grant must not run the call unreviewed."""
+    _prompt(monkeypatch, "session")
+    request_tool_approval("vault_secret", "run", rule_key=KEY, session_ttl_seconds=3600)
+
+    calls = _reviewer(monkeypatch, "unavailable")
+    shown = _prompt(monkeypatch, "deny")
+    result = request_tool_approval(
+        "vault_secret", "run", rule_key=KEY, session_ttl_seconds=3600, review=True,
+    )
+    assert calls == ["unavailable"]
+    assert len(shown) == 1, "a reviewer outage inside a live grant must prompt the human"
+    assert result["approved"] is False, "the human's refusal must stand inside a live grant"
+
+
+def test_reviewer_escalate_inside_live_grant_reuses_it(monkeypatch, clock):
+    """Invariant 2 (ESCALATE side): an ESCALATE is the verdict a live grant may answer without a prompt."""
+    _prompt(monkeypatch, "session")
+    request_tool_approval("vault_secret", "run", rule_key=KEY, session_ttl_seconds=3600)
+
+    calls = _reviewer(monkeypatch, "escalate")
+    shown = _prompt(monkeypatch, "deny")
+    result = request_tool_approval(
+        "vault_secret", "run", rule_key=KEY, session_ttl_seconds=3600, review=True,
+    )
+    assert calls == ["escalate"]
+    assert result["approved"] is True
+    assert shown == [], "an ESCALATE inside a live grant must reuse the grant without a prompt"
+
+
 def test_reviewer_allow_without_grant_runs_and_stores_no_grant(monkeypatch):
     """A reviewer APPROVE runs the call with no prompt, and it creates no grant."""
     calls = _reviewer(monkeypatch, "approve")

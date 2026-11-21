@@ -1187,7 +1187,7 @@ function convertOne(m: AgentMessage, interrupted = false): Message[] {
 			// authored by that agent: never tool output, never developer or system authority.
 			const ircIncoming = m.customType === "irc:incoming";
 			if (ircIncoming || isUserInvokedSkillPrompt(m)) {
-				// Escape only the user's typed skill args; irc:incoming content is harness-rendered.
+				// Escape the whole user-invoked skill prompt (body and typed args share one text part); irc:incoming content is harness-rendered.
 				const content = customMessageContentToLlmContent(m.content);
 				return [
 					{

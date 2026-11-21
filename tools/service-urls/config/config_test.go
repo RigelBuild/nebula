@@ -36,27 +36,46 @@ func TestLoadRejectsMissingOrEmptyValues(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(valid)
-	for _, test := range []struct {
+	type edit struct {
 		name string
 		edit func(string) string
-	}{
-		{name: "missing internal host suffixes", edit: func(s string) string { return dropLine(s, "internalHostSuffixes:") }},
+	}
+	tests := []edit{
 		{name: "empty internal host suffix list", edit: func(s string) string {
 			return strings.Replace(s, `["internal.example.com"]`, `[]`, 1)
 		}},
 		{name: "empty internal host suffix", edit: func(s string) string {
 			return strings.Replace(s, `["internal.example.com"]`, `[""]`, 1)
 		}},
-		{name: "missing glance path", edit: func(s string) string { return dropLine(s, "glancePath:") }},
-		{name: "empty owner", edit: func(s string) string {
-			return strings.Replace(s, `kubernetes: "example/k8s/"`, `kubernetes: ""`, 1)
+		{name: "empty later internal host suffix", edit: func(s string) string {
+			return strings.Replace(s, `["internal.example.com"]`, `["a", ""]`, 1)
 		}},
-		{name: "missing owner", edit: func(s string) string { return dropLine(s, "workers:") }},
+		{name: "missing owners", edit: func(s string) string {
+			return s[:strings.Index(s, "owners:")]
+		}},
 		{name: "unknown field", edit: func(s string) string { return s + "\nextra: \"value\"\n" }},
+		{name: "unknown owner", edit: func(s string) string {
+			return strings.Replace(s, `workers:    "example/workers/"`, `workers:    "example/workers/"`+"\n\textra: \"example/extra/\"", 1)
+		}},
+	}
+	for _, field := range []string{
+		"internalHostSuffixes", "tailscaleDomain", "dnsZone", "inventoryPath", "linksPagePath", "glancePath",
+		"portalSource", "tailnetPath", "unionPath", "dnsRecordsPath", "managedReposPath",
+		"cloudflareHostsPath", "workerDomainsPath", "kubernetes", "dns", "cloudflare", "workers",
 	} {
+		tests = append(tests,
+			edit{name: "missing " + field, edit: func(s string) string { return dropLine(s, field+":") }},
+			edit{name: "empty " + field, edit: func(s string) string { return setEmpty(t, s, field) }},
+		)
+	}
+	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			edited := test.edit(text)
+			if edited == text {
+				t.Fatal("edit did not change the config")
+			}
 			path := filepath.Join(t.TempDir(), "config.cue")
-			if err := os.WriteFile(path, []byte(test.edit(text)), 0o600); err != nil {
+			if err := os.WriteFile(path, []byte(edited), 0o600); err != nil {
 				t.Fatal(err)
 			}
 			if _, err := Load(path); err == nil {
@@ -64,6 +83,21 @@ func TestLoadRejectsMissingOrEmptyValues(t *testing.T) {
 			}
 		})
 	}
+}
+
+// setEmpty replaces the value of the line that starts with field with "".
+func setEmpty(t *testing.T, text, field string) string {
+	t.Helper()
+	lines := strings.Split(text, "\n")
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, field+":") {
+			lines[i] = line[:strings.Index(line, field)] + field + `: ""`
+			return strings.Join(lines, "\n")
+		}
+	}
+	t.Fatalf("field %s not found", field)
+	return text
 }
 
 func TestLoadMissingFile(t *testing.T) {

@@ -16,7 +16,7 @@ func TestRenderPage(t *testing.T) {
 			{ID: "tools", Title: "Tools"},
 		},
 		Links: []serviceurls.Link{
-			{Group: "services", Name: "A [label]\\ path", URL: "https://example.com/path", What: "Example service", Access: serviceurls.AccessPublic, Kind: serviceurls.KindWeb, Via: "DNS", Login: "Entra OIDC", Node: "fwdesktop", Source: "example/tailnet.toml"},
+			{Group: "services", Name: "A [label]\\ path", URL: "https://example.com/path", What: "Example service", Access: serviceurls.AccessPublic, Kind: serviceurls.KindWeb, Via: "DNS", Login: "Entra OIDC", Node: "node-a", Source: "example/tailnet.toml"},
 			{Group: "tools", Name: "API", URL: "tcp://example.com:9000", What: "Endpoint", Access: serviceurls.AccessTailnet, Kind: serviceurls.KindEndpoint, Via: "Fixture"},
 		},
 	}
@@ -28,9 +28,10 @@ func TestRenderPage(t *testing.T) {
 		t.Fatal("renderPage() did not preserve group order")
 	}
 	for _, want := range []string{
+		"Generated from [`docs/service-urls/`](./service-urls/). Do not edit by hand.",
 		"| Link | What | Gate | Port | Node | Via | Source |",
 		"[A \\[label\\]\\\\ path](<https://example.com/path>)",
-		"public + Entra OIDC | 443 | fwdesktop",
+		"public + Entra OIDC | 443 | node-a",
 		"`example/tailnet.toml`",
 		"| tcp://example.com:9000 | Endpoint | tailnet | 9000 |",
 	} {
@@ -113,5 +114,33 @@ func TestRenderGlance(t *testing.T) {
 		if strings.Contains(got, absent) {
 			t.Errorf("renderGlance() unexpectedly contains %q", absent)
 		}
+	}
+}
+
+func TestRenderPageHeaderLinkIsRelativeToPage(t *testing.T) {
+	tests := []struct {
+		name      string
+		pagePath  string
+		inventory string
+		want      string
+	}{
+		{name: "sibling directory", pagePath: "docs/links.md", inventory: "docs/service-urls", want: "Generated from [`docs/service-urls/`](./service-urls/). Do not edit by hand."},
+		{name: "page at root", pagePath: "links.md", inventory: "docs/service-urls", want: "Generated from [`docs/service-urls/`](./docs/service-urls/). Do not edit by hand."},
+		{name: "page in other tree", pagePath: "site/pages/links.md", inventory: "docs/service-urls", want: "Generated from [`docs/service-urls/`](./../../docs/service-urls/). Do not edit by hand."},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := exampleConfig()
+			cfg.LinksPagePath = test.pagePath
+			cfg.InventoryPath = test.inventory
+			got, err := renderPage(serviceurls.Inventory{}, cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			lines := strings.Split(got, "\n")
+			if len(lines) < 3 || lines[2] != test.want {
+				t.Fatalf("header line = %q, want %q", lines[2], test.want)
+			}
+		})
 	}
 }

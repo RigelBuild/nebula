@@ -38,6 +38,7 @@
         host-secret-ready = null;
         length-gate = "sha256-m4lHVyrsYIrQpPFIblIZcMc5rPmJJJsHt6RS8QAoXCk=";
         linear-acceptance = null;
+        linear-comment-poller = "sha256-usHhvjEtwEdT/hyGXFkC2nmC41/WAEWkA+Ng4TJ4FGo=";
         longhorn-drain = null;
         rbuild-workspace-prune = null;
         reddit-fetch = null;

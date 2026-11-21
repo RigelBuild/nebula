@@ -1,0 +1,38 @@
+version: "2"
+
+linters:
+  default: all
+  disable:
+    - mnd
+    - varnamelen
+    - wsl
+    - wsl_v5
+    - cyclop
+    - gocognit
+    - gocyclo
+    - maintidx
+    - funlen
+    - dupl
+    - goconst
+    - ireturn
+    - depguard
+    - gomodguard
+    - nlreturn
+    - exhaustruct
+  enable:
+    - gomodguard_v2
+  exclusions:
+    rules:
+      - path: '_test\.go'
+        linters:
+          - gochecknoglobals
+          - paralleltest
+          - testpackage
+          - funlen
+          - goconst
+          - dupl
+          - gosec
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

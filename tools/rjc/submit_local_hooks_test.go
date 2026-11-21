@@ -45,12 +45,15 @@ func TestSubmitRefusesNonFastLocalHooks(t *testing.T) {
 			f := fixtureRepo(t)
 			installFastTrunk(t, f)
 			f.repo.profile.LocalFastTier = test.opted
+			// A gate-runner dir other than the default proves the refusal matches the profile's dir.
+			f.repo.profile.GateRunnerDir = "tools/example-gate"
 			bookmark := f.new(t, "EX-1", "feat(rjc): allow fast local hook runs", "")
-			command := "go run ./tools/gate-runner moon-ci"
+			runner := "go run ./" + f.repo.profile.GateRunnerDir
+			command := runner + " moon-ci"
 			if test.fast {
 				command += " --tier fast"
 			}
-			config := "amends \"package://github.com/jdx/hk/releases/download/v" + hookshell.HKVersion + "/hk@" + hookshell.HKVersion + "#/Config.pkl\"\ndefault_branch = \"main\"\nhooks { [\"pre-push\"] { steps { [\"ci\"] = new Step { check = \"" + command + "\" } [\"gates\"] = new Step { check = \"go run ./tools/gate-runner\" depends = List(\"ci\") } } } }\n"
+			config := "amends \"package://github.com/jdx/hk/releases/download/v" + hookshell.HKVersion + "/hk@" + hookshell.HKVersion + "#/Config.pkl\"\ndefault_branch = \"main\"\nhooks { [\"pre-push\"] { steps { [\"ci\"] = new Step { check = \"" + command + "\" } [\"gates\"] = new Step { check = \"" + runner + "\" depends = List(\"ci\") } } } }\n"
 			if test.extra {
 				config = strings.Replace(config, "[\"gates\"]", "[\"other\"] = new Step { check = \"moon ci\" } [\"gates\"]", 1)
 			}

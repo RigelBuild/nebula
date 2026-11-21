@@ -364,6 +364,9 @@ func TestSSHHookRunnerPassesSlotCountToRemote(t *testing.T) {
 	if !strings.Contains(remote, " 1 'hk' 'hk.pkl' '") {
 		t.Fatalf("remote command must pass slot count 1 before runner and config, got %q", remote)
 	}
+	if !strings.Contains(remote, f.repo.profile.DevenvNixpkgs+"#devenv") {
+		t.Fatalf("remote script must start devenv from the profile's devenvNixpkgs %q, got %q", f.repo.profile.DevenvNixpkgs, remote)
+	}
 	slots, err := os.ReadFile(os.Getenv("RJC_TEST_HK_SLOTS_FILE"))
 	if err != nil {
 		t.Fatal(err)

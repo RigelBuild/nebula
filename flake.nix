@@ -140,14 +140,14 @@
       };
 
       # checkFlags are extra go test flags for a command's check phase. rjc's
-      # suite runs about six minutes off the sandbox and passes the 10m default
-      # go test timeout inside it.
+      # suite takes about 15 minutes in the sandbox, over the 10m default go
+      # test timeout.
       checkFlags = {
         rjc = [ "-timeout=30m" ];
       };
 
       buildCommand = pkgs: name: vendorHash:
-        pkgs.buildGoModule {
+        pkgs.buildGoModule ({
           pname = name;
           version = self.shortRev or self.dirtyShortRev or "dirty";
           src = commandSource name;
@@ -155,7 +155,6 @@
           inherit vendorHash;
           # Several command tests run git against temporary repositories.
           nativeCheckInputs = [ pkgs.git ] ++ (checkTools.${name} or (_: [ ])) pkgs;
-          checkFlags = checkFlags.${name} or [ ];
           # golangci-lint writes its build cache under HOME, which the sandbox
           # leaves unwritable. Give the check phase a writable HOME.
           preCheck = ''
@@ -164,7 +163,7 @@
           '';
           env.CGO_ENABLED = "0";
           ldflags = [ "-s" "-w" ];
-        };
+        } // lib.optionalAttrs (checkFlags ? ${name}) { checkFlags = checkFlags.${name}; });
 
       commandPackagesFor = system:
         let

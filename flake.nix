@@ -476,7 +476,7 @@
           };
           # host-bao-seal's round-trip test runs sops and age-keygen.
           host-bao-seal = pkgs.mkShell {
-            packages = basePackages ++ [ pkgs.sops pkgs.age ];
+            packages = basePackages ++ checkTools.host-bao-seal pkgs;
           };
         });
     };

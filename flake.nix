@@ -115,8 +115,9 @@
         else
           null;
 
-      # mainProgram defaults to the package name. Name the binary here when a package ships several.
+      # mainProgram defaults to the package name. Name the binary here when it differs.
       mainPrograms = {
+        caddy-cloudflare = "caddy";
         jj-hooks-bin = "jj-hp";
       };
 

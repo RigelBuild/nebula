@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -50,7 +51,24 @@ func TestInventoryRequiresConfig(t *testing.T) {
 	command.SilenceUsage = true
 	command.SilenceErrors = true
 	command.SetArgs([]string{"--host", "example-host", "--out", filepath.Join(t.TempDir(), "inventory.jsonl")})
-	if err := command.ExecuteContext(t.Context()); err == nil {
+	err := command.ExecuteContext(t.Context())
+	if err == nil {
 		t.Fatal("inventory without --config exited zero")
+	}
+	if msg := err.Error(); !strings.HasPrefix(msg, "inventory requires ") {
+		t.Fatalf("inventory error = %q, want the required-flag error", msg)
+	}
+}
+
+// TestInventoryConfigFlagHasNoDefault pins the empty default: a default would
+// let inventory start without the config that the required-flag check demands.
+func TestInventoryConfigFlagHasNoDefault(t *testing.T) {
+	t.Parallel()
+	flag := newInventoryCmd().Flags().Lookup("config")
+	if flag == nil {
+		t.Fatal("inventory has no --config flag")
+	}
+	if flag.DefValue != "" {
+		t.Fatalf("--config default = %q, want empty", flag.DefValue)
 	}
 }

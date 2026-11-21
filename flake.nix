@@ -39,6 +39,7 @@
         length-gate = "sha256-m4lHVyrsYIrQpPFIblIZcMc5rPmJJJsHt6RS8QAoXCk=";
         linear-acceptance = null;
         longhorn-drain = null;
+        nemo-move = "sha256-o0NGRbCxDjVd9XOHirCJyQJGprCNEQad62g0z4uMYD8=";
         rbuild-workspace-prune = null;
         reddit-fetch = null;
         ref-gate = "sha256-WVoZkg5kdUYlATXDDxAA/yozThBwyYSKHwLoUsuIBfg=";

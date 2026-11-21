@@ -1,0 +1,45 @@
+version: "2"
+
+linters:
+  default: all
+  disable:
+    # Fixed ports, statuses and exit codes read clearer as literals than as named constants.
+    - mnd
+    # The Go standard library's short local names and blank-line style are retained.
+    - varnamelen
+    - wsl
+    - wsl_v5
+    # The mint and reconcile flows are one pass over the admin API; splitting them hides the checks.
+    - cyclop
+    - gocognit
+    - gocyclo
+    - maintidx
+    # Long table tests and repeated fixtures keep each case readable on its own.
+    - funlen
+    - dupl
+    - goconst
+    # Interface returns are not part of this command's design.
+    - ireturn
+    # Default rules reject the module imports this command uses.
+    - depguard
+    # Use the v2 replacement for the deprecated legacy linter.
+    - gomodguard
+    - nlreturn
+    - exhaustruct
+  enable:
+    - gomodguard_v2
+  exclusions:
+    rules:
+      - path: '_test\.go'
+        linters:
+          - gochecknoglobals
+          - paralleltest
+          - testpackage
+          - funlen
+          - goconst
+          - dupl
+          - gosec
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

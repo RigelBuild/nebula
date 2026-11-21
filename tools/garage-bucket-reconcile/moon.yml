@@ -1,0 +1,12 @@
+# yaml-language-server: $schema=https://moonrepo.dev/schemas/project.json
+layer: "tool"
+language: "go"
+tags: ["go"]
+
+tasks:
+  test:
+    command: "go"
+    args: ["test", "-race", "./..."]
+    env:
+      CGO_ENABLED: "1"
+    inputs: ["**/*.go", "go.mod", "**/testdata/**/*"]

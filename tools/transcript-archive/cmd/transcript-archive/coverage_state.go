@@ -101,8 +101,9 @@ func runStateCoverage(out io.Writer, opts coverageOptions) error {
 		unverifiedBytes += entry.Size
 	}
 	var digests map[string][32]byte
-	// A first run is mostly unverified: one tar stream walks the tree and reads each byte once.
-	if len(unverified) > 0 && 2*unverifiedBytes >= totalBytes {
+	// One tar stream reads each byte once. Restore costs one restic pass per batch, and each pass matches every snapshot node,
+	// so stream when unverified files outnumber one batch, or when most bytes are unverified.
+	if len(unverified) > 0 && (len(unverified) > restoreFiles || 2*unverifiedBytes >= totalBytes) {
 		digests, err = streamedDigests(opts, snapshot, unverified)
 	} else {
 		digests, err = restoredDigests(opts, filepath.Join(dir, "coverage-scratch"), snapshot, unverified)

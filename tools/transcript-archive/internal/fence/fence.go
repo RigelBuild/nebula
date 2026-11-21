@@ -13,8 +13,8 @@ import (
 )
 
 const (
-	// OMPVersion is the `omp --version` string the fence accepts. ci/omp-pin.json
-	// records the same value and the rev both flake locks pin.
+	// OMPVersion is the `omp --version` string the fence accepts. It must match the
+	// pinned oh-my-pi fork release that both flake locks pin.
 	OMPVersion       = "omp/18.22.2-rigel.1"
 	lockPollInterval = 200 * time.Millisecond
 )

@@ -16,6 +16,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -55,6 +56,46 @@ func TestRequestBroker(t *testing.T) {
 	})
 }
 
+func TestRequestBrokerDoesNotFollowRedirects(t *testing.T) {
+	tests := []struct {
+		name   string
+		status int
+	}{
+		{name: "301 moved permanently", status: http.StatusMovedPermanently},
+		{name: "302 found", status: http.StatusFound},
+		{name: "307 temporary redirect", status: http.StatusTemporaryRedirect},
+		{name: "308 permanent redirect", status: http.StatusPermanentRedirect},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var targetRequests, targetAuthorized atomic.Int32
+			target := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+				targetRequests.Add(1)
+				if r.Header.Get("Authorization") != "" {
+					targetAuthorized.Add(1)
+				}
+			}))
+			defer target.Close()
+			redirector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				http.Redirect(w, r, target.URL+r.URL.Path, tt.status)
+			}))
+			defer redirector.Close()
+
+			want := fmt.Sprintf("%d %s", tt.status, http.StatusText(tt.status))
+			_, err := (execRunner{}).RequestBroker(t.Context(), http.MethodPost, redirector.URL, "token-value", "/v1/usage/stale")
+			if n := targetRequests.Load(); n != 0 {
+				t.Errorf("redirect target received %d requests, %d with Authorization; want 0", n, targetAuthorized.Load())
+			}
+			if err == nil || !strings.Contains(err.Error(), want) {
+				t.Fatalf("RequestBroker() error = %v, want %s status error", err, want)
+			}
+			if strings.Contains(err.Error(), "token-value") {
+				t.Errorf("RequestBroker() error %q contains bearer token", err)
+			}
+		})
+	}
+}
+
 func TestReadTokenUsesK3sSecret(t *testing.T) {
 	dir := t.TempDir()
 	argsPath := filepath.Join(dir, "ssh-args")
@@ -79,9 +120,47 @@ func TestReadTokenUsesK3sSecret(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read SSH arguments: %v", err)
 	}
-	want := append([]string{"-T", d.host}, kubectlGetSecretArgs(d)...)
+	want := []string{"-T", d.host, shellJoin(kubectlGetSecretArgs(d))}
 	if got := strings.Split(strings.TrimSpace(string(actual)), "\n"); !slices.Equal(got, want) {
 		t.Fatalf("SSH arguments = %v, want %v", got, want)
+	}
+}
+
+func TestReadTokenQuotesKubeconfigWithSpaces(t *testing.T) {
+	dir := t.TempDir()
+	argsPath := filepath.Join(dir, "ssh-args")
+	encoded := base64.StdEncoding.EncodeToString([]byte("pool-token"))
+	script := fmt.Sprintf(
+		"#!/bin/sh\nprintf '%%s\\n' \"$@\" > %s\nprintf '%%s' %s\n",
+		shellQuote(argsPath),
+		shellQuote(encoded),
+	)
+	if err := os.WriteFile(filepath.Join(dir, commandSSH), []byte(script), 0o700); err != nil {
+		t.Fatalf("write SSH helper: %v", err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	d := testDeployment()
+	d.kubeconfig = "/etc/example dir/broker.kubeconfig"
+	if _, err := (execRunner{}).ReadToken(t.Context(), d); err != nil {
+		t.Fatalf("ReadToken() error = %v", err)
+	}
+	actual, err := os.ReadFile(argsPath)
+	if err != nil {
+		t.Fatalf("read SSH arguments: %v", err)
+	}
+	sshArgs := strings.Split(strings.TrimSuffix(string(actual), "\n"), "\n")
+	if len(sshArgs) != 3 || sshArgs[0] != "-T" || sshArgs[1] != d.host {
+		t.Fatalf("SSH arguments = %q, want -T, host, and one remote command", sshArgs)
+	}
+	// The remote shell must split the single command argument back into the exact kubectl argv.
+	out, err := exec.CommandContext(t.Context(), "sh", "-c", "printf '%s\\n' "+sshArgs[2]).Output()
+	if err != nil {
+		t.Fatalf("split remote command: %v", err)
+	}
+	remoteArgs := strings.Split(strings.TrimSuffix(string(out), "\n"), "\n")
+	if want := kubectlGetSecretArgs(d); !slices.Equal(remoteArgs, want) {
+		t.Fatalf("remote kubectl arguments = %q, want %q", remoteArgs, want)
 	}
 }
 

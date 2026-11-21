@@ -28,7 +28,15 @@ type commandRunner interface {
 
 type execRunner struct{}
 
-var brokerHTTPClient = &http.Client{Timeout: 10 * time.Second}
+var brokerHTTPClient = &http.Client{
+	Timeout: 10 * time.Second,
+	// Following a redirect would resend the bearer token to whatever host the
+	// broker names. Go only strips Authorization when the host changes, so a
+	// redirect to another local port would still leak it. Return the 3xx instead.
+	CheckRedirect: func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	},
+}
 
 func (execRunner) RequestBroker(ctx context.Context, method, baseURL, token, path string) (body []byte, retErr error) {
 	request, err := http.NewRequestWithContext(ctx, method, baseURL+path, nil) //nolint:gosec // baseURL is the local SSH forward and path is an internal broker endpoint.
@@ -73,7 +81,7 @@ func (execRunner) RunOMP(
 }
 
 func (execRunner) ReadToken(ctx context.Context, d deployment) (string, error) {
-	args := append([]string{"-T", d.host}, kubectlGetSecretArgs(d)...)
+	args := []string{"-T", d.host, shellJoin(kubectlGetSecretArgs(d))}
 	cmd := exec.CommandContext(ctx, commandSSH, args...) //nolint:gosec // Fixed command and arguments bypass local shell parsing.
 	cmd.Env = envWithoutBrokerAuth()
 	var output bytes.Buffer
@@ -273,13 +281,16 @@ func kubectlPortForwardArgs(d deployment, remotePort int) []string {
 	}
 }
 
-func shellRemoteCommand(args []string) string {
-	quoted := make([]string, 0, len(args)+4)
-	quoted = append(quoted, "sh", "-c", shellQuote(remoteChildScript), "omp-pool")
+func shellJoin(args []string) string {
+	quoted := make([]string, 0, len(args))
 	for _, arg := range args {
 		quoted = append(quoted, shellQuote(arg))
 	}
 	return strings.Join(quoted, " ")
+}
+
+func shellRemoteCommand(args []string) string {
+	return "sh -c " + shellQuote(remoteChildScript) + " omp-pool " + shellJoin(args)
 }
 
 // The watcher ties remote kubectl to SSH stdin EOF, independent of SSH signals.

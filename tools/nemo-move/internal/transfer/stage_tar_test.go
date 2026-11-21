@@ -274,4 +274,47 @@ func TestStagingSuccessReplacesOldTree(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(stage, "old-sentinel")); !os.IsNotExist(err) {
 		t.Fatalf("old tree survived the run: %v", err)
 	}
+	assertNoMktempLeftovers(t, filepath.Dir(stage))
+	assertTreeModes(t, stage)
+}
+
+// assertNoMktempLeftovers fails if a run left a .nemo-move-* directory beside the
+// staging path. Each run must remove the mktemp dirs it made.
+func assertNoMktempLeftovers(t *testing.T, parent string) {
+	t.Helper()
+	entries, err := os.ReadDir(parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), ".nemo-move-") {
+			t.Fatalf("run left %s behind in %s", entry.Name(), parent)
+		}
+	}
+}
+
+// assertTreeModes walks the staged tree and fails unless every directory is 700
+// and every file is 600, the modes the round requires for credentials.
+func assertTreeModes(t *testing.T, stage string) {
+	t.Helper()
+	err := filepath.WalkDir(stage, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		want := os.FileMode(0o600)
+		if d.IsDir() {
+			want = 0o700
+		}
+		if info.Mode().Perm() != want {
+			return fmt.Errorf("%s mode = %o, want %o", path, info.Mode().Perm(), want)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 }

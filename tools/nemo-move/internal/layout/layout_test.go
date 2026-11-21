@@ -100,8 +100,14 @@ func TestFromJSONRejectsBadAccountName(t *testing.T) {
 func TestParseRejectsBadAccountName(t *testing.T) {
 	for _, account := range []string{"work space", "x;rm -rf ~", "$(id)", "a'b", "`id`", "-leading", "a/b", "..", ""} {
 		text := strings.Replace(validLayout, `accounts: ["workspace"]`, "accounts: ["+strconv.Quote(account)+"]", 1)
-		if _, err := Parse([]byte(text)); err == nil {
+		_, err := Parse([]byte(text))
+		if err == nil {
 			t.Fatalf("Parse accepted account %q", account)
+		}
+		// Require the CUE validation error, so a rejection from some other check
+		// cannot make this test pass.
+		if !strings.HasPrefix(err.Error(), "validate inventory:") {
+			t.Fatalf("Parse rejected %q with %v, want the validate inventory: prefix", account, err)
 		}
 	}
 }

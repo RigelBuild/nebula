@@ -40,3 +40,21 @@ func TestStageShellPassesValuesAsArguments(t *testing.T) {
 		t.Fatalf("staging command does not pass the script as sh -c argument:\n%s", cmd)
 	}
 }
+
+// The Go side splices nothing: each account reaches the command as its own
+// quoted argument. A revert that joins raw account names into the command would
+// leave a hostile name unquoted, and this test would fail.
+func TestStageShellQuotesAccountNames(t *testing.T) {
+	hostile := []string{"$(id)", "a'b", "x;rm -rf ~"}
+	lay := testLayout
+	lay.Google.Accounts = hostile
+	cmd := stageShell(Options{SourceHome: "/src/home/example", MacUser: "example-user", Layout: lay})
+	for _, account := range hostile {
+		if !strings.Contains(cmd, ShellQuote(account)) {
+			t.Fatalf("staging command does not pass account %q as a quoted argument:\n%s", account, cmd)
+		}
+		if strings.Contains(stageCredentialsScript, account) {
+			t.Fatalf("staging script text contains account %q", account)
+		}
+	}
+}

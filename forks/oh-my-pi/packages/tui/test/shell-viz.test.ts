@@ -6,6 +6,7 @@ import {
 	decodeShellPresentation,
 	defaultShellVizPreferences,
 	readShellPresentation,
+	restoredVisualizationCount,
 	shellVisualization,
 } from "../src/tools/shell-viz";
 import { renderShellVisualization } from "../src/tools/shell-viz-render";
@@ -90,5 +91,32 @@ describe("native shell presentation boundary", () => {
 		const restored = shellVisualization(stored);
 		if (!restored) throw new Error("Expected the stored trace to restore");
 		expect(readShellPresentation(restored, replay, stored).output).toBe("native-boundary\n");
+	});
+
+	it("bounds the restored visualization cache and rebuilds an evicted entry from JSON", async () => {
+		const snapshots: ShellTrace[] = [];
+		for (let i = 0; i < 20; i++) {
+			const command = `printf 'bounded-${i}\\n'`;
+			const trace = new RunTrace(command);
+			await new Shell().run({ command, trace });
+			snapshots.push(snapshot(trace));
+		}
+		const replayOf = (stored: ShellTrace) => ({
+			...defaultShellVizPreferences(),
+			cursor: stored.history?.length ?? 0,
+		});
+		for (const stored of snapshots) {
+			const restored = shellVisualization(stored);
+			if (!restored) throw new Error("Expected the stored trace to restore");
+			expect(restoredVisualizationCount()).toBeLessThanOrEqual(16);
+		}
+		expect(restoredVisualizationCount()).toBe(16);
+		// The first snapshot was evicted; restoring it again still renders its output.
+		const first = snapshots[0];
+		if (!first) throw new Error("Expected a first snapshot");
+		const again = shellVisualization(first);
+		if (!again) throw new Error("Expected the evicted trace to restore from JSON");
+		expect(readShellPresentation(again, replayOf(first), first).output).toBe("bounded-0\n");
+		expect(restoredVisualizationCount()).toBe(16);
 	});
 });

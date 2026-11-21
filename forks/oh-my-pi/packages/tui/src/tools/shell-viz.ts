@@ -13,6 +13,12 @@ import type {
 export type ShellVisualizationSource = RunTrace | ShellVisualization;
 /** Each snapshot's native owner; `null` marks one the engine rejected, so it is not restored again per paint. */
 const visualizations = new WeakMap<ShellTrace, ShellVisualizationSource | null>();
+/**
+ * Restored visualizations of settled snapshots, most recent last. A transcript paints only the blocks on
+ * screen, so 16 covers a full screen of bash results; an evicted entry is rebuilt from JSON on its next paint.
+ */
+const RESTORED_VISUALIZATION_LIMIT = 16;
+const restored = new Map<ShellTrace, ShellVisualizationSource | null>();
 
 /** Bind the immutable snapshot before publishing it; live paints borrow the actual run. */
 export function attachShellTrace(snapshot: ShellTrace, trace: RunTrace): void {
@@ -25,13 +31,18 @@ export function detachShellTrace(snapshot: ShellTrace): void {
 }
 
 /**
- * Historical traces restore their canonical native archive only once per snapshot.
+ * Historical traces restore their canonical native archive once per snapshot, kept in a bounded LRU.
  * `undefined` when the engine rejects the snapshot (e.g. a `tool_result` hook rewrote
  * `script`); callers then render the plain command and output.
  */
 export function shellVisualization(snapshot: ShellTrace): ShellVisualizationSource | undefined {
-	let visualization = visualizations.get(snapshot);
-	if (visualization === undefined) {
+	const live = visualizations.get(snapshot);
+	if (live !== undefined) return live ?? undefined;
+	let visualization = restored.get(snapshot);
+	if (visualization !== undefined) {
+		// Re-insert so the entry becomes most recent.
+		restored.delete(snapshot);
+	} else {
 		try {
 			visualization = new ShellVisualization(JSON.stringify(snapshot));
 		} catch (error) {
@@ -40,9 +51,19 @@ export function shellVisualization(snapshot: ShellTrace): ShellVisualizationSour
 			});
 			visualization = null;
 		}
-		visualizations.set(snapshot, visualization);
+	}
+	restored.set(snapshot, visualization);
+	// Map iterates in insertion order, so the first key is the least recently used.
+	if (restored.size > RESTORED_VISUALIZATION_LIMIT) {
+		const oldest = restored.keys().next();
+		if (!oldest.done) restored.delete(oldest.value);
 	}
 	return visualization ?? undefined;
+}
+
+/** Entries the restored-visualization LRU holds now; the test seam that proves the bound. */
+export function restoredVisualizationCount(): number {
+	return restored.size;
 }
 
 /** Python-like Pseudo, all layers enabled, one pane, live, paused, normal speed. */

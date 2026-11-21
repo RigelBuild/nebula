@@ -117,12 +117,11 @@ func startLinuxSeat(ctx context.Context, name string, command []string, deps Dep
 	if !ok {
 		return reportFailure(deps, "tmux is not on PATH")
 	}
-	launch := seatLaunch{directory: directory, socketPath: socketPath, unit: unit, tmux: tmux, command: command}
 	config, err := writeSeatConfig(deps, directory, name)
 	if err != nil {
 		return reportFailure(deps, err.Error())
 	}
-	launch.config = config
+	launch := seatLaunch{directory: directory, socketPath: socketPath, unit: unit, tmux: tmux, config: config, command: command}
 	if err := startSeatUnit(ctx, launch, envOr(deps.Getenv, "WAVE_SEAT_SLICE", defaultSlice), deps); err != nil {
 		return reportFailure(deps, err.Error())
 	}

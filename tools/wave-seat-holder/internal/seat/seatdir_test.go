@@ -153,3 +153,55 @@ func TestWriteSeatFileTruncatesAnExistingLooseFileToPrivateMode(t *testing.T) {
 	assertDeepEqual(t, got, seatConfig)
 	assertDeepEqual(t, modeOf(t, path), fs.FileMode(0o600))
 }
+
+func TestWriteSeatConfigRefusesWhenTheTargetIsNotAWritableEntry(t *testing.T) {
+	tests := []struct {
+		name  string
+		setup func(t *testing.T, root string) string
+	}{
+		{
+			name: "config name is a non-empty directory",
+			setup: func(t *testing.T, root string) string {
+				dir := filepath.Join(root, "seats")
+				if err := os.Mkdir(dir, 0o700); err != nil {
+					t.Fatal(err)
+				}
+				conf := filepath.Join(dir, "seat.conf")
+				if err := os.Mkdir(conf, 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(conf, "keep"), []byte("keep\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				return dir
+			},
+		},
+		{
+			name: "seat path is a regular file",
+			setup: func(t *testing.T, root string) string {
+				path := filepath.Join(root, "seats")
+				if err := os.WriteFile(path, []byte("not a directory\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				return path
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			dir := tt.setup(t, root)
+			deps := Deps{Files: realFiles()}
+			if _, err := writeSeatConfig(deps, dir, "seat"); err == nil {
+				t.Fatal("writeSeatConfig returned nil error")
+			}
+			if tt.name == "config name is a non-empty directory" {
+				got, err := os.ReadFile(filepath.Join(dir, "seat.conf", "keep"))
+				if err != nil {
+					t.Fatalf("the directory's contents were removed: %v", err)
+				}
+				assertDeepEqual(t, string(got), "keep\n")
+			}
+		})
+	}
+}

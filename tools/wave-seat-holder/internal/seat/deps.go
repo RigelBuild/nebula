@@ -24,7 +24,7 @@ type Files struct {
 
 // SeatDir is an open seat directory. Every operation is relative to its file descriptor, never a path.
 type SeatDir interface {
-	// WriteFile replaces name inside the directory with data at mode 0600, refusing any link or non-regular file.
+	// WriteFile replaces any existing entry named name with data at mode 0600. It never writes through a link.
 	WriteFile(name string, data []byte) error
 	Close() error
 }

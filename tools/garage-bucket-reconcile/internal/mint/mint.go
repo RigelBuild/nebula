@@ -345,7 +345,15 @@ func publishToken(ctx context.Context, cfg Config, deps Deps, current map[string
 		return true, nil
 	}
 	if !errors.Is(err, ErrSecretConflict) {
-		// The new token is valid for 30 days, but nothing stores it. Delete it best-effort, and join any delete error.
+		// A Replace error does not prove the PUT failed: a timeout can follow a commit. Re-read the Secret. If it
+		// holds the new token, the publish succeeded, so keep the token. Delete only when it does not.
+		now, readErr := deps.Secrets.Read(ctx, cfg.Namespace, cfg.SecretName)
+		if readErr != nil {
+			return false, errors.Join(err, readErr)
+		}
+		if tokenFromSecret(now) == token.secretToken {
+			return true, nil
+		}
 		if _, delErr := apiCall(ctx, cfg, deps, "DeleteAdminToken?id="+jscompat.EncodeURIComponent(token.id), http.MethodPost, cfg.MasterToken, nil, []string{token.secretToken}, false); delErr != nil {
 			return false, errors.Join(err, delErr)
 		}

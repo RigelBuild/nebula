@@ -57,6 +57,7 @@
         ref-gate = "sha256-WVoZkg5kdUYlATXDDxAA/yozThBwyYSKHwLoUsuIBfg=";
         rigel-backup-sync = "sha256-7K17JaXFsjf163g5PXCb5ng2gYdotnZ2IDKk8KFjNj0=";
         rigel-storeload-nightly = "sha256-usHhvjEtwEdT/hyGXFkC2nmC41/WAEWkA+Ng4TJ4FGo=";
+        rjc = "sha256-IOROkrCK+43zwbUVB51TsByOnEbM/s8UXtUq2o9SMiY=";
         rjc-gates-gc = "sha256-7K17JaXFsjf163g5PXCb5ng2gYdotnZ2IDKk8KFjNj0=";
         rjc-gates-image = "sha256-WJ+DzF3TydFNjIOq2MAQxEDI62G8xJcjTCAyMZtwgP0=";
         run-cd = "sha256-s9UTOYZs+Y7UQUbQuANYejHSr2QJb/GdqelRT8z0gOA=";
@@ -126,6 +127,8 @@
         hk-hook = pkgs: [ pkgs.jujutsu ];
         # host-bao-seal's tests run a sops/age round-trip.
         host-bao-seal = pkgs: [ pkgs.sops pkgs.age ];
+        # rjc's tests create jj repositories and run jj on PATH.
+        rjc = pkgs: [ pkgs.jujutsu ];
         # zellij-rss-watchdog's process tests start a grandchild with setsid.
         zellij-rss-watchdog = pkgs: [ pkgs.util-linux ];
       };

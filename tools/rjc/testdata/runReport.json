@@ -1,0 +1,26 @@
+{
+	"actions": [
+		{
+			"allowFailure": false,
+			"label": "RunTask(a:other)",
+			"node": {
+				"action": "run-task",
+				"params": {
+					"args": [],
+					"env": {},
+					"interactive": false,
+					"persistent": false,
+					"priority": 2,
+					"target": "a:other"
+				}
+			},
+			"operations": [
+				{
+					"meta": { "type": "task-execution", "exitCode": 1 },
+					"status": "failed"
+				}
+			],
+			"status": "failed"
+		}
+	]
+}

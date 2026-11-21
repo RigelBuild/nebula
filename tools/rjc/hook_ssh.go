@@ -269,6 +269,8 @@ type sshHookRunner struct {
 	ticket            string
 	queue             *queueHosts
 	enqueue           bool
+	// freeGiB is a seam for the free space each probed host reports. Nil means the probed value. Tests inject a fixed value.
+	freeGiB func(hostStatus) float64
 	heartbeatInterval time.Duration
 	// wait and now are seams for the slot queue. Nil means the real timer and clock. Tests use a fake clock.
 	wait func(ctx context.Context, d time.Duration) error
@@ -427,6 +429,9 @@ func (r sshHookRunner) sshProbe(ctx context.Context, host string) (hostStatus, e
 		return hostStatus{}, err
 	}
 	status, err := parseHostStatus(out.String())
+	if err == nil && r.freeGiB != nil {
+		status.freeGiB = r.freeGiB(status)
+	}
 	if err == nil && status.queuePosition > 0 && r.queue != nil {
 		r.queue.add(host)
 	}

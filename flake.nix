@@ -129,12 +129,13 @@
         hk-hook = pkgs: [ pkgs.jujutsu ];
         # host-bao-seal's tests run a sops/age round-trip.
         host-bao-seal = pkgs: [ pkgs.sops pkgs.age ];
-        # rjc's tests create jj repositories and run jj on PATH. The hook tests
-        # use flock and setsid (util-linux) and ps (procps). The TestRealVine*
-        # tests drive jj-vine; the flake exports it as a prebuilt package
-        # fetched by hash from the release manifest.
+        # rjc's tests create jj repositories and run jj on PATH. The hook gate probe calls flock on every
+        # system, and nixpkgs flock builds on darwin. setsid and ps are Linux-only (util-linux, procps), so
+        # the gate tests that need them skip elsewhere. The TestRealVine* tests drive jj-vine; the flake
+        # exports it as a prebuilt package fetched by hash from the release manifest.
         rjc = pkgs:
-          [ pkgs.jujutsu pkgs.util-linux pkgs.procps ]
+          [ pkgs.jujutsu pkgs.flock ]
+          ++ lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.util-linux pkgs.procps ]
           ++ lib.optional ((packagesFor manifest pkgs.stdenv.hostPlatform.system) ? jj-vine)
             (packagesFor manifest pkgs.stdenv.hostPlatform.system).jj-vine;
         # zellij-rss-watchdog's process tests start a grandchild with setsid.
@@ -492,6 +493,10 @@
           # The jj-hooks test drives the hook runners; the default shell stays lean.
           jj-hooks = pkgs.mkShell {
             packages = basePackages ++ hookPackages;
+          };
+          # CD enters the devShell named after the project, so rjc's tests run with checkTools.rjc on PATH.
+          rjc = pkgs.mkShell {
+            packages = basePackages ++ checkTools.rjc pkgs;
           };
           # host-bao-seal's round-trip test runs sops and age-keygen.
           host-bao-seal = pkgs.mkShell {

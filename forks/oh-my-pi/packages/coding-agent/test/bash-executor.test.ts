@@ -129,7 +129,22 @@ describe("executeBash", () => {
 		expect(new Set(snapshots).size).toBe(1);
 		expect(result.trace).toBeDefined();
 		if (!result.trace) throw new Error("Expected final native trace");
-		expect(shellVisualization(result.trace)).toBe(snapshots[0]);
+		expect(shellVisualization(result.trace)).not.toBe(snapshots[0]);
+	});
+
+	it("replays a settled trace from its JSON once the live native owner is released", async () => {
+		const command = "printf 'settled-replay\\n'";
+		const result = await executeBash(command, {
+			cwd: tempDir,
+			timeout: 5000,
+			onTrace: () => {},
+		});
+		if (!result.trace) throw new Error("Expected final native trace");
+		const source = shellVisualization(result.trace);
+		if (!source) throw new Error("Expected the settled trace to restore");
+		expect(source).not.toBeInstanceOf(piNatives.RunTrace);
+		const replay = { ...defaultShellVizPreferences(), cursor: result.trace.history?.length ?? 0 };
+		expect(readShellPresentation(source, replay, result.trace).output).toBe("settled-replay\n");
 	});
 
 	it("keeps tracing and restores a run whose values are not UTF-8", async () => {

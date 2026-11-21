@@ -21,7 +21,7 @@ import { isCmdShell, isExecutable, type ShellConfig } from "@oh-my-pi/pi-utils/p
 import { Settings } from "../config/settings";
 import type { MinimizedMeta } from "@oh-my-pi/pi-tui/tools/output-meta";
 import { OutputSink, type OutputSummary } from "@oh-my-pi/pi-tui/tools/streaming-output";
-import { attachShellTrace } from "@oh-my-pi/pi-tui/tools/shell-viz";
+import { attachShellTrace, detachShellTrace } from "@oh-my-pi/pi-tui/tools/shell-viz";
 import {
 	resolveOutputMaxColumns,
 	resolveOutputSinkArtifactMaxBytes,
@@ -206,6 +206,9 @@ function pollRunTrace(trace: RunTrace, onTrace: (trace: ShellTrace) => void): { 
 		stop: () => {
 			clearInterval(timer);
 			poll();
+			// The settled snapshot outlives the run in the transcript; releasing the
+			// live owner lets the run's journal go with it. Replay restores from JSON.
+			if (latest) detachShellTrace(latest);
 			return latest;
 		},
 	};

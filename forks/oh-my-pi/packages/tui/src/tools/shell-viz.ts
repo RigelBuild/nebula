@@ -19,6 +19,11 @@ export function attachShellTrace(snapshot: ShellTrace, trace: RunTrace): void {
 	visualizations.set(snapshot, trace);
 }
 
+/** Release a settled snapshot's live owner: it then restores from its own JSON, not the run's journal. */
+export function detachShellTrace(snapshot: ShellTrace): void {
+	visualizations.delete(snapshot);
+}
+
 /**
  * Historical traces restore their canonical native archive only once per snapshot.
  * `undefined` when the engine rejects the snapshot (e.g. a `tool_result` hook rewrote

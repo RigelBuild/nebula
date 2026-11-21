@@ -33,6 +33,7 @@
         filevault-unlock = "sha256-QRkNiaX+C0MKkhJxxfEhkmTSRvw2qn0IqBTDFwKdeo8=";
         fleet-gc-roots = null;
         fork-sync = "sha256-3CiEdm8Db78vQ8JG1KOBt5w55pmxuTs04in8RUhzwoM=";
+        fleet-switch = "sha256-nFAh8mkwsLGj9kG5oQfDG77/XphG74jLO0IWZCerszY=";
         gh-route = "sha256-7K17JaXFsjf163g5PXCb5ng2gYdotnZ2IDKk8KFjNj0=";
         hk-hook = null;
         host-bao-seal = "sha256-i9/7BGDMvMIbVBaYM4cMUtLzK7m7ZEdsYuvOKlLzSAo=";

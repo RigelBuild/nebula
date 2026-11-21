@@ -402,7 +402,7 @@ async fn run_command_capture(
 	cancel_token: CancelToken,
 ) -> (ShellExecuteResult, String) {
 	let _guard = shell_test_lock().lock().await;
-	capture_unlocked(command, cwd, minimizer, cancel_token).await
+	capture_unlocked(command, cwd, minimizer, None, cancel_token).await
 }
 
 /// [`run_command_capture`] that fails once the run outlasts `limit`. The
@@ -417,7 +417,7 @@ async fn run_command_capture_within(
 	cancel_token: CancelToken,
 ) -> Result<(ShellExecuteResult, String), time::error::Elapsed> {
 	let _guard = shell_test_lock().lock().await;
-	time::timeout(limit, capture_unlocked(command, cwd, minimizer, cancel_token)).await
+	time::timeout(limit, capture_unlocked(command, cwd, minimizer, None, cancel_token)).await
 }
 
 /// Runs `command` and collects its streamed output; the caller holds
@@ -427,6 +427,7 @@ async fn capture_unlocked(
 	command: &str,
 	cwd: Option<&std::path::Path>,
 	minimizer: Option<minimizer::MinimizerOptions>,
+	session_env: Option<HashMap<String, String>>,
 	cancel_token: CancelToken,
 ) -> (ShellExecuteResult, String) {
 	let (tx, rx) = flume::unbounded::<String>();
@@ -434,6 +435,7 @@ async fn capture_unlocked(
 		command: command.to_string(),
 		cwd: cwd.map(|path| path.to_string_lossy().into_owned()),
 		minimizer,
+		session_env,
 		..Default::default()
 	};
 	let result = execute_shell(options, Some(tx), cancel_token)
@@ -462,7 +464,7 @@ fn unique_temp_dir(prefix: &str) -> std::path::PathBuf {
 /// seconds.
 #[cfg(unix)]
 fn capture_on_single_worker(command: &'static str) -> (ShellExecuteResult, String) {
-	capture_on_runtime(command, None, 512)
+	capture_on_runtime(command, None, 512, None)
 		.expect("read must not wait on a blocking worker it cannot get")
 }
 
@@ -476,6 +478,7 @@ fn capture_on_runtime(
 	command: &'static str,
 	cwd: Option<std::path::PathBuf>,
 	max_blocking_threads: usize,
+	session_env: Option<HashMap<String, String>>,
 ) -> Result<(ShellExecuteResult, String), std::sync::mpsc::RecvTimeoutError> {
 	let _guard = shell_test_lock().blocking_lock();
 	let (tx, rx) = std::sync::mpsc::channel();
@@ -490,6 +493,7 @@ fn capture_on_runtime(
 			command,
 			cwd.as_deref(),
 			None,
+			session_env,
 			CancelToken::default(),
 		)));
 	});

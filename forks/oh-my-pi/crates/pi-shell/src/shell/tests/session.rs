@@ -132,6 +132,7 @@ fn fifo_redirects_do_not_hold_the_worker_their_other_end_needs() {
 		"echo one > f & cat < f; cat < g & echo two > g; wait",
 		Some(root.path().to_path_buf()),
 		512,
+		None,
 	)
 	.expect("a FIFO redirect must not hold the worker its other end needs");
 
@@ -150,6 +151,7 @@ async fn session_runs_pipelines_on_a_current_thread_runtime() {
 		Duration::from_secs(5),
 		capture_unlocked(
 			"{ /bin/sleep 0.05; echo late; } | /bin/cat; echo after; ps --help | head -n 1 | wc -l",
+			None,
 			None,
 			None,
 			CancelToken::default(),
@@ -391,18 +393,24 @@ async fn builtins_waiting_on_a_fifo_see_its_writer_close() {
 #[test]
 fn pipeline_reads_do_not_nest_on_a_full_blocking_pool() {
 	let (result, output) =
-		capture_on_runtime("printf 'a\\n' | read -r x | read -r y; printf 'done\\n'", None, 2)
+		capture_on_runtime("printf 'a\\n' | read -r x | read -r y; printf 'done\\n'", None, 2, None)
 			.expect("read must not wait on a blocking worker it cannot get");
 
 	assert_eq!(result.exit_code, Some(0), "output: {output:?}");
 	assert_eq!(output, "done\n");
 }
 
+/// The session env that turns on pi's in-process `rg` (off by default).
+#[cfg(unix)]
+fn rg_on() -> HashMap<String, String> {
+	HashMap::from([("PI_ENABLE_RG_BUILTIN".to_string(), "1".to_string())])
+}
+
 #[cfg(unix)]
 #[test]
 fn async_utilities_wait_for_a_slow_producer_without_blocking_the_worker() {
 	let (result, output) =
-		capture_on_runtime("{ sleep 0.3; echo hit; } | grep hit | rg hit", None, 512)
+		capture_on_runtime("{ sleep 0.3; echo hit; } | grep hit | rg hit", None, 512, Some(rg_on()))
 			.expect("async utilities must not block the runtime's only worker");
 
 	assert_eq!(result.exit_code, Some(0), "output: {output:?}");
@@ -418,8 +426,14 @@ fn async_utilities_pipe_more_than_a_pipe_buffer() {
 			.expect("create file");
 	}
 
-	let find = capture_on_runtime("find . -type f | grep -c f", Some(dir.path().to_path_buf()), 512);
-	let fd = capture_on_runtime("fd -t f . | rg -c f", Some(dir.path().to_path_buf()), 512);
+	let find =
+		capture_on_runtime("find . -type f | grep -c f", Some(dir.path().to_path_buf()), 512, None);
+	let fd = capture_on_runtime(
+		"fd -t f . | rg -c f",
+		Some(dir.path().to_path_buf()),
+		512,
+		Some(rg_on()),
+	);
 
 	let (result, output) = find.expect("find | grep must not deadlock on a full pipe");
 	assert_eq!(result.exit_code, Some(0), "output: {output:?}");
@@ -435,7 +449,7 @@ fn async_utility_waiting_on_stdin_is_cancelled_by_timeout() {
 	// The pipeline ends with its producer (1 s); `grep` must be cancelled at
 	// 0.3 s while the producer still needs the worker.
 	let (result, output) =
-		capture_on_runtime("{ sleep 1; echo x; } | timeout 0.3 grep x", None, 512)
+		capture_on_runtime("{ sleep 1; echo x; } | timeout 0.3 grep x", None, 512, None)
 			.expect("timeout must cancel a utility waiting on stdin");
 
 	assert_eq!((result.exit_code, output.as_str()), (Some(124), ""));

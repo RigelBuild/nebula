@@ -189,6 +189,10 @@ async fn pis_switches_hand_utilities_to_path() {
 	assert_eq!(out(&mut rm_off, "type -t rm mv").await, "file\nbuiltin\n");
 	let mut destructive = session_in(&dir, &[("PI_DISABLE_UUTILS_DESTRUCTIVE", "true")]);
 	assert_eq!(out(&mut destructive, "type -t cp cat").await, "file\nbuiltin\n");
+	let mut rg = session_in(&dir, &[]);
+	assert_ne!(out(&mut rg, "type -t rg").await, "builtin\n", "rg is opt-in");
+	let mut rg_on = session_in(&dir, &[("PI_ENABLE_RG_BUILTIN", "1")]);
+	assert_eq!(out(&mut rg_on, "type -t rg").await, "builtin\n", "PI_ENABLE_RG_BUILTIN opts rg in");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

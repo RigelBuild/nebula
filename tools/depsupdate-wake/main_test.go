@@ -162,6 +162,11 @@ func wakeTestCases() []wakeTestCase {
 			wantErr:    true,
 		},
 		{
+			name:       "missing Cotal directory fails before commands",
+			missingEnv: "COTAL_DIR",
+			wantErr:    true,
+		},
+		{
 			name:       "fetch failure sends nothing",
 			lastAllAge: time.Hour,
 			fetchErr:   errors.New("fetch failed"),
@@ -298,7 +303,7 @@ func assertWakeText(t *testing.T, runner *fakeRunner, test wakeTestCase) {
 	}
 	call := lastCall(runner.calls)
 	if call.name != "cotal" || call.dir != testCotalDir {
-		t.Errorf("Cotal call = %#v, want command from workspaces", call)
+		t.Errorf("Cotal call = %#v, want command run in %s", call, testCotalDir)
 	}
 	if got := strings.Join(call.args, " "); got != "send --to deps "+test.wantWake+" --space main" {
 		t.Errorf("Cotal args = %q, want wake sent to deps in main", got)

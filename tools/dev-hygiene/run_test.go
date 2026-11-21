@@ -10,6 +10,9 @@ import (
 	"time"
 )
 
+// testRecipient is the report recipient every run test passes with -to, since the flag is required.
+const testRecipient = "report-recipient"
+
 // fakeBin writes an executable shell script named name into a fresh dir and returns that dir.
 func fakeBin(t *testing.T, name, body string) string {
 	t.Helper()
@@ -44,7 +47,7 @@ func TestFailedApplyRunSendsFailureDM(t *testing.T) {
 	cotal, argsFile := recordingCotal(t)
 	missing := filepath.Join(home, "no-such-root")
 	var stderr bytes.Buffer
-	code := run(t.Context(), []string{"-apply", "-root", missing, "-cotal", cotal}, &bytes.Buffer{}, &stderr)
+	code := run(t.Context(), []string{"-apply", "-root", missing, "-cotal", cotal, "-to", testRecipient}, &bytes.Buffer{}, &stderr)
 	if code != 1 {
 		t.Fatalf("exit = %d, want 1 for a missing explicit root; stderr %q", code, stderr.String())
 	}
@@ -60,7 +63,7 @@ func TestFailedApplyRunSendsFailureDM(t *testing.T) {
 func TestDryRunFailureSendsNoDM(t *testing.T) {
 	home := isolateHome(t)
 	cotal, argsFile := recordingCotal(t)
-	code := run(t.Context(), []string{"-root", filepath.Join(home, "no-such-root"), "-cotal", cotal}, &bytes.Buffer{}, &bytes.Buffer{})
+	code := run(t.Context(), []string{"-root", filepath.Join(home, "no-such-root"), "-cotal", cotal, "-to", testRecipient}, &bytes.Buffer{}, &bytes.Buffer{})
 	if code != 1 {
 		t.Fatalf("exit = %d, want 1", code)
 	}
@@ -73,7 +76,7 @@ func TestMissingDefaultRootIsSkipped(t *testing.T) {
 	isolateHome(t)
 	cotal, argsFile := recordingCotal(t)
 	var stdout, stderr bytes.Buffer
-	if code := run(t.Context(), []string{"-apply", "-cotal", cotal}, &stdout, &stderr); code != 0 {
+	if code := run(t.Context(), []string{"-apply", "-cotal", cotal, "-to", testRecipient}, &stdout, &stderr); code != 0 {
 		t.Fatalf("exit = %d, want 0 with no default root; stderr %q", code, stderr.String())
 	}
 	if !strings.Contains(stdout.String(), "missing, skipped") {
@@ -101,7 +104,7 @@ func TestCredsPassedUnresolvedToCotal(t *testing.T) {
 	dir := t.TempDir()
 	link := filepath.Join(dir, "creds-link")
 	// Parsing must not require the creds file: sops may place it after the agent starts.
-	cfg, err := parseFlags([]string{"-creds", link, "-state-dir", dir}, &bytes.Buffer{})
+	cfg, err := parseFlags([]string{"-creds", link, "-state-dir", dir, "-to", testRecipient}, &bytes.Buffer{})
 	if err != nil {
 		t.Fatalf("parse failed on a not-yet-present creds file: %v", err)
 	}
@@ -193,7 +196,7 @@ func TestSnapshotErrorSkipsWorkspace(t *testing.T) {
 	root, dir, _ := idleFakeWorkspace(t, "echo 'Error: The working copy is stale' >&2; exit 1")
 	cotal, _ := recordingCotal(t)
 	var stdout, stderr bytes.Buffer
-	if code := run(t.Context(), []string{"-apply", "-root", root, "-cotal", cotal}, &stdout, &stderr); code != 0 {
+	if code := run(t.Context(), []string{"-apply", "-root", root, "-cotal", cotal, "-to", testRecipient}, &stdout, &stderr); code != 0 {
 		t.Fatalf("exit = %d, want 0 with a stale workspace; stdout %q stderr %q", code, stdout.String(), stderr.String())
 	}
 	if !strings.Contains(stdout.String(), dir+": skipped: check working copy") {
@@ -207,13 +210,13 @@ func TestSnapshotErrorSkipsWorkspace(t *testing.T) {
 	}
 }
 
-// TestSkippedWorkspaceReportedOnce checks a workspace jj cannot inspect is sent to Nemo as not inspected, once.
+// TestSkippedWorkspaceReportedOnce checks a workspace jj cannot inspect is sent to the report recipient as not inspected, once.
 func TestSkippedWorkspaceReportedOnce(t *testing.T) {
 	isolateHome(t)
 	root, dir, _ := idleFakeWorkspace(t, "echo 'Error: The working copy is stale' >&2; exit 1")
 	cotal, argsFile := recordingCotal(t)
 	var stdout, stderr bytes.Buffer
-	if code := run(t.Context(), []string{"-apply", "-root", root, "-cotal", cotal}, &stdout, &stderr); code != 0 {
+	if code := run(t.Context(), []string{"-apply", "-root", root, "-cotal", cotal, "-to", testRecipient}, &stdout, &stderr); code != 0 {
 		t.Fatalf("exit = %d, want 0; stdout %q stderr %q", code, stdout.String(), stderr.String())
 	}
 	sent, err := os.ReadFile(argsFile)
@@ -229,7 +232,7 @@ func TestSkippedWorkspaceReportedOnce(t *testing.T) {
 	if err := os.Remove(argsFile); err != nil {
 		t.Fatal(err)
 	}
-	if code := run(t.Context(), []string{"-apply", "-root", root, "-cotal", cotal}, &stdout, &stderr); code != 0 {
+	if code := run(t.Context(), []string{"-apply", "-root", root, "-cotal", cotal, "-to", testRecipient}, &stdout, &stderr); code != 0 {
 		t.Fatalf("second run exit = %d; stderr %q", code, stderr.String())
 	}
 	if _, err := os.Stat(argsFile); !errors.Is(err, os.ErrNotExist) {
@@ -243,7 +246,7 @@ func TestSkipReasonIsOneLine(t *testing.T) {
 	root, dir, _ := idleFakeWorkspace(t, "printf 'Error: The working copy is stale\\nHint: Run jj workspace update-stale\\n' >&2; exit 1")
 	cotal, _ := recordingCotal(t)
 	var stdout, stderr bytes.Buffer
-	if code := run(t.Context(), []string{"-apply", "-root", root, "-cotal", cotal}, &stdout, &stderr); code != 0 {
+	if code := run(t.Context(), []string{"-apply", "-root", root, "-cotal", cotal, "-to", testRecipient}, &stdout, &stderr); code != 0 {
 		t.Fatalf("exit = %d; stdout %q stderr %q", code, stdout.String(), stderr.String())
 	}
 	list, err := os.ReadFile(filepath.Join(home, "state", "dev-hygiene", "kept.txt"))
@@ -275,7 +278,7 @@ esac
 `)
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	var stdout, stderr bytes.Buffer
-	if code := run(t.Context(), []string{"-apply", "-root", root, "-cotal", "false"}, &stdout, &stderr); code != 0 {
+	if code := run(t.Context(), []string{"-apply", "-root", root, "-cotal", "false", "-to", testRecipient}, &stdout, &stderr); code != 0 {
 		t.Fatalf("exit = %d; stdout %q stderr %q", code, stdout.String(), stderr.String())
 	}
 	if !strings.Contains(stdout.String(), dir+": skipped, changed after the run's scan") {
@@ -292,7 +295,7 @@ func TestReadOnlyQueriesIgnoreWorkingCopy(t *testing.T) {
 	isolateHome(t)
 	root, _, argsFile := idleFakeWorkspace(t, ":")
 	var stdout, stderr bytes.Buffer
-	if code := run(t.Context(), []string{"-root", root, "-cotal", "false"}, &stdout, &stderr); code != 0 {
+	if code := run(t.Context(), []string{"-root", root, "-cotal", "false", "-to", testRecipient}, &stdout, &stderr); code != 0 {
 		t.Fatalf("exit = %d; stdout %q stderr %q", code, stdout.String(), stderr.String())
 	}
 	raw, err := os.ReadFile(argsFile)
@@ -353,7 +356,7 @@ esac
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	cotal, argsFile := recordingCotal(t)
 	var stdout, stderr bytes.Buffer
-	if code := run(t.Context(), []string{"-apply", "-root", root, "-cotal", cotal}, &stdout, &stderr); code != 0 {
+	if code := run(t.Context(), []string{"-apply", "-root", root, "-cotal", cotal, "-to", testRecipient}, &stdout, &stderr); code != 0 {
 		t.Fatalf("exit = %d, want 0 with a vanished workspace dir; stdout %q stderr %q", code, stdout.String(), stderr.String())
 	}
 	if _, err := os.Stat(dirA); !errors.Is(err, os.ErrNotExist) {
@@ -367,7 +370,7 @@ esac
 	}
 	sent, err := os.ReadFile(argsFile)
 	if err != nil {
-		t.Fatalf("missing workspace not reported to Nemo: %v", err)
+		t.Fatalf("missing workspace not reported to the report recipient: %v", err)
 	}
 	if !strings.Contains(string(sent), dirB+": not inspected (directory missing; jj may still list it)") {
 		t.Fatalf("report %q does not name the missing workspace and its reason", sent)

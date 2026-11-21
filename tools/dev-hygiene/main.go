@@ -109,7 +109,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	}
 
 	if err := errors.Join(errs...); err != nil {
-		// A failed apply run DMs Nemo too: the scheduled units are otherwise fire-and-forget.
+		// A failed apply run DMs the report recipient too: the scheduled units are otherwise fire-and-forget.
 		if cfg.apply {
 			host, hostErr := os.Hostname()
 			if hostErr != nil {
@@ -156,8 +156,8 @@ func parseFlags(args []string, stderr io.Writer) (config, error) {
 	flags.StringVar(&cfg.stateDir, "state-dir", "", "State dir for the reported set. Default: $XDG_STATE_HOME or ~/.local/state.")
 	flags.StringVar(&cfg.reportTo, "report-file", "", "Full list of kept workspaces. Default: <state-dir>/dev-hygiene/kept.txt.")
 	flags.StringVar(&cfg.cotalBin, "cotal", "cotal", "Cotal binary used to send the report DM.")
-	flags.StringVar(&cfg.to, "to", "nemo", "Cotal seat that receives the report DM.")
-	flags.StringVar(&cfg.server, "server", "", "NATS server for cotal send, as nemoAlertSend passes it. Empty uses the cotal config.")
+	flags.StringVar(&cfg.to, "to", "", "Cotal seat that receives the report DM. Required.")
+	flags.StringVar(&cfg.server, "server", "", "NATS server for cotal send. Empty uses the cotal config.")
 	flags.StringVar(&cfg.creds, "creds", "", "NATS credentials file for cotal send. Empty uses the cotal config.")
 	flags.DurationVar(&cfg.idle, "idle", defaultIdle, "Idle window before a workspace is eligible for cleanup.")
 	flags.DurationVar(&cfg.cacheAge, "cache-age", defaultCacheAge, "Go cache files untouched this long are pruned.")
@@ -167,6 +167,9 @@ func parseFlags(args []string, stderr io.Writer) (config, error) {
 	}
 	if flags.NArg() != 0 {
 		return config{}, fmt.Errorf("unexpected arguments: %v", flags.Args())
+	}
+	if cfg.to == "" {
+		return config{}, errors.New("-to is required")
 	}
 	// A non-positive window would make every workspace look idle.
 	if cfg.idle <= 0 || cfg.cacheAge <= 0 {

@@ -164,7 +164,7 @@ func sweepWorkspace(ctx context.Context, cfg config, dir string, live []string, 
 	}
 	if reason != "" {
 		out.printf("workspace %s: skipped: %s\n", resolved, reason)
-		// A kept entry sends the skip to Nemo once; the reported set dedupes later runs. jj stderr can span lines, and
+		// A kept entry sends the skip to the report recipient once; the reported set dedupes later runs. jj stderr can span lines, and
 		// one workspace must stay one report line.
 		oneLine := strings.ReplaceAll(reason, "\n", "; ")
 		return &kept{root: resolved, line: resolved + ": not inspected (" + oneLine + ")", key: reportKeyOf(resolved, nil)}, true, nil

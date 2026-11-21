@@ -62,7 +62,7 @@ func TestReportStateKeysAndPrune(t *testing.T) {
 func TestReportNotRecordedWhenSendFails(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	cfg := config{apply: true, cotalBin: filepath.Join(dir, "no-such-cotal"), to: "nemo"}
+	cfg := config{apply: true, cotalBin: filepath.Join(dir, "no-such-cotal"), to: testRecipient}
 	k := kept{root: dir, line: "w", key: reportKeyOf(dir, []string{"abc"})}
 	st, err := reportKept(t.Context(), cfg, []kept{k}, reportState{}, filepath.Join(dir, "kept.txt"), &printer{w: io.Discard})
 	if err == nil {
@@ -166,10 +166,12 @@ func TestParseFlags(t *testing.T) {
 		wantRoots []string
 		wantErr   bool
 	}{
-		{name: "default root", args: nil, wantRoots: []string{filepath.Join(home, "agents", "workspaces")}},
-		{name: "roots repeat in order", args: []string{"-root", "/a", "-root", "/b"}, wantRoots: []string{"/a", "/b"}},
-		{name: "zero idle window refused", args: []string{"-idle", "0s"}, wantErr: true},
-		{name: "stray argument refused", args: []string{"stray"}, wantErr: true},
+		{name: "default root", args: []string{"-to", testRecipient}, wantRoots: []string{filepath.Join(home, "agents", "workspaces")}},
+		{name: "roots repeat in order", args: []string{"-to", testRecipient, "-root", "/a", "-root", "/b"}, wantRoots: []string{"/a", "/b"}},
+		{name: "zero idle window refused", args: []string{"-to", testRecipient, "-idle", "0s"}, wantErr: true},
+		{name: "stray argument refused", args: []string{"-to", testRecipient, "stray"}, wantErr: true},
+		{name: "missing recipient refused", args: nil, wantErr: true},
+		{name: "empty recipient refused", args: []string{"-to", ""}, wantErr: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -204,7 +206,7 @@ func TestDeleteRefusedWhenProcessEnteredAfterScan(t *testing.T) {
 func TestReportKeptReplacesKeyPerRoot(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	cfg := config{apply: true, cotalBin: "true", to: "nemo"}
+	cfg := config{apply: true, cotalBin: "true", to: testRecipient}
 	old := reportKeyOf(dir, []string{"abc"})
 	other := reportKeyOf("/elsewhere", []string{"zzz"})
 	k := kept{root: dir, line: "w", key: reportKeyOf(dir, []string{"abc", "def"})}

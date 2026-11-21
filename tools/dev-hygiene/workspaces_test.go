@@ -101,7 +101,7 @@ func backdate(t *testing.T, dir string, at time.Time) {
 
 // sweepConfig is a run with a two-day idle window and no cache or report side effects.
 func sweepConfig(f *jjFixture, apply bool) config {
-	return config{roots: []string{f.root}, idle: 48 * time.Hour, apply: apply, cotalBin: "cotal", to: "nemo"}
+	return config{roots: []string{f.root}, idle: 48 * time.Hour, apply: apply, cotalBin: "cotal", to: testRecipient}
 }
 
 // lastSweepLog holds the verdict lines of the most recent sweep. The package's real-jj tests run sequentially,

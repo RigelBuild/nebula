@@ -20,6 +20,7 @@ func TestSelectTargets(t *testing.T) {
 		{"no -h", "76635 1 /usr/bin/login -flp m /bin/zsh\n76638 76635 sleep 900\n", nil},
 		{"private ip", "76635 1 /usr/bin/login -f -h 10.0.0.5 m\n76638 76635 sleep 900\n", nil},
 		{"outside cgnat", "76635 1 /usr/bin/login -f -h 203.0.113.1 m\n76638 76635 sleep 900\n", nil},
+		{"just above cgnat", "76635 1 /usr/bin/login -f -h 100.128.0.1 m\n76638 76635 sleep 900\n", nil},
 		{"garbage ip", "76635 1 /usr/bin/login -f -h not.an.ip m\n76638 76635 sleep 900\n", nil},
 		{"ppid1 non-login", "76635 1 /usr/sbin/cron -h 100.64.0.1\n76638 76635 sleep 900\n", nil},
 	}

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -833,5 +834,43 @@ func TestRunSweepQueriesOnlyCanonicalTeam(t *testing.T) {
 	cache, err := readCache(deps.CachePath)
 	if err != nil || cache == nil || strings.Join(cache.Watched, ",") != "EX-3,EX-4" {
 		t.Fatalf("cache = %#v err=%v", cache, err)
+	}
+}
+
+type failOnRequestTransport struct{ t *testing.T }
+
+func (transport failOnRequestTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	transport.t.Errorf("unexpected request to %s", request.URL)
+	return nil, errors.New("unexpected request")
+}
+
+func TestSweepRequiresIssuePrefixBeforeNetwork(t *testing.T) {
+	previous := http.DefaultTransport
+	http.DefaultTransport = failOnRequestTransport{t: t}
+	t.Cleanup(func() { http.DefaultTransport = previous })
+	root := t.TempDir()
+	cachePath := filepath.Join(root, "cache.json")
+	getenv := func(key string) string {
+		switch key {
+		case "LINEAR_COMMENTS_CACHE":
+			return cachePath
+		case "LINEAR_COMMENTS_NOTIFY":
+			return filepath.Join(root, "notify.json")
+		case "WAVE_WORKSPACES":
+			return root
+		}
+		return ""
+	}
+	for _, args := range [][]string{{"sweep"}, {"--issue-prefix", "", "sweep"}} {
+		var stdout, stderr bytes.Buffer
+		if got := runWithArgs(t.Context(), getenv, args, &stdout, &stderr); got != 2 {
+			t.Fatalf("args %q exit=%d stderr=%q", args, got, stderr.String())
+		}
+		if !strings.Contains(stderr.String(), "at least one team key") {
+			t.Fatalf("args %q stderr=%q", args, stderr.String())
+		}
+	}
+	if _, err := os.Stat(cachePath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("cache written without an issue prefix: err=%v", err)
 	}
 }

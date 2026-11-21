@@ -136,7 +136,17 @@ func Connect(opts Options) (*Cluster, error) {
 			TLSClientConfig: &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12},
 		}}
 	}
-	return &Cluster{base: base, namespace: namespace, read: read, http: httpClient}, nil
+	return &Cluster{base: base, namespace: namespace, read: read, http: noRedirect(httpClient)}, nil
+}
+
+// noRedirect returns a shallow copy of client that never follows a redirect. Go
+// keeps Authorization on a same-host redirect to another port, so following one
+// would resend the service-account token. The 3xx then surfaces as a
+// StatusError. The copy leaves the caller's client unchanged.
+func noRedirect(client *http.Client) *http.Client {
+	inner := *client
+	inner.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	return &inner
 }
 
 // Namespace returns the namespace the step pod runs in.

@@ -84,6 +84,16 @@ type Context struct {
 	RepoID  int64
 }
 
+// noRedirect returns a shallow copy of client that never follows a redirect. Go
+// keeps Authorization on a same-host redirect to another port, so following one
+// would resend the CD token. The 3xx then surfaces as a StatusError. The copy
+// leaves the caller's client unchanged.
+func noRedirect(client *http.Client) *http.Client {
+	inner := *client
+	inner.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	return &inner
+}
+
 // FetchJSON performs one request and decodes a JSON body. A 204 returns
 // ErrNoContent. A timeout of zero uses GateTimeout.
 func (c *Client) FetchJSON(ctx context.Context, method, path string, body any, timeout time.Duration) (out any, err error) {
@@ -114,7 +124,7 @@ func (c *Client) FetchJSON(ctx context.Context, method, path string, body any, t
 	if httpClient == nil {
 		httpClient = http.DefaultClient
 	}
-	resp, err := httpClient.Do(req)
+	resp, err := noRedirect(httpClient).Do(req)
 	if err != nil {
 		return nil, err
 	}

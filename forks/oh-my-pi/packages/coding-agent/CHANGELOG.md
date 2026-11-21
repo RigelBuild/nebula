@@ -12,7 +12,7 @@
 - The Claude auth gateway redeems a Fable launch reset when a Fable-model request hits an exhausted Fable weekly window. A full-week reset is never spent for a Fable block, and a selected grant that is not a Fable grant is skipped.
 
 ### Fixed
-
+- The auth gateway retries its first broker snapshot for up to 30s on connection refused or reset, so a gateway that starts with its broker no longer exits while the broker binds. `omp auth-gateway status` and `check` can now wait that long when the broker is down before they report it.
 - Disconnecting a disassembler database now reports it as not connected at once, so a closed reference fails with the reopen hint instead of a host-exited error.
 - Fixed bash original-output artifacts (`*.bash-original.log` spills of minimized output) being written unredacted, so secrets an extension masks in the tool result still reached disk; the artifact text now passes through the new `artifact_text` extension event before it is written
 

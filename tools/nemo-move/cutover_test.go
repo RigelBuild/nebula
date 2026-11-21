@@ -7,6 +7,8 @@ import (
 	"os"
 	"reflect"
 	"testing"
+
+	"github.com/RigelBuild/nebula/tools/nemo-move/internal/transfer"
 )
 
 type fakeCutover struct {
@@ -190,5 +192,34 @@ func TestArchiveSpoolPrivateAndRemoved(t *testing.T) {
 				t.Fatalf("spool remains: %v", err)
 			}
 		})
+	}
+}
+
+func TestProductionCutoverExtractSendsSourceHome(t *testing.T) {
+	archive, err := os.CreateTemp(t.TempDir(), "archive-*.tar")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := archive.Close(); err != nil {
+			t.Errorf("close archive: %v", err)
+		}
+	})
+	var got []string
+	run := func(_ context.Context, _ io.Reader, args ...string) ([]byte, error) {
+		got = args
+		return []byte("{}"), nil
+	}
+	p := &productionCutover{
+		ctl:     controlPath{run: run, namespace: "nemo"},
+		source:  transfer.Options{SourceHome: "/Users/example", MacUser: "example-user"},
+		archive: archive,
+	}
+	if err := p.extract(t.Context(), func() error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"-n", "nemo", "exec", "-i", maintName, "--", "nemo-move", "maint-side", "extract", "/Users/example"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("extract argv = %v, want %v", got, want)
 	}
 }

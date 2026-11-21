@@ -45,6 +45,21 @@ func (o Options) stageRoot() string {
 	return o.SourceHome + stageSuffix
 }
 
+// HomeCommand prints the remote login home without a trailing newline.
+const HomeCommand = `printf %s "$HOME"`
+
+// CheckSourceHome fails unless the remote $HOME of target equals opts.SourceHome.
+func CheckSourceHome(ctx context.Context, opts Options, target, sshPath string, remote Remote) error {
+	home, err := runRemote(ctx, target, sshPath, remote, HomeCommand)
+	if err != nil {
+		return fmt.Errorf("read remote home: %w", err)
+	}
+	if home != opts.SourceHome {
+		return fmt.Errorf("remote home %q does not match source home %q", home, opts.SourceHome)
+	}
+	return nil
+}
+
 // Export streams a verified archive of the source home to stdout.
 func Export(ctx context.Context, opts Options, target, sshPath, binary string, remote Remote, stdout, stderr io.Writer) error {
 	return ExportToSpool(ctx, opts, target, sshPath, binary, "", remote, stdout, stderr)
@@ -64,6 +79,9 @@ func ExportToSpool(ctx context.Context, opts Options, target, sshPath, binary, s
 	}
 	if remote == nil || stdout == nil || stderr == nil {
 		return errors.New("export requires remote and output writers")
+	}
+	if err := CheckSourceHome(ctx, opts, target, sshPath, remote); err != nil {
+		return err
 	}
 	if _, stageErr := runRemote(ctx, target, sshPath, remote, "/usr/bin/sudo -n /bin/sh -c "+ShellQuote(stageCredentialsScript(opts))); stageErr != nil {
 		stageState, err := runRemote(ctx, target, sshPath, remote, stagePresenceCommand(opts))

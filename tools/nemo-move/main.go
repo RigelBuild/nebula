@@ -260,6 +260,9 @@ func inventory(ctx context.Context, args []string, remote transfer.Remote, stdou
 	if err != nil {
 		return err
 	}
+	if err := transfer.CheckSourceHome(ctx, source.options(), *target, resolved, remote); err != nil {
+		return err
+	}
 	rows, err := transfer.Inventory(ctx, *target, resolved, *macBinary, remote)
 	writeErr := json.NewEncoder(stdout).Encode(struct {
 		Rows []transfer.InventoryRow `json:"rows"`

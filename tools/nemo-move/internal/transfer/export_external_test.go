@@ -25,7 +25,7 @@ type exportRemote struct {
 
 func (r exportRemote) Run(ctx context.Context, name string, args ...string) (string, error) {
 	command := args[len(args)-1]
-	if strings.HasSuffix(command, " mac-side inventory") {
+	if command == transfer.HomeCommand || strings.HasSuffix(command, " mac-side inventory") {
 		return r.inventoryRemote.Run(ctx, name, args...)
 	}
 	if strings.Contains(command, "printf exists") {
@@ -133,7 +133,7 @@ func stageHome(t *testing.T, home string) {
 func runExport(t *testing.T, home, bin string) (bytes.Buffer, bytes.Buffer, error) {
 	t.Helper()
 	var out, stderr bytes.Buffer
-	err := transfer.Export(t.Context(), transfer.Options{SourceHome: "/Users/example", MacUser: "example"}, "example@192.0.2.10", "/ssh", bin, exportRemote{inventoryRemote: inventoryRemote{home}, noSudo: true}, &out, &stderr)
+	err := transfer.Export(t.Context(), transfer.Options{SourceHome: "/Users/example", MacUser: "example"}, "example@192.0.2.10", "/ssh", bin, exportRemote{inventoryRemote: inventoryRemote{home: home}, noSudo: true}, &out, &stderr)
 	return out, stderr, err
 }
 
@@ -179,7 +179,7 @@ func TestExportRestagesWhenSudoAvailable(t *testing.T) {
 	stageHome(t, home)
 	setQuiet(t, home, time.Now())
 	var out, stderr bytes.Buffer
-	err := transfer.Export(t.Context(), transfer.Options{SourceHome: "/Users/example", MacUser: "example"}, "example@192.0.2.10", "/ssh", bin, exportRemote{inventoryRemote: inventoryRemote{home}}, &out, &stderr)
+	err := transfer.Export(t.Context(), transfer.Options{SourceHome: "/Users/example", MacUser: "example"}, "example@192.0.2.10", "/ssh", bin, exportRemote{inventoryRemote: inventoryRemote{home: home}}, &out, &stderr)
 	if err != nil || out.Len() == 0 {
 		t.Fatalf("restaged export: error %v, output %d, stderr %q", err, out.Len(), stderr.String())
 	}
@@ -194,9 +194,22 @@ func TestExportMissingQuietRefuses(t *testing.T) {
 	}
 }
 
-type inventoryRemote struct{ home string }
+const exampleHome = "/Users/example"
 
-func (r inventoryRemote) Run(_ context.Context, _ string, _ ...string) (string, error) {
+// inventoryRemote serves a local home as the Mac. remoteHome is the $HOME it
+// reports; empty means exampleHome.
+type inventoryRemote struct {
+	home       string
+	remoteHome string
+}
+
+func (r inventoryRemote) Run(_ context.Context, _ string, args ...string) (string, error) {
+	if args[len(args)-1] == transfer.HomeCommand {
+		if r.remoteHome == "" {
+			return exampleHome, nil
+		}
+		return r.remoteHome, nil
+	}
 	report, inventoryErr := macside.Inventory(r.home, time.Now())
 	data, err := json.Marshal(report)
 	return string(data), errors.Join(inventoryErr, err)
@@ -221,5 +234,36 @@ func TestInventoryMissingCopyRow(t *testing.T) {
 	rows, err := transfer.Inventory(t.Context(), "example@192.0.2.10", "/ssh", bin, inventoryRemote{home: home})
 	if err == nil || len(rows) == 0 {
 		t.Fatalf("missing Copy row: error %v, rows %d", err, len(rows))
+	}
+}
+
+func TestCheckSourceHome(t *testing.T) {
+	opts := transfer.Options{SourceHome: exampleHome, MacUser: "example"}
+	for _, tc := range []struct {
+		name       string
+		remoteHome string
+		wantErr    bool
+	}{
+		{name: "match", remoteHome: exampleHome},
+		{name: "mismatch", remoteHome: "/Users/other", wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := transfer.CheckSourceHome(t.Context(), opts, "example@192.0.2.10", "/ssh", inventoryRemote{remoteHome: tc.remoteHome})
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("CheckSourceHome error = %v, wantErr %v", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestExportRefusesMismatchedRemoteHome(t *testing.T) {
+	home, bin := exportHome(t)
+	stageHome(t, home)
+	setQuiet(t, home, time.Now().Add(-time.Hour))
+	var out, stderr bytes.Buffer
+	remote := exportRemote{inventoryRemote: inventoryRemote{home: home, remoteHome: "/Users/other"}}
+	err := transfer.Export(t.Context(), transfer.Options{SourceHome: exampleHome, MacUser: "example"}, "example@192.0.2.10", "/ssh", bin, remote, &out, &stderr)
+	if err == nil || !strings.Contains(err.Error(), "does not match source home") || out.Len() != 0 {
+		t.Fatalf("mismatched home: error %v, output %d", err, out.Len())
 	}
 }

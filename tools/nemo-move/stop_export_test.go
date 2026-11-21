@@ -23,6 +23,9 @@ type stopExportRemote struct{ home string }
 
 func (r stopExportRemote) Run(_ context.Context, _ string, args ...string) (string, error) {
 	cmd := args[len(args)-1]
+	if cmd == transfer.HomeCommand {
+		return testHome, nil
+	}
 	if strings.HasSuffix(cmd, " mac-side inventory") {
 		report, err := macside.Inventory(r.home, time.Now())
 		if err != nil {

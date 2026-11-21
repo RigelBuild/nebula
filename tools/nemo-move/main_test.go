@@ -107,4 +107,10 @@ func TestMaintSideOperations(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	})
+	t.Run("extract without source home refused", func(t *testing.T) {
+		err := maintSide([]string{"extract"}, io.Discard, t.TempDir())
+		if err == nil || err.Error() != "extract requires the source home" {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
 }

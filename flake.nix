@@ -57,6 +57,7 @@
         ref-gate = "sha256-WVoZkg5kdUYlATXDDxAA/yozThBwyYSKHwLoUsuIBfg=";
         rigel-backup-sync = "sha256-7K17JaXFsjf163g5PXCb5ng2gYdotnZ2IDKk8KFjNj0=";
         rigel-storeload-nightly = "sha256-usHhvjEtwEdT/hyGXFkC2nmC41/WAEWkA+Ng4TJ4FGo=";
+        rjc = "sha256-IOROkrCK+43zwbUVB51TsByOnEbM/s8UXtUq2o9SMiY=";
         rjc-gates-gc = "sha256-7K17JaXFsjf163g5PXCb5ng2gYdotnZ2IDKk8KFjNj0=";
         rjc-gates-image = "sha256-WJ+DzF3TydFNjIOq2MAQxEDI62G8xJcjTCAyMZtwgP0=";
         run-cd = "sha256-s9UTOYZs+Y7UQUbQuANYejHSr2QJb/GdqelRT8z0gOA=";
@@ -126,12 +127,27 @@
         hk-hook = pkgs: [ pkgs.jujutsu ];
         # host-bao-seal's tests run a sops/age round-trip.
         host-bao-seal = pkgs: [ pkgs.sops pkgs.age ];
+        # rjc's tests create jj repositories and run jj on PATH. The hook tests
+        # use flock and setsid (util-linux) and ps (procps). The TestRealVine*
+        # tests drive jj-vine; the flake exports it as a prebuilt package
+        # fetched by hash from the release manifest.
+        rjc = pkgs:
+          [ pkgs.jujutsu pkgs.util-linux pkgs.procps ]
+          ++ lib.optional ((packagesFor manifest pkgs.stdenv.hostPlatform.system) ? jj-vine)
+            (packagesFor manifest pkgs.stdenv.hostPlatform.system).jj-vine;
         # zellij-rss-watchdog's process tests start a grandchild with setsid.
         zellij-rss-watchdog = pkgs: [ pkgs.util-linux ];
       };
 
+      # checkFlags are extra go test flags for a command's check phase. rjc's
+      # suite takes about 15 minutes in the sandbox, over the 10m default go
+      # test timeout.
+      checkFlags = {
+        rjc = [ "-timeout=30m" ];
+      };
+
       buildCommand = pkgs: name: vendorHash:
-        pkgs.buildGoModule {
+        pkgs.buildGoModule ({
           pname = name;
           version = self.shortRev or self.dirtyShortRev or "dirty";
           src = commandSource name;
@@ -147,7 +163,7 @@
           '';
           env.CGO_ENABLED = "0";
           ldflags = [ "-s" "-w" ];
-        };
+        } // lib.optionalAttrs (checkFlags ? ${name}) { checkFlags = checkFlags.${name}; });
 
       commandPackagesFor = system:
         let

@@ -1,0 +1,18 @@
+// Synthetic fast-tier hook config for rjc tests.
+amends "package://github.com/jdx/hk/releases/download/v2.12.0/hk@2.12.0#/Config.pkl"
+
+default_branch = "main"
+
+hooks {
+  ["pre-push"] {
+    steps {
+      ["ci"] = new Step {
+        check = "go run ./tools/gate-runner moon-ci --tier fast"
+      }
+      ["gates"] = new Step {
+        check = "go run ./tools/gate-runner"
+        depends = List("ci")
+      }
+    }
+  }
+}

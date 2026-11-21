@@ -82,6 +82,7 @@ func TestVerifyGoogleTokens(t *testing.T) {
 }
 
 func TestVerifyRuntimeLinksAndRepositories(t *testing.T) {
+	requireLinux(t)
 	root := t.TempDir()
 	dir := filepath.Join(root, "opt/data/nemo/repos/repo")
 	if err := os.MkdirAll(filepath.Join(dir, ".jj"), 0o755); err != nil {

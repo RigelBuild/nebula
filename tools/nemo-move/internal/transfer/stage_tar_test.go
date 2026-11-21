@@ -21,6 +21,16 @@ func requireDarwin(t *testing.T) {
 	}
 }
 
+// requireLinux skips a test that needs Linux append-only inode flags or rooted
+// symlink checks. Off Linux the journal and verify code returns a platform error
+// before the assertion under test runs.
+func requireLinux(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS != "linux" {
+		t.Skip("needs Linux append-only flags or rooted symlink verification; run on Linux")
+	}
+}
+
 // fixtureSource writes <source>/<account>/credentials/token.json for each
 // account, owned by the test user, as the Mac Google source looks before staging.
 func fixtureSource(t *testing.T, token string, accounts ...string) string {

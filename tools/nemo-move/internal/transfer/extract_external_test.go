@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -13,6 +14,9 @@ import (
 )
 
 func TestExportFrameExtractRoundTrip(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("needs Linux append-only flags; run on Linux")
+	}
 	home, _ := exportHome(t)
 	setQuiet(t, home, time.Now().Add(-time.Hour))
 	stageHome(t, home)

@@ -143,6 +143,8 @@ source=$1
 shift
 for account in "$@"; do
   /bin/test -d "$source/$account/credentials"
+  unreadable=$(/usr/bin/find "$source/$account/credentials" -type f ! -perm -u+r -print -quit)
+  if [ -n "$unreadable" ]; then echo "unreadable credential $unreadable" >&2; exit 1; fi
 done
 cd "$source"
 exec /usr/bin/tar -c "$@"
@@ -166,8 +168,9 @@ old=$(/usr/bin/mktemp -d "$parent/.nemo-move-old.XXXXXX")
 trap '/bin/rm -rf "$temp"; /bin/rmdir "$old" 2>/dev/null || true' EXIT
 /usr/bin/tar -x -C "$temp"
 for account in "$@"; do
-  /usr/bin/find "$temp/$account/credentials" -type d -exec /bin/chmod 700 {} \;
-  /usr/bin/find "$temp/$account/credentials" -type f -exec /bin/chmod 600 {} \;
+  if [ -z "$(/bin/ls -A "$temp/$account/credentials" 2>/dev/null)" ]; then echo "no credentials for $account" >&2; exit 1; fi
+  /usr/bin/find "$temp/$account" -type d -exec /bin/chmod 700 {} \;
+  /usr/bin/find "$temp/$account" -type f -exec /bin/chmod 600 {} \;
 done
 /bin/chmod 700 "$temp"
 if [ -e "$base" ]; then /bin/mv "$base" "$old/previous"; fi
@@ -196,7 +199,7 @@ func stageUnpackShell(opts Options) string {
 }
 
 func stageCredentialsCommand(opts Options) string {
-	return "sudo " + stageShell(opts)
+	return "/bin/bash -o pipefail -c " + ShellQuote("sudo "+stageShell(opts)+" | "+stageUnpackShell(opts))
 }
 
 // stagePipeline runs the root tar stream into the user unpack. Only the first
@@ -204,7 +207,7 @@ func stageCredentialsCommand(opts Options) string {
 // into a pipe. The unpack runs as the SSH user and is the only writer under the
 // user's staging parent.
 func stagePipeline(opts Options) string {
-	return "/usr/bin/sudo -n " + stageShell(opts) + " | " + stageUnpackShell(opts)
+	return "/bin/bash -o pipefail -c " + ShellQuote("/usr/bin/sudo -n "+stageShell(opts)+" | "+stageUnpackShell(opts))
 }
 
 func stagePresenceCommand(opts Options) string {

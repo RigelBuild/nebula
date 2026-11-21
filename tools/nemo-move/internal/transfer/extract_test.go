@@ -70,6 +70,7 @@ func extractionArchive(t *testing.T, manifest Manifest, headers ...*tar.Header) 
 }
 
 func TestExtractPartialThenRerun(t *testing.T) {
+	requireLinux(t)
 	root := t.TempDir()
 	t.Cleanup(useTestJournalLocker())
 	hash := sha256.Sum256(nil)
@@ -107,6 +108,7 @@ func TestExtractPartialThenRerun(t *testing.T) {
 }
 
 func TestExtractEmptyJournalManifestRerun(t *testing.T) {
+	requireLinux(t)
 	for _, tc := range []struct {
 		name        string
 		initialized bool

@@ -80,6 +80,7 @@ func TestFramedArchivePreservesSourceSymlinkManifest(t *testing.T) {
 }
 
 func TestFramedExtractPreservesSourceAndVerifiesRewrittenManifest(t *testing.T) {
+	requireLinux(t)
 	content := []byte("cd " + testSourceHome + "/.example-agent\nfile=" + testSourceHome + "/nemo/x\n")
 	hash := sha256.Sum256(content)
 	target := testSourceHome + "/.example-agent/file"

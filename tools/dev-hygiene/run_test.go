@@ -184,7 +184,8 @@ func idleFakeWorkspace(t *testing.T, snapshot string) (root, dir, argsFile strin
 	mustWrite(t, filepath.Join(dir, "README.md"), "x\n")
 	backdate(t, dir, time.Now().Add(-100*time.Hour))
 	argsFile = filepath.Join(t.TempDir(), "jj-args")
-	bin := fakeBin(t, "jj", `echo "$*" >> '`+argsFile+`'
+	// printf, not echo: dash and macOS sh expand \n in echo, which would split one logged argv into two lines.
+	bin := fakeBin(t, "jj", `printf '%s\n' "$*" >> '`+argsFile+`'
 case "$*" in
 *"workspace list"*) printf 'ws\t%s\n' '`+dir+`' ;;
 *--ignore-working-copy*) ;;

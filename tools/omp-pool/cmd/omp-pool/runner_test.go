@@ -420,7 +420,8 @@ func executableOf(pid int) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("ps for pid %d: %w", pid, err)
 	}
-	return strings.TrimSpace(string(out)), nil
+	// On macOS, comm is argv[0], not the resolved path, so resolve symlinks before comparing.
+	return filepath.EvalSymlinks(strings.TrimSpace(string(out)))
 }
 
 func (p *remoteChildTestProcess) waitForShutdown(t *testing.T, wantExitCode int, timeout time.Duration) {

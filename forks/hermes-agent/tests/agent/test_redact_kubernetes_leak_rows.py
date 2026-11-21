@@ -122,6 +122,17 @@ LEAK_ROWS_2 = {
  "env_CLIENT_SECRET_ID_describe": f"    Environment:\n      CLIENT_SECRET_ID:  {V}\n",
  "json_env_pretty_after_cmd_line": '$ kubectl get pod p -o jsonpath="{.spec.containers[0].env}"\n[{"name":"DB_PASSWORD","value":"' + V + '"}]',
  "secret_yaml_last_applied_dq_scalar": 'apiVersion: v1\nkind: Secret\nmetadata:\n  annotations:\n    kubectl.kubernetes.io/last-applied-configuration: "{\\"apiVersion\\":\\"v1\\",\\"data\\":{\\"k\\":\\"' + V + '\\"},\\"kind\\":\\"Secret\\"}"\ndata:\n  k: eA==\n',
+ # a suffix alone does not unmask a secret-word name
+ "env_API_TOKENS": f"env:\n- name: API_TOKENS\n  value: {V}\n",
+ "env_ACCESS_TOKENS_json": json.dumps({"spec": {"containers": [{"env": [{"name": "ACCESS_TOKENS", "value": V + ",o"}]}]}}),
+ "env_AUTH_TOKEN_TYPE_describe": f"    Environment:\n      AUTH_TOKEN_TYPE:  {V}\n",
+ "env_SECRET_KEY_NAME": f"env:\n- name: SECRET_KEY_NAME\n  value: {V}\n",
+ "env_DB_PASSWORD_ENC_MODE_describe": f"    Environment:\n      DB_PASSWORD_ENC_MODE:  {V}\n",
+ "env_DB_PASSWORD_ENC_MODE_json": json.dumps({"spec": {"containers": [{"env": [{"name": "DB_PASSWORD_ENC_MODE", "value": V}]}]}}),
+ # a *_FILE value that is not an absolute path is the secret itself
+ "env_DB_PASSWORD_FILE_inline": f"env:\n- name: DB_PASSWORD_FILE\n  value: {V}\n",
+ "env_API_KEY_FILE_json": json.dumps({"spec": {"containers": [{"env": [{"name": "API_KEY_FILE", "value": V}]}]}}),
+ "env_API_KEY_FILE_describe": f"    Environment:\n      API_KEY_FILE:  {V}\n",
 }
 KEEP_ROWS = {
  "env_MAX_TOKENS_yaml": f'env:\n- name: MAX_TOKENS\n  value: "{K}"\n',
@@ -129,6 +140,11 @@ KEEP_ROWS = {
  "env_PASSWORD_MIN_LENGTH": f'env:\n- name: PASSWORD_MIN_LENGTH\n  value: "{K}"\n',
  "env_AUTH_ENABLED": f'env:\n- name: AUTH_ENABLED\n  value: "{K}"\n',
  "env_AUTH_MODE_json": '{"spec":{"containers":[{"env":[{"name":"AUTH_MODE","value":"' + K + '"}]}]}}',
+ "env_TOTAL_TOKENS": f'env:\n- name: TOTAL_TOKENS\n  value: "{K}"\n',
+ "env_NUM_TOKENS": f'env:\n- name: NUM_TOKENS\n  value: "{K}"\n',
+ "env_MAX_TOKENS_json": json.dumps({"spec": {"containers": [{"env": [{"name": "MAX_TOKENS", "value": K}]}]}}),
+ "env_DB_PASSWORD_FILE_path": f"env:\n- name: DB_PASSWORD_FILE\n  value: /run/secrets/{K}\n",
+ "env_API_KEY_FILE_path_json": json.dumps({"spec": {"containers": [{"env": [{"name": "API_KEY_FILE", "value": "/etc/" + K}]}]}}),
  "env_SECRET_ROTATION_DAYS": f'env:\n- name: SECRET_ROTATION_DAYS\n  value: "{K}"\n',
  "jsonl_metric_tokens": '{"name":"llm.total_tokens","value":"' + K + '"}\n',
  "python_call_dict_line": 'add(\n    {"name": "token", "value": "' + K + '"},\n)\n',
@@ -181,3 +197,16 @@ def test_one_megabyte_open_brackets_under_a_second():
     start = time.perf_counter()
     r(text, force=True)
     assert time.perf_counter() - start < 1.0
+
+
+@pytest.mark.parametrize("unit", ["& ", "!a "])
+def test_prop_chain_scales_linearly(unit):
+    def cost(n):
+        text = "data: " + unit * (n // len(unit))
+        start = time.perf_counter()
+        r(text, force=True)
+        return time.perf_counter() - start
+
+    cost(100_000)  # warm up
+    small, big = min(cost(100_000) for _ in range(3)), min(cost(1_000_000) for _ in range(3))
+    assert big / max(small, 1e-4) < 25, (small, big)

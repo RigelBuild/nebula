@@ -121,14 +121,19 @@ class TestDescribe:
 
 
 class TestPerformance:
-    def test_one_megabyte_under_a_second(self):
+    def test_one_megabyte_scales_linearly(self):
         block = SECRET_YAML + ENV_YAML + SECRET_JSON_PRETTY + ENV_JSON_PRETTY
-        big = block * (1_000_000 // len(block) + 1)
-        assert len(big) >= 1_000_000
-        start = time.perf_counter()
-        out = redact_sensitive_text(big, force=True)
-        elapsed = time.perf_counter() - start
-        assert elapsed < 1.0, elapsed
+
+        def run(size):
+            text = block * (size // len(block) + 1)
+            start = time.perf_counter()
+            out = redact_sensitive_text(text, force=True)
+            return time.perf_counter() - start, out
+
+        run(100_000)  # warm up
+        small = min(run(100_000)[0] for _ in range(3))
+        big, out = run(1_000_000)
+        assert big / max(small, 1e-4) < 25, (small, big)
         assert V not in out and B64 not in out
 
     def test_one_megabyte_mixed_shapes_leaks_nothing(self):

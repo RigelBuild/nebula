@@ -1,0 +1,44 @@
+version: "2"
+
+linters:
+  default: all
+  disable:
+    # Ports, sample counts, and timeouts read clearer as literals in the harness.
+    - mnd
+    # The Go standard library's short local names and blank-line style are retained.
+    - varnamelen
+    - wsl
+    - wsl_v5
+    # The harness poll loops are single-pass state machines; splitting them hides the checks.
+    - cyclop
+    - gocognit
+    - gocyclo
+    - maintidx
+    # Long table tests and repeated fixtures keep each case readable on its own.
+    - funlen
+    - dupl
+    - goconst
+    # Interface returns are not part of this command's design.
+    - ireturn
+    # The harness runs Alloy from argv through os/exec. Each call site carries its own nolint reason.
+    - depguard
+    # Use the v2 replacement for the deprecated legacy linter.
+    - gomodguard
+    - nlreturn
+    - exhaustruct
+
+  exclusions:
+    rules:
+      - path: '_test\.go'
+        linters:
+          - gochecknoglobals
+          - paralleltest
+          - testpackage
+          - funlen
+          - goconst
+          - dupl
+          - gosec
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

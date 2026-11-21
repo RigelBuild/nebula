@@ -3,14 +3,14 @@ package seat
 import (
 	"bytes"
 	"context"
+	_ "embed"
 	"errors"
-	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"net"
 	"os"
 	"os/exec" //nolint:depguard // The holder drives tmux, systemctl and wave-host directly, without a shell.
-	"path/filepath"
 	"runtime"
 	"time"
 
@@ -28,16 +28,16 @@ func ProductionDeps(getenv socket.Environment, stdout, stderr io.Writer) Deps {
 		Now:      time.Now,
 		Sleep:    sleepContext,
 		Files: Files{
-			Mkdir:    os.MkdirAll,
-			Readdir:  readDirNames,
-			ReadText: readFileText,
-			Connect:  connectSocket,
+			Mkdir:     os.MkdirAll,
+			WriteFile: writePrivateFile,
+			Readdir:   readDirNames,
+			ReadText:  readFileText,
+			Connect:   connectSocket,
 		},
-		Which:      lookPath,
-		Spawn:      spawnCommand,
-		SeatConfig: seatConfigPath,
-		Stdout:     emitTo(stdout),
-		Stderr:     emitTo(stderr),
+		Which:  lookPath,
+		Spawn:  spawnCommand,
+		Stdout: emitTo(stdout),
+		Stderr: emitTo(stderr),
 	}
 }
 
@@ -50,18 +50,25 @@ func emitTo(w io.Writer) func(string) {
 	}
 }
 
-// seatConfigPath is seat.conf in the share directory beside the binary's bin directory.
-func seatConfigPath() (string, error) {
-	exe, err := os.Executable()
-	if err != nil {
-		return "", fmt.Errorf("locating seat.conf: %w", err)
-	}
-	return seatConfigFor(exe), nil
-}
+// seatConfig is the tmux configuration every seat runs with, embedded so the released binary needs no share directory.
+//
+//go:embed seat.conf
+var seatConfig []byte
 
-// seatConfigFor maps <prefix>/bin/<tool> to <prefix>/share/wave-seat-holder/seat.conf.
-func seatConfigFor(exe string) string {
-	return filepath.Join(filepath.Dir(filepath.Dir(exe)), "share", "wave-seat-holder", "seat.conf")
+// writePrivateFile writes data to path and sets perm even when the file already exists, so the mode is never left stale.
+func writePrivateFile(path string, data []byte, perm fs.FileMode) error {
+	//nolint:gosec // path is the seat's own directory, created by the holder.
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, perm)
+	if err != nil {
+		return err
+	}
+	if _, err := file.Write(data); err != nil {
+		return errors.Join(err, file.Close())
+	}
+	if err := file.Chmod(perm); err != nil {
+		return errors.Join(err, file.Close())
+	}
+	return file.Close()
 }
 
 func lookPath(command string) (string, bool) {

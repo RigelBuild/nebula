@@ -3,6 +3,7 @@ package seat
 import (
 	"context"
 	"io/fs"
+	"os"
 	"reflect"
 	"slices"
 	"testing"
@@ -12,9 +13,10 @@ import (
 )
 
 const (
-	testSocket   = "/run/test-seats/seat.sock"
-	testTmux     = "/nix/store/tmux/bin/tmux"
-	testSeatConf = "/nix/store/share/wave-seat-holder/seat.conf"
+	testSocket         = "/run/test-seats/seat.sock"
+	testTmux           = "/nix/store/tmux/bin/tmux"
+	testSeatConf       = "/run/test-seats/seat.conf"
+	testDarwinSeatConf = "/home/test/agents/run/seats/seat.conf"
 )
 
 // recordedCall is one spawn the holder made, with whether stdio was inherited.
@@ -30,6 +32,13 @@ type recordedMkdir struct {
 	perm fs.FileMode
 }
 
+// recordedWrite is one file the holder wrote, with its bytes and the permission it asked for.
+type recordedWrite struct {
+	path string
+	data []byte
+	perm fs.FileMode
+}
+
 // fakeOptions selects the behaviour of the fake OS for one test.
 type fakeOptions struct {
 	liveSocketPaths []string
@@ -41,7 +50,7 @@ type fakeOptions struct {
 	tmuxPath        *string
 	newSessionCode  int
 	cwdErr          error
-	seatConfigErr   error
+	writeErr        error
 	sleepErr        error
 	// setOptionFails names the remain-on-exit value ("on" or "off") whose set-option fails.
 	setOptionFails string
@@ -69,6 +78,7 @@ type fakeHolder struct {
 	output []string
 	errors []string
 	mkdirs []recordedMkdir
+	writes []recordedWrite
 	// dead is true once the scripted launcher has exited.
 	dead bool
 	// pane is the scripted launcher exit, if any.
@@ -131,12 +141,6 @@ func fakeDeps(options fakeOptions) *fakeHolder {
 			fake.calls = append(fake.calls, recordedCall{command: command, args: args, inherit: inherit})
 			return fake.spawnResult(options, command, args, &started), nil
 		},
-		SeatConfig: func() (string, error) {
-			if options.seatConfigErr != nil {
-				return "", options.seatConfigErr
-			}
-			return testSeatConf, nil
-		},
 		Stdout: func(line string) { fake.output = append(fake.output, line) },
 		Stderr: func(line string) { fake.errors = append(fake.errors, line) },
 	}
@@ -148,6 +152,13 @@ func fakeFiles(fake *fakeHolder, options fakeOptions, live map[string]bool, chil
 	return Files{
 		Mkdir: func(path string, perm fs.FileMode) error {
 			fake.mkdirs = append(fake.mkdirs, recordedMkdir{path: path, perm: perm})
+			return nil
+		},
+		WriteFile: func(path string, data []byte, perm fs.FileMode) error {
+			if options.writeErr != nil {
+				return options.writeErr
+			}
+			fake.writes = append(fake.writes, recordedWrite{path: path, data: append([]byte(nil), data...), perm: perm})
 			return nil
 		},
 		Readdir: func(string) ([]string, error) {
@@ -290,4 +301,14 @@ func assertDeepEqual(t *testing.T, got, want any) {
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %#v, want %#v", got, want)
 	}
+}
+
+// sourceSeatConf returns seat.conf as this package has it on disk. The holder must embed exactly these bytes.
+func sourceSeatConf(t *testing.T) []byte {
+	t.Helper()
+	data, err := os.ReadFile("seat.conf")
+	if err != nil {
+		t.Fatalf("read seat.conf: %v", err)
+	}
+	return data
 }

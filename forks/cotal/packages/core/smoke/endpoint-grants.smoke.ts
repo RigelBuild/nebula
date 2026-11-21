@@ -22,7 +22,7 @@ import {
 } from "../src/index.js";
 import { AUTH_ENDPOINT, EP_CMD_VERIFY_PLACEMENT_ENROLLMENT, EP_CMD_ENROLLMENT_EFFECT_STATUS,
   EP_CMD_CLOSE_ENROLLMENT_EFFECT, EP_CMD_RETIRE_PLACEMENT_ENROLLMENT, epRequestSubject,
-  epCallerReplyFilter } from "../src/endpoint-subjects.js";
+  epCallerReplyFilter, isIssuedOneRouteRow } from "../src/endpoint-subjects.js";
 
 let ok = 0, fail = 0;
 const c = (n: string, v: boolean, extra?: unknown) => { if (v) { ok++; } else { fail++; console.log("  ✗ FAIL:", n, extra ?? ""); } };
@@ -148,6 +148,11 @@ c("issued journal row is the plain triple: the same subject a legacy caller subm
   epJournalGrantRow("demo", spawnCap, issued) === epJournalGrantRow("demo", spawnCap, caller));
 c("issued per-goal progress row is the plain triple: the subject the endpoint publishes progress on",
   epGoalProgressGrantRow("demo", "manager", issued) === epGoalProgressGrantRow("demo", "manager", caller));
+c("issued one-route predicate matches the issued class row",
+  isIssuedOneRouteRow(epRequestGrantRows("demo", spawnCap, issued)[0]!));
+c("issued one-route predicate rejects the legacy class row and the issued reply row",
+  !isIssuedOneRouteRow(epRequestGrantRows("demo", spawnCap, caller)[0]!)
+  && !isIssuedOneRouteRow(epCallerReplyGrantRow("demo", issued)));
 
 // ── the Appendix-B baseline set ──
 const baseline = epBaselineGrantRows("demo", caller);

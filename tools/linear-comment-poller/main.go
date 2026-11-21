@@ -71,7 +71,7 @@ func newRootCommand(ctx context.Context, getenv environment, stdout, stderr io.W
 	root := &cobra.Command{
 		Use:           "linear-comment-poller",
 		Short:         "Fetch and read shared Linear comment caches",
-		Long:          "Fetches watched Linear comments into a shared cache or reads a watchlist from the cache.\n\nRequired: --issue-prefix <KEY> (repeatable, or " + issuePrefixEnv + "=<KEY[,KEY...]>) names the Linear team keys to watch: the first is the team, and every later key is an alias that normalises to it.\nEnv: WAVE_WORKSPACES, LINEAR_COMMENTS_CACHE, LINEAR_COMMENTS_NOTIFY, LINEAR_CLIENT_ID_FILE, LINEAR_CLIENT_SECRET_FILE, LINEAR_OWN_USER_ID, LINEAR_AGENT_USER_ID_FILE, HOME.\nExit codes: read 0 fresh, 1 stale or cache failure, 2 bad watchlist, argv or issue prefix; sweep 0 success, 1 failure.",
+		Long:          "Fetches watched Linear comments into a shared cache or reads a watchlist from the cache.\n\nRequired: --issue-prefix <KEY> (repeatable, or " + issuePrefixEnv + "=<KEY[,KEY...]>) names the Linear team keys to watch: the first is the team, and every later key is an alias that normalises to it.\nEnv: WAVE_WORKSPACES, LINEAR_COMMENTS_CACHE, LINEAR_COMMENTS_NOTIFY, LINEAR_CLIENT_ID_FILE, LINEAR_CLIENT_SECRET_FILE, LINEAR_OWN_USER_ID, LINEAR_AGENT_USER_ID_FILE, HOME.\nExit codes: read 0 fresh, 1 stale or cache failure, 2 bad watchlist, argv or issue prefix; sweep 0 success, 1 failure, 2 missing or invalid issue prefix.",
 		SilenceErrors: true,
 		SilenceUsage:  true,
 		PersistentPreRunE: func(_ *cobra.Command, _ []string) error {

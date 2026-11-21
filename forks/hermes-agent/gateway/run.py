@@ -588,11 +588,12 @@ def _redact_approval_command(cmd: str | None) -> str:
 
 def _format_exec_approval_fallback(
     command: str, description: str, command_prefix: str, *, allow_permanent: bool = True,
-    allow_session: bool = True, smart_denied: bool = False) -> str:
+    allow_session: bool = True, smart_denied: bool = False, deadline_s: int | None = None) -> str:
     """Render the text fallback from approval capabilities, not platform names. Same words as
     the button card (``BasePlatformAdapter._format_exec_approval``), plus the typed ``/approve``
     steps a surface without buttons needs. The command is never cut: ``/approve`` must only ever
-    answer a command the user could read in full (#62359)."""
+    answer a command the user could read in full (#62359). ``deadline_s`` (seconds) replaces approvals.timeout
+    for a request withdrawn earlier."""
     from gateway.platforms.base_exec_approval import (
         approval_timeout_seconds, ea_header_text, ea_reason_label_text, format_approval_deadline_line)
     heading = (t("gateway.exec_approval.smart_deny_heading") if smart_denied
@@ -609,7 +610,7 @@ def _format_exec_approval_fallback(
           reason_label=ea_reason_label_text(), reason=description)
         + t("gateway.exec_approval.text_choice_joiner").join(choices[:-1])
         + t("gateway.exec_approval.text_choice_last", choice=choices[-1])
-        + format_approval_deadline_line(approval_timeout_seconds()))
+        + format_approval_deadline_line(approval_timeout_seconds() if deadline_s is None else deadline_s))
 
 # Ordered: rate-limit beats auth beats policy beats connection; first match wins. Rate-limit goes
 # first because a quota/429 envelope often also carries an auth-shaped preamble ("Provider

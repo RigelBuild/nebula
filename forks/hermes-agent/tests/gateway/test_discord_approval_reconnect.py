@@ -1632,6 +1632,38 @@ async def test_card_not_confirmed_in_time_ends_the_wait_and_posts_the_fallback_i
 
 
 @pytest.mark.asyncio
+async def test_undelivered_card_fallback_names_the_confirm_window_it_is_withdrawn_after(monkeypatch):
+    # The card never reaches Discord, so the request is withdrawn after approval_card_confirm_timeout. The text
+    # fallback must name that window. approvals.timeout (1 hour here) is not the deadline on this path.
+    from tools import approval_context
+
+    monkeypatch.setenv("DISCORD_ALLOWED_USERS", "11111")
+    monkeypatch.setattr(approval_context, "_get_approval_timeout", lambda: 3600)
+    adapter = DiscordAdapter(PlatformConfig(enabled=True, token="test-token",
+                                            extra={"approval_card_confirm_timeout": 30}))
+    created: list[_FakeBot] = []
+
+    async def send(**kwargs):
+        if "view" in kwargs:  # the card fails; the plain-text fallback goes through
+            raise ConnectionError("gateway connection dropped")
+        return SimpleNamespace(id=2, channel=SimpleNamespace(id=777), edit=AsyncMock(), embeds=[])
+
+    thread = SimpleNamespace(id=777, send=AsyncMock(side_effect=send))
+    monkeypatch.setattr(_FakeBot, "get_channel", lambda self, _cid: thread)
+    await _connect(adapter, monkeypatch, created)
+    session = "agent:other:discord:555"
+    request_id = uuid.uuid4().hex
+    _queue_entry(monkeypatch, session, request_id)
+    result = await adapter.send_exec_approval(
+        chat_id="555", command="rm x", session_key=session, request_id=request_id, metadata={"thread_id": "777"})
+    assert result.raw_response == {"approval_text_fallback_posted": True}
+    fallback = [call.kwargs for call in thread.send.await_args_list if "view" not in call.kwargs]
+    assert len(fallback) == 1
+    assert "within 30 seconds it will NOT run" in fallback[0]["content"]
+    await adapter.disconnect()
+
+
+@pytest.mark.asyncio
 async def test_text_approve_from_a_non_approver_or_another_thread_resolves_nothing(monkeypatch):
     monkeypatch.setenv("DISCORD_ALLOWED_USERS", "11111")
     adapter = DiscordAdapter(PlatformConfig(enabled=True, token="test-token",

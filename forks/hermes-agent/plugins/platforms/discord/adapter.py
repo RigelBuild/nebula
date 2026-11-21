@@ -2640,6 +2640,8 @@ class DiscordAdapter(DiscordAuthorizationMixin, DiscordMediaMixin, DiscordThread
         admitted, role_authorized = self._discord_message_admission(message, claim=False)
         if not admitted:
             return False
+        if self._consume_text_approval(message):
+            return True
         return await self._handle_message(message, role_authorized=role_authorized, recovered=True)
 
     async def _iter_missed_message_backfill_candidates(self, channel_ids: set[str]):
@@ -5797,27 +5799,53 @@ class DiscordAdapter(DiscordAuthorizationMixin, DiscordMediaMixin, DiscordThread
             self._exec_approval_views.pop(next(iter(self._exec_approval_views)))
 
     def _consume_text_approval(self, message: Any) -> bool:
-        """Answer an approval by a typed ``approve`` / ``deny``. Counts only when the author is the configured
-        ``approval_text_approver_id``, the message is in the approval's own thread, and exactly one pending
-        request in that thread matches. Anything else is not consumed and flows on unchanged."""
-        approver = _read_approval_text_approver_id(getattr(self.config, "extra", None))
-        if not approver or str(getattr(getattr(message, "author", None), "id", "")) != approver:
+        """The Discord message form of :meth:`consume_text_approval`."""
+        return self.consume_text_approval(getattr(getattr(message, "author", None), "id", None),
+                                          getattr(getattr(message, "channel", None), "id", None),
+                                          str(getattr(message, "content", "") or ""))
+
+    def consume_text_approval(self, author_id: Any, channel_id: Any, text: str) -> bool:
+        """The one gate for a typed approval answer on Discord, used by the live path, backfill and the busy route.
+
+        A bare approval word (the busy route's set, ``gateway.run_busy.plaintext_approval_words``) in a thread
+        with a pending approval card is consumed: it never reaches the oldest-request fallback. It resolves
+        only when the author is the configured ``approval_text_approver_id`` (empty: disabled), the word is
+        exactly ``approve`` or ``deny``, exactly one pending request in that thread matches, and the request
+        is neither Deny-only nor smart-denied for an approve. Returns True when consumed.
+
+        Only an exact ``approve`` or ``deny`` is consumed; any other text is never consumed here. Every consumed
+        word is logged at INFO with the sender id and request id, so a dropped word can be traced."""
+        text = text.strip()
+        if text not in ("approve", "deny"):
             return False
-        choice = {"approve": "once", "deny": "deny"}.get(str(getattr(message, "content", "") or "").strip())
-        if choice is None:
-            return False
-        from tools.approval import list_gateway_approval_authority, resolve_gateway_approval
-        thread_id = str(getattr(getattr(message, "channel", None), "id", ""))
+        from tools import approval
+        thread_id = str(channel_id or "")
         matches = []
         for request_id, view in self._exec_approval_views.items():
             if view.is_finished() or getattr(view, "approval_thread_id", None) != thread_id:
                 continue
-            if request_id in {a.get("request_id") for a in list_gateway_approval_authority(view.session_key)}:
+            if request_id in {a.get("request_id") for a in approval.list_gateway_approval_authority(view.session_key)}:
                 matches.append((view.session_key, request_id))
-        if len(matches) != 1:
+        if not matches:
             return False
+        choice = "once" if text == "approve" else "deny"
+        approver = _read_approval_text_approver_id(getattr(self.config, "extra", None))
+        if not approver or str(author_id or "") != approver or len(matches) != 1:
+            logger.info("[%s] approval word dropped: author=%s request_ids=%s word=%s",
+                        self.name, author_id, [rid for _, rid in matches], text)
+            return True
         session_key, request_id = matches[0]
-        return resolve_gateway_approval(session_key, choice, request_id=request_id) > 0
+        with approval._lock:  # re-entrant: the smart-denied check and the settle are one critical section
+            entry = approval._card_target(session_key, request_id)
+            if entry is None or (choice != "deny" and entry.data.get("smart_denied")):
+                logger.info("[%s] approval word dropped: author=%s request_id=%s word=%s",
+                            self.name, author_id, request_id, text)
+                return True
+            # The card resolver refuses an approve on a Deny-only request.
+            resolved = approval.resolve_gateway_approval_card(session_key, choice, request_id) > 0
+        logger.info("[%s] approval word %s: author=%s request_id=%s choice=%s resolved=%s",
+                    self.name, "answered by text" if resolved else "dropped", author_id, request_id, choice, resolved)
+        return True
 
     def adopt_exec_approval_views(self, predecessor) -> None:
         """Carry a replaced adapter's live card views so presses on the rebuilt client still find them.
@@ -5951,12 +5979,13 @@ class DiscordAdapter(DiscordAuthorizationMixin, DiscordMediaMixin, DiscordThread
         logger.warning("[%s] approval card not delivered (request_id=%s): %s; posting the text prompt",
                        self.name, view.request_id, result.error)
         view.undelivered = True
-        await self._send_exec_approval_text_fallback(prompt)
+        # The withdrawal starts before the fallback send, so a hung send cannot hold the request past the window.
         view.undelivered_withdrawal = task = asyncio.get_running_loop().create_task(
             self._withdraw_undelivered_approval(prompt.session_key, view.request_id, window))
         self._background_tasks.add(task)
         task.add_done_callback(self._background_tasks.discard)
         task.add_done_callback(_consume_background_task_result)
+        await self._send_exec_approval_text_fallback(prompt)
         return SendResult(success=False, error=result.error, raw_response={"approval_text_fallback_posted": True})
 
     async def _send_exec_approval_text_fallback(self, prompt: ExecApprovalPrompt) -> None:
@@ -5986,6 +6015,7 @@ class DiscordAdapter(DiscordAuthorizationMixin, DiscordMediaMixin, DiscordThread
     async def _repost_undelivered_exec_approval_cards(self) -> None:
         """After a reconnect, post each still-pending card that never reached Discord again in its own thread."""
         from tools.approval import list_gateway_approval_authority
+        window = _read_approval_card_confirm_timeout(getattr(self.config, "extra", None))
         for request_id, view in list(self._exec_approval_views.items()):
             prompt = getattr(view, "prompt", None)
             # Only a card whose send failed or never confirmed: a send still in flight is left alone.
@@ -5999,13 +6029,24 @@ class DiscordAdapter(DiscordAuthorizationMixin, DiscordMediaMixin, DiscordThread
                 await asyncio.sleep(delay)
                 if request_id not in {a.get("request_id") for a in list_gateway_approval_authority(prompt.session_key)}:
                     break
-                result = await self._send_exec_approval_card(prompt, self._new_exec_approval_view(prompt))
+                replacement = self._new_exec_approval_view(prompt)
+                try:
+                    result = await asyncio.wait_for(self._send_exec_approval_card(prompt, replacement), window)
+                except TimeoutError:
+                    # Known limit: Discord may have posted the card before the cancel; its buttons then stay live.
+                    # Treat it as maybe delivered and never post a second card.
+                    logger.warning("[%s] approval card re-post %d not confirmed in time: request_id=%s",
+                                   self.name, attempt + 1, request_id)
+                    break
                 if result.success:
                     # The card is delivered now: it, not the text prompt's deadline, ends the wait.
                     withdrawal = getattr(view, "undelivered_withdrawal", None)
                     if withdrawal is not None:
                         withdrawal.cancel()
                     break
+                # The replacement is the registered view now: keep it retryable on a later reconnect.
+                replacement.undelivered = True
+                replacement.undelivered_withdrawal = getattr(view, "undelivered_withdrawal", None)
                 logger.warning("[%s] approval card re-post %d failed: request_id=%s: %s",
                                self.name, attempt + 1, request_id, result.error)
 

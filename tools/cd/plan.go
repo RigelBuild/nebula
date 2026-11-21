@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strings"
 
+	"cuelang.org/go/cue"
 	"cuelang.org/go/cue/cuecontext"
 )
 
@@ -37,6 +38,7 @@ var (
 	errVersionDrift  = errors.New("rigel-version differs from release.base")
 	errMainNotGo     = errors.New("main needs a go artifact")
 	errMainPath      = errors.New("main must be a path inside the project")
+	errNixWindows    = errors.New("nix artifact cannot name windows-amd64")
 )
 
 // defaultSystems are the release systems an artifact gets when it names none.
@@ -234,17 +236,20 @@ func listProjects(repo string) ([]string, error) {
 	return out, nil
 }
 
+// componentArtifact is one artifact of a component.cue release.
+type componentArtifact struct {
+	Kind        string   `json:"kind"`
+	Attr        string   `json:"attr"`
+	Binaries    []string `json:"binaries"`
+	RuntimeDeps []string `json:"runtimeDeps"`
+	Systems     []string `json:"systems"`
+	Main        string   `json:"main"`
+}
+
 type component struct {
 	Release struct {
-		Base      string `json:"base"`
-		Artifacts map[string]struct {
-			Kind        string   `json:"kind"`
-			Attr        string   `json:"attr"`
-			Binaries    []string `json:"binaries"`
-			RuntimeDeps []string `json:"runtimeDeps"`
-			Systems     []string `json:"systems"`
-			Main        string   `json:"main"`
-		} `json:"artifacts"`
+		Base      string                       `json:"base"`
+		Artifacts map[string]componentArtifact `json:"artifacts"`
 	} `json:"release"`
 }
 
@@ -262,61 +267,95 @@ func listBinaries(repo string) ([]Binary, error) {
 	ctx := cuecontext.New()
 	var out []Binary
 	for _, m := range matches {
-		data, err := os.ReadFile(m)
+		bins, err := componentBinaries(ctx, m)
 		if err != nil {
 			return nil, err
 		}
-		value := ctx.CompileBytes(data)
-		var c component
-		if err := value.Decode(&c); err != nil {
-			return nil, fmt.Errorf("decode %s: %w", m, err)
-		}
-		project := path.Join(filepath.Base(filepath.Dir(filepath.Dir(m))), filepath.Base(filepath.Dir(m)))
-		if err := checkRigelVersion(filepath.Dir(m), project, c.Release.Base); err != nil {
-			return nil, err
-		}
-		upstreamRev := ""
-		if strings.HasPrefix(project, "forks/") {
-			if upstreamRev, err = readUpstreamRev(filepath.Join(filepath.Dir(m), "upstream.json")); err != nil {
-				return nil, err
-			}
-		}
-		for name, a := range c.Release.Artifacts {
-			for _, s := range a.Systems {
-				if !slices.Contains(releaseSystems, s) {
-					return nil, fmt.Errorf("%w: %s: artifact %q names %q", errUnknownSystem, m, name, s)
-				}
-			}
-			if a.Kind != kindGo && a.Kind != kindNix {
-				continue
-			}
-			if c.Release.Base == "" || len(a.Binaries) == 0 {
-				return nil, fmt.Errorf("%s: binary artifact %q needs release.base and binaries", m, name)
-			}
-			if a.Kind == kindNix {
-				if a.Attr == "" {
-					return nil, fmt.Errorf("%w: %s: artifact %q", errNixAttr, m, name)
-				}
-				if _, err := os.Stat(filepath.Join(filepath.Dir(m), "flake.nix")); err != nil {
-					return nil, fmt.Errorf("%w: %s: %w", errNixFlake, m, err)
-				}
-			} else if len(a.RuntimeDeps) > 0 {
-				return nil, fmt.Errorf("%w: %s: artifact %q", errRuntimeNotNix, m, name)
-			}
-			if a.Kind == kindNix && a.Main != "" {
-				return nil, fmt.Errorf("%w: %s: artifact %q", errMainNotGo, m, name)
-			}
-			mainPkg := ""
-			if a.Kind == kindGo {
-				if mainPkg, err = mainPackage(a.Main); err != nil {
-					return nil, fmt.Errorf("%s: artifact %q: %w", m, name, err)
-				}
-			}
-			out = append(out, Binary{Package: name, Project: project, Version: c.Release.Base, Kind: a.Kind, Attr: a.Attr, UpstreamRev: upstreamRev, Binaries: a.Binaries, RuntimeDeps: a.RuntimeDeps, Systems: a.Systems, Main: mainPkg})
-		}
+		out = append(out, bins...)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Package < out[j].Package })
 	return out, nil
+}
+
+// componentBinaries decodes one component.cue and returns its binary artifacts.
+func componentBinaries(ctx *cue.Context, m string) ([]Binary, error) {
+	data, err := os.ReadFile(m)
+	if err != nil {
+		return nil, err
+	}
+	var c component
+	if err := ctx.CompileBytes(data).Decode(&c); err != nil {
+		return nil, fmt.Errorf("decode %s: %w", m, err)
+	}
+	project := path.Join(filepath.Base(filepath.Dir(filepath.Dir(m))), filepath.Base(filepath.Dir(m)))
+	if err := checkRigelVersion(filepath.Dir(m), project, c.Release.Base); err != nil {
+		return nil, err
+	}
+	upstreamRev := ""
+	if strings.HasPrefix(project, "forks/") {
+		if upstreamRev, err = readUpstreamRev(filepath.Join(filepath.Dir(m), "upstream.json")); err != nil {
+			return nil, err
+		}
+	}
+	var out []Binary
+	for name, a := range c.Release.Artifacts {
+		if err := checkSystems(m, name, a.Kind, a.Systems); err != nil {
+			return nil, err
+		}
+		if a.Kind != kindGo && a.Kind != kindNix {
+			continue
+		}
+		b, err := binaryFor(m, name, c.Release.Base, project, upstreamRev, a)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, b)
+	}
+	return out, nil
+}
+
+// binaryFor validates one binary artifact and returns its plan entry. The checks
+// are the ones listBinaries always made, in the same order.
+func binaryFor(m, name, base, project, upstreamRev string, a componentArtifact) (Binary, error) {
+	if base == "" || len(a.Binaries) == 0 {
+		return Binary{}, fmt.Errorf("%s: binary artifact %q needs release.base and binaries", m, name)
+	}
+	if a.Kind == kindNix {
+		if a.Attr == "" {
+			return Binary{}, fmt.Errorf("%w: %s: artifact %q", errNixAttr, m, name)
+		}
+		if _, err := os.Stat(filepath.Join(filepath.Dir(m), "flake.nix")); err != nil {
+			return Binary{}, fmt.Errorf("%w: %s: %w", errNixFlake, m, err)
+		}
+	} else if len(a.RuntimeDeps) > 0 {
+		return Binary{}, fmt.Errorf("%w: %s: artifact %q", errRuntimeNotNix, m, name)
+	}
+	if a.Kind == kindNix && a.Main != "" {
+		return Binary{}, fmt.Errorf("%w: %s: artifact %q", errMainNotGo, m, name)
+	}
+	mainPkg := ""
+	if a.Kind == kindGo {
+		var err error
+		if mainPkg, err = mainPackage(a.Main); err != nil {
+			return Binary{}, fmt.Errorf("%s: artifact %q: %w", m, name, err)
+		}
+	}
+	return Binary{Package: name, Project: project, Version: base, Kind: a.Kind, Attr: a.Attr, UpstreamRev: upstreamRev, Binaries: a.Binaries, RuntimeDeps: a.RuntimeDeps, Systems: a.Systems, Main: mainPkg}, nil
+}
+
+// checkSystems fails an artifact that names a system outside releaseSystems, or
+// names windows-amd64 on a nix artifact. A nix build has no Windows target, so
+// that name is refused at plan time.
+func checkSystems(m, name, kind string, systems []string) error {
+	for _, s := range systems {
+		if !slices.Contains(releaseSystems, s) {
+			return fmt.Errorf("%w: %s: artifact %q names %q", errUnknownSystem, m, name, s)
+		}
+		if kind == kindNix && s == windowsAMD64 {
+			return fmt.Errorf("%w: %s: artifact %q", errNixWindows, m, name)
+		}
+	}
+	return nil
 }
 
 // mainPackage returns the package argument a Go build passes for a Go artifact.

@@ -165,7 +165,7 @@ jobs:
             # A project with no planned binaries is not gated here, so it keeps its test.
             on_leg=$(jq -r --arg p "$project" --arg s "$SYSTEM" '
               [.binaries[] | select(.project == $p)] as $bins
-              | if ($bins | length) == 0 then "yes"
+              | if ($bins | length) == 0 then (if $s != "windows-amd64" then "yes" else "no" end)
                 elif any($bins[]; ((.systems // []) | index($s)) or (($s != "windows-amd64") and ((.systems // []) | length == 0))) then "yes"
                 else "no" end' "$RUNNER_TEMP/plan.json")
             if [ "$on_leg" = no ]; then echo "$project does not target $SYSTEM; not tested here"; continue; fi

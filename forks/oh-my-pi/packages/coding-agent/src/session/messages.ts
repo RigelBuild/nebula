@@ -59,6 +59,7 @@ import { COLLAB_PROMPT_MESSAGE_TYPE } from "@oh-my-pi/pi-wire";
 import type { IrcMessage } from "@oh-my-pi/pi-tui/tools/irc";
 import { advisoryMessage, currentAdvisories } from "../irc/advisory";
 import { escapeHarnessTags } from "./harness-tags";
+import { isDateCwdReminderTurn } from "./date-cwd-reminder";
 import userInterjectionTemplate from "../prompts/steering/user-interjection.md" with { type: "text" };
 import { cleanTinyMessage, formatTitleConversationContext, type TitleConversationTurn } from "../tiny/message-preproc";
 import interruptedThinkingTemplate from "../prompts/system/interrupted-thinking.md" with { type: "text" };
@@ -731,6 +732,20 @@ function getArrayContentImages(content: (TextContent | ImageContent)[]): ImageCo
 	return images ?? [];
 }
 
+/** Escape harness tags in text parts only; images and other parts pass through. */
+function escapeUserContent(content: UserMessage["content"]): UserMessage["content"] {
+	if (typeof content === "string") return escapeHarnessTags(content);
+	return content.map(part => (part.type === "text" ? { ...part, text: escapeHarnessTags(part.text) } : part));
+}
+
+/** Steering wrappers built here: their text holds the real `<system-notice>` envelope, so the plain-user escape skips them. */
+const steeringWrappers = new WeakSet<UserMessage>();
+
+function markSteeringWrapper(message: UserMessage): UserMessage {
+	steeringWrappers.add(message);
+	return message;
+}
+
 function wrapSteeringUserMessage(message: SteeringUserMessage): UserMessage {
 	const userMessage: UserMessage =
 		message.role === "user"
@@ -744,14 +759,19 @@ function wrapSteeringUserMessage(message: SteeringUserMessage): UserMessage {
 	copyPerCallContextMessage(userMessage, message);
 	if (typeof message.content === "string") {
 		if (message.content.length === 0) return message.role === "user" ? message : userMessage;
-		return { ...userMessage, content: renderSteeringEnvelope(message.content) };
+		return markSteeringWrapper({
+			...userMessage,
+			content: renderSteeringEnvelope(escapeHarnessTags(message.content)),
+		});
 	}
 
 	const text = getArrayContentText(message.content);
 	if (text.length === 0) return message.role === "user" ? message : userMessage;
-	const content: (TextContent | ImageContent)[] = [{ type: "text", text: renderSteeringEnvelope(text) }];
+	const content: (TextContent | ImageContent)[] = [
+		{ type: "text", text: renderSteeringEnvelope(escapeHarnessTags(text)) },
+	];
 	content.push(...getArrayContentImages(message.content));
-	return { ...userMessage, content };
+	return markSteeringWrapper({ ...userMessage, content });
 }
 
 // One wrapper per steering message. Per-request transforms key on identity (the
@@ -1194,9 +1214,16 @@ function convertOne(m: AgentMessage, interrupted = false): Message[] {
 			const converted = convertMessageToLlm(canonicalizeXdToolCallNames(source));
 			return converted ? [converted] : [];
 		}
+		case "user": {
+			const converted = convertMessageToLlm(m);
+			if (!converted) return [];
+			if (converted.role !== "user") return [converted];
+			const typed = m.synthetic !== true && m.attribution !== "agent";
+			if (!typed || steeringWrappers.has(m) || isDateCwdReminderTurn(m)) return [converted];
+			return [{ ...converted, content: escapeUserContent(converted.content) }];
+		}
 		case "branchSummary":
 		case "compactionSummary":
-		case "user":
 		case "developer": {
 			// Core roles share one transformer with agent-core —
 			// duplicating them here is how snapcompact frames once

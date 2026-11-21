@@ -3,15 +3,16 @@
 // each rendered file has its declared owner, group and mode, and the agent log
 // shows a login.
 //
-// The rotation gate (the design's step 3) needs --expect-sha256 and
+// The rotation gate needs --expect-sha256 and
 // --since-offset together. It passes only when the rendered secret_id hashes
 // to n+1's printed SHA-256 and the login line is written after the byte offset
 // the operator recorded before the kickstart. Without those flags the login
 // check requires only a matching login line in the agent log.
 //
-// Still open, not covered here: the cold reboot with tailscaled held down, and
-// H4 cases 8 (mode-only 0440 to 0400) and 9 (chown delayed after rename). Those
-// are a manual live-host run; this tool changes nothing.
+// Still open, not covered here: the cold reboot with tailscaled held down, a
+// mode-only change from 0440 to 0400, and an ownership change applied after the
+// file is renamed into place. Those are a manual live-host run; this tool
+// changes nothing.
 package main
 
 import (
@@ -31,9 +32,8 @@ import (
 )
 
 const (
-	agentLog   = "/var/log/openbao-agent.log"
+	agentLog = "/var/log/openbao-agent.log"
 )
-
 
 // Unverified against bao's live log text; pass --login-line to override on a host.
 const defaultLoginLine = "authentication successful"

@@ -38,9 +38,9 @@ func withFiles(p probes, log, secret string) probes {
 // metadata and a login line in the agent log.
 func fakeProbes() probes {
 	files := map[string]fileInfo{
-		"/run/example/secrets/file-one":  {mode: 0o400, uid: 501, gid: 20},
+		"/run/example/secrets/file-one": {mode: 0o400, uid: 501, gid: 20},
 		"/run/example/secrets/file-two": {mode: 0o400, uid: 0, gid: 0},
-		testLogPath: {mode: 0o644, uid: 0, gid: 0},
+		testLogPath:                     {mode: 0o644, uid: 0, gid: 0},
 	}
 	p := probes{
 		launchctlPrint: func(string) (string, error) { return "state = running\n", nil },

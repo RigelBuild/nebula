@@ -20,7 +20,9 @@ func installFastTrunk(t *testing.T, f *fixture) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	writeTestFile(t, filepath.Join(f.repo.root, "hk.pkl"), string(data))
+	// The testdata config names tools/gate-runner; use the profile's gate-runner dir so trunk passes the check.
+	config := strings.ReplaceAll(string(data), "./tools/gate-runner", "./"+f.repo.profile.GateRunnerDir)
+	writeTestFile(t, filepath.Join(f.repo.root, "hk.pkl"), config)
 	jjTest(t, f.repo, "commit", "-m", "fix: fast hook")
 	jjTest(t, f.repo, "bookmark", "move", "main", "--to", "@-")
 	jjTest(t, f.repo, "git", "push", "--bookmark", "main")
@@ -43,10 +45,10 @@ func TestSubmitRefusesNonFastLocalHooks(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			f := fixtureRepo(t)
-			installFastTrunk(t, f)
-			f.repo.profile.LocalFastTier = test.opted
 			// A gate-runner dir other than the default proves the refusal matches the profile's dir.
 			f.repo.profile.GateRunnerDir = "tools/example-gate"
+			installFastTrunk(t, f)
+			f.repo.profile.LocalFastTier = test.opted
 			bookmark := f.new(t, "EX-1", "feat(rjc): allow fast local hook runs", "")
 			runner := "go run ./" + f.repo.profile.GateRunnerDir
 			command := runner + " moon-ci"

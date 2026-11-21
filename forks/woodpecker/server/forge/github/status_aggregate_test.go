@@ -498,8 +498,9 @@ func TestStatusAggregateReapedCodeWorkflowUnderSuccessIsNotGreen(t *testing.T) {
 // TestStatusAggregateUserKilledKeepsFailure pins that the reaped-workflow guard
 // only overrides a stored success. A user cancel leaves skipped workflows with
 // canceled steps too, but stores killed, so its verdict stays failure. A stored
-// canceled pipeline is not asserted here: ReportAggregateStatus rewrites it
-// before this rollup runs.
+// canceled pipeline keeps the rollup result for any event that reaches
+// codeStatus; ReportAggregateStatus rewrites a stored canceled pull-request
+// pipeline before this rollup runs.
 func TestStatusAggregateUserKilledKeepsFailure(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -507,6 +508,7 @@ func TestStatusAggregateUserKilledKeepsFailure(t *testing.T) {
 		want   string
 	}{
 		{name: "killed by user", status: model.StatusKilled, want: statusFailure},
+		{name: "canceled by user on a push", status: model.StatusCanceled, want: statusSuccess},
 	}
 
 	for _, tt := range tests {

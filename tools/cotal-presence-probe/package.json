@@ -1,0 +1,27 @@
+{
+	"name": "@rigelbuild/cotal-presence-probe",
+	"version": "0.1.0",
+	"private": true,
+	"description": "Read-only Cotal observer that exports main-space seat presence and history-refusal holds as Prometheus gauges.",
+	"type": "module",
+	"license": "MIT OR Apache-2.0",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/RigelBuild/nebula.git",
+		"directory": "tools/cotal-presence-probe"
+	},
+	"scripts": {
+		"typecheck": "tsc --noEmit",
+		"test": "bun test",
+		"lint": "biome check .",
+		"format": "biome format --write ."
+	},
+	"dependencies": {
+		"@cotal-ai/core": "0.151.2"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "2.5.14",
+		"@types/bun": "1.4.4",
+		"typescript": "6.0.3"
+	}
+}

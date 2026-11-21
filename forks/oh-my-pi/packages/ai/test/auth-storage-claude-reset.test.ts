@@ -21,6 +21,7 @@ interface ResetFixture {
 		usable: boolean;
 		remaining: number;
 		weeklyUsed: number;
+		fiveHourNull?: boolean;
 		discoveryStatus?: number;
 		genericUsageEnabled?: boolean;
 		response: unknown;
@@ -81,7 +82,9 @@ async function fixture(): Promise<ResetFixture> {
 				}
 				const hour = 3_600_000;
 				return Response.json({
-					five_hour: { utilization: 100, resets_at: new Date(Date.now() + 2 * hour).toISOString() },
+					five_hour: state.fiveHourNull
+						? null
+						: { utilization: 100, resets_at: new Date(Date.now() + 2 * hour).toISOString() },
 					seven_day: { utilization: state.weeklyUsed, resets_at: new Date(Date.now() + 72 * hour).toISOString() },
 					limits: [
 						{
@@ -372,6 +375,25 @@ describe("Claude saved reset account safety", () => {
 		const outcome = await f.storage.resets.redeem({ target: f.target, baseUrlResolver: f.baseUrlResolver });
 		expect(outcome.ok).toBe(true);
 		expect(f.storage.blocks.list([f.target.credentialId]).map(block => block.blockScope)).toEqual([""]);
+	});
+
+	it("clears the account-wide block after a weekly reset when the 5-hour window is null", async () => {
+		const f = await fixture();
+		f.state.fiveHourNull = true;
+		f.state.weeklyUsed = 0;
+		f.state.response = { result: "reset", resets_left: 1, cleared: ["seven_day"] };
+		for (const blockScope of ["", "tier:fable"]) {
+			f.storage.blocks.upsert({
+				credentialId: f.target.credentialId,
+				providerKey: "anthropic:oauth",
+				blockScope,
+				blockedUntilMs: Date.now() + 3_600_000,
+			});
+		}
+		const outcome = await f.storage.resets.redeem({ target: f.target, baseUrlResolver: f.baseUrlResolver });
+		expect(outcome.ok).toBe(true);
+		expect(outcome.cleared).toEqual(["anthropic:7d"]);
+		expect(f.storage.blocks.list([f.target.credentialId]).map(block => block.blockScope)).toEqual(["tier:fable"]);
 	});
 
 	it("does not carry a spent reset forward when the follow-up reset probe fails", async () => {

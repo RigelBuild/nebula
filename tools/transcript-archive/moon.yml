@@ -5,8 +5,13 @@ tags: ["go"]
 
 tasks:
   test:
-    command: "go"
-    args: ["test", "./..."]
+    command: "nix"
+    args: ["develop", "../..#transcript-archive", "--command", "go", "test", "./..."]
+    options:
+      cache: false
+      # Enters the .#transcript-archive devShell, which provides restic for the tests.
+      # The root devShell lacks it.
+      runInCI: true
     env:
       CGO_ENABLED: "0"
     inputs: ["**/*.go", "go.mod", "go.sum", "**/testdata/**/*", "**/*.cue"]

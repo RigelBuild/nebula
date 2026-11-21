@@ -4,6 +4,7 @@ package main
 
 import (
 	"errors"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -145,4 +146,49 @@ func TestFormulaSkipsWindowsSystem(t *testing.T) {
 	if strings.Contains(string(body), "windows") {
 		t.Fatalf("formula names Windows:\n%s", body)
 	}
+}
+
+// M1 (medium): a project with no planned binaries must not run its test on the
+// windows-amd64 leg. The leg filter is the workflow's own jq expression, run
+// here so the test cannot drift from cd.yaml.
+func TestWindowsLegSkipsProjectWithNoBinaries(t *testing.T) {
+	jqPath, err := exec.LookPath("jq")
+	if err != nil {
+		t.Fatalf("jq is required to run the leg filter: %v", err)
+	}
+	expr := workflowLegFilter(t, readWorkflow(t))
+	plan := `{"binaries":[{"project":"tools/alpha","systems":["x86_64-linux"]}]}`
+	cases := []struct{ project, system, want string }{
+		{"tools/autoscaler", "windows-amd64", "no"},
+		{"tools/autoscaler", "x86_64-linux", "yes"},
+		{"tools/alpha", "windows-amd64", "no"},
+		{"tools/alpha", "x86_64-linux", "yes"},
+	}
+	for _, tc := range cases {
+		cmd := exec.Command(jqPath, "-r", "--arg", "p", tc.project, "--arg", "s", tc.system, expr)
+		cmd.Stdin = strings.NewReader(plan)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("jq %s/%s: %v\n%s", tc.project, tc.system, err, out)
+		}
+		if got := strings.TrimSpace(string(out)); got != tc.want {
+			t.Fatalf("on_leg(%s, %s) = %q, want %q", tc.project, tc.system, got, tc.want)
+		}
+	}
+}
+
+// workflowLegFilter returns the on_leg jq expression from the Test planned
+// projects step of cd.yaml.
+func workflowLegFilter(t *testing.T, wf string) string {
+	t.Helper()
+	start := strings.Index(wf, "on_leg=$(jq -r --arg p \"$project\" --arg s \"$SYSTEM\" '")
+	if start < 0 {
+		t.Fatal("cd.yaml: no on_leg filter in the Test planned projects step")
+	}
+	body := wf[start+len("on_leg=$(jq -r --arg p \"$project\" --arg s \"$SYSTEM\" '"):]
+	end := strings.Index(body, "' \"$RUNNER_TEMP/plan.json\")")
+	if end < 0 {
+		t.Fatal("cd.yaml: on_leg filter is not closed where expected")
+	}
+	return body[:end]
 }

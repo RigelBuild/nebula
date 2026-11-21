@@ -6,6 +6,7 @@ release: {
 			kind:     "binary"
 			package:  "local:wave-seat-holder"
 			binaries: ["wave-seat-holder"]
+			main:     "./cmd/wave-seat-holder"
 		}
 	}
 }

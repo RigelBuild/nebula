@@ -6,6 +6,7 @@ release: {
 			kind:     "binary"
 			package:  "local:omp-pool"
 			binaries: ["omp-pool"]
+			main:     "./cmd/omp-pool"
 		}
 	}
 }

@@ -34,6 +34,8 @@ var (
 	errRuntimeNotNix = errors.New("runtimeDeps needs a nix artifact")
 	errNameClash     = errors.New("image and package share a name")
 	errVersionDrift  = errors.New("rigel-version differs from release.base")
+	errMainNotGo     = errors.New("main needs a go artifact")
+	errMainPath      = errors.New("main must be a path inside the project")
 )
 
 // Binary is one releasable binary package declared by a tool's component.cue.
@@ -45,6 +47,8 @@ type Binary struct {
 	Kind string `json:"kind"`
 	// Attr is the flake attribute a kindNix package builds: nix build .#<attr>.
 	Attr string `json:"attr,omitempty"`
+	// Main is the package a Go artifact builds: "." or ./<dir>, relative to the project.
+	Main string `json:"main,omitempty"`
 	// UpstreamRev is the imported upstream commit, for forks only.
 	UpstreamRev string   `json:"upstreamRev,omitempty"`
 	Binaries    []string `json:"binaries"`
@@ -228,6 +232,7 @@ type component struct {
 			Binaries    []string `json:"binaries"`
 			RuntimeDeps []string `json:"runtimeDeps"`
 			Systems     []string `json:"systems"`
+			Main        string   `json:"main"`
 		} `json:"artifacts"`
 	} `json:"release"`
 }
@@ -282,11 +287,33 @@ func listBinaries(repo string) ([]Binary, error) {
 			} else if len(a.RuntimeDeps) > 0 {
 				return nil, fmt.Errorf("%w: %s: artifact %q", errRuntimeNotNix, m, name)
 			}
-			out = append(out, Binary{Package: name, Project: project, Version: c.Release.Base, Kind: a.Kind, Attr: a.Attr, UpstreamRev: upstreamRev, Binaries: a.Binaries, RuntimeDeps: a.RuntimeDeps, Systems: a.Systems})
+			if a.Kind == kindNix && a.Main != "" {
+				return nil, fmt.Errorf("%w: %s: artifact %q", errMainNotGo, m, name)
+			}
+			mainPkg := ""
+			if a.Kind == kindGo {
+				if mainPkg, err = mainPackage(a.Main); err != nil {
+					return nil, fmt.Errorf("%s: artifact %q: %w", m, name, err)
+				}
+			}
+			out = append(out, Binary{Package: name, Project: project, Version: c.Release.Base, Kind: a.Kind, Attr: a.Attr, UpstreamRev: upstreamRev, Binaries: a.Binaries, RuntimeDeps: a.RuntimeDeps, Systems: a.Systems, Main: mainPkg})
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Package < out[j].Package })
 	return out, nil
+}
+
+// mainPackage returns the package argument a Go build passes for a Go artifact.
+// The declared path is relative to the project; "" means the project root.
+func mainPackage(declared string) (string, error) {
+	clean := path.Clean(declared)
+	if !filepath.IsLocal(clean) {
+		return "", fmt.Errorf("%w: %q", errMainPath, declared)
+	}
+	if clean == "." {
+		return ".", nil
+	}
+	return "./" + clean, nil
 }
 
 func readUpstreamRev(file string) (string, error) {

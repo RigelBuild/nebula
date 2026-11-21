@@ -58,6 +58,7 @@ type dreamerCase struct {
 	cloneExists    bool
 	cloneValid     bool
 	brokenExists   bool
+	unsetEnv       []string
 	wantError      string
 	wantClone      bool
 	wantMoved      bool
@@ -72,6 +73,8 @@ func TestRunBranches(t *testing.T) {
 		{name: "clone missing", wantClone: true},
 		{name: "broken clone", cloneExists: true, wantClone: true, wantMoved: true},
 		{name: "second broken clone", cloneExists: true, brokenExists: true, wantError: "already exists; fix or remove it"},
+		{name: "one env var missing", unsetEnv: []string{"WAVE_DREAMER_REMOTE"}, wantError: "missing required environment variables: WAVE_DREAMER_REMOTE"},
+		{name: "all env vars missing", unsetEnv: []string{"WAVE_DREAMER_CLONE", "WAVE_DREAMER_REMOTE", "WAVE_DREAMER_RUNS_DIR"}, wantError: "missing required environment variables: WAVE_DREAMER_CLONE, WAVE_DREAMER_REMOTE, WAVE_DREAMER_RUNS_DIR"},
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) { runCase(t, test) })
@@ -91,6 +94,9 @@ func runCase(t *testing.T, test dreamerCase) {
 		fs.globs = []string{dreamerClonePath + ".broken-previous"}
 	}
 	env := testEnvironment()
+	for _, name := range test.unsetEnv {
+		delete(env, name)
+	}
 	var commands []command
 	deps := dependencies{
 		fs:     fs,

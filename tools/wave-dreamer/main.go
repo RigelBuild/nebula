@@ -17,7 +17,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// Required environment: the dreamer clone path, its git remote, and the done-file directory.
+// Environment variable names for the required dreamer settings: the clone path, its git remote, and the done-file directory.
 const (
 	envClone   = "WAVE_DREAMER_CLONE"
 	envRemote  = "WAVE_DREAMER_REMOTE"
@@ -60,6 +60,9 @@ type dependencies struct {
 	execute executeFunc
 	fs      fileSystem
 	getenv  func(string) string
+}
+
+type config struct {
 	clone   string
 	remote  string
 	runsDir string
@@ -91,19 +94,15 @@ func main() {
 }
 
 func run(ctx context.Context, deps dependencies) error {
-	for _, name := range []string{envClone, envRemote, envRunsDir} {
-		if deps.getenv(name) == "" {
-			return fmt.Errorf("%s is required", name)
-		}
+	cfg, err := loadConfig(deps.getenv)
+	if err != nil {
+		return err
 	}
-	deps.clone = deps.getenv(envClone)
-	deps.remote = deps.getenv(envRemote)
-	deps.runsDir = deps.getenv(envRunsDir)
 	day, err := deps.date(ctx, "+%F")
 	if err != nil {
 		return fmt.Errorf("read UTC day: %w", err)
 	}
-	if exists, err := deps.exists(filepath.Join(deps.runsDir, day+".done")); err != nil {
+	if exists, err := deps.exists(filepath.Join(cfg.runsDir, day+".done")); err != nil {
 		return fmt.Errorf("check done file: %w", err)
 	} else if exists {
 		return nil
@@ -111,10 +110,32 @@ func run(ctx context.Context, deps dependencies) error {
 	if err := deps.checkJournalMode(ctx); err != nil {
 		return err
 	}
-	if err := deps.prepareClone(ctx); err != nil {
+	if err := deps.prepareClone(ctx, cfg); err != nil {
 		return err
 	}
-	return deps.startDream(ctx, day)
+	return deps.startDream(ctx, cfg, day)
+}
+
+func loadConfig(getenv func(string) string) (config, error) {
+	cfg := config{
+		clone:   getenv(envClone),
+		remote:  getenv(envRemote),
+		runsDir: getenv(envRunsDir),
+	}
+	var missing []string
+	for _, setting := range []struct{ name, value string }{
+		{envClone, cfg.clone},
+		{envRemote, cfg.remote},
+		{envRunsDir, cfg.runsDir},
+	} {
+		if setting.value == "" {
+			missing = append(missing, setting.name)
+		}
+	}
+	if len(missing) > 0 {
+		return config{}, fmt.Errorf("missing required environment variables: %s", strings.Join(missing, ", "))
+	}
+	return cfg, nil
 }
 
 func (deps dependencies) checkJournalMode(ctx context.Context) error {
@@ -128,21 +149,21 @@ func (deps dependencies) checkJournalMode(ctx context.Context) error {
 	return nil
 }
 
-func (deps dependencies) prepareClone(ctx context.Context) error {
-	if err := deps.ensureClone(ctx); err != nil {
+func (deps dependencies) prepareClone(ctx context.Context, cfg config) error {
+	if err := deps.ensureClone(ctx, cfg); err != nil {
 		return err
 	}
 	jj := deps.commandPath("WAVE_DREAMER_JJ", "jj")
-	if err := deps.runCommand(ctx, deps.clone, jj, "git", "fetch"); err != nil {
+	if err := deps.runCommand(ctx, cfg.clone, jj, "git", "fetch"); err != nil {
 		return fmt.Errorf("jj git fetch: %w", err)
 	}
-	if err := deps.runCommand(ctx, deps.clone, jj, "new", "main@origin"); err != nil {
+	if err := deps.runCommand(ctx, cfg.clone, jj, "new", "main@origin"); err != nil {
 		return fmt.Errorf("jj new main@origin: %w", err)
 	}
 	return nil
 }
 
-func (deps dependencies) startDream(ctx context.Context, day string) error {
+func (deps dependencies) startDream(ctx context.Context, cfg config, day string) error {
 	sessionTime, err := deps.date(ctx, "+%H%M%S")
 	if err != nil {
 		return fmt.Errorf("read UTC session time: %w", err)
@@ -161,21 +182,21 @@ func (deps dependencies) startDream(ctx context.Context, day string) error {
 		"--config", deps.getenv("WAVE_DREAMER_CONFIG"), "@" + deps.getenv("WAVE_DREAMER_PROMPT"),
 		"Run " + session + " for day " + day + ". Write the done file as " + day + ".done.",
 	}
-	if _, err := deps.omp(ctx, deps.clone, args, false); err != nil {
+	if _, err := deps.omp(ctx, cfg.clone, args, false); err != nil {
 		return fmt.Errorf("omp dreamer run: %w", err)
 	}
 	return nil
 }
 
-func (deps dependencies) ensureClone(ctx context.Context) error {
+func (deps dependencies) ensureClone(ctx context.Context, cfg config) error {
 	jj := deps.commandPath("WAVE_DREAMER_JJ", "jj")
-	if deps.cloneIsValid(ctx, jj) {
+	if deps.cloneIsValid(ctx, cfg, jj) {
 		return nil
 	}
-	if exists, err := deps.exists(deps.clone); err != nil {
+	if exists, err := deps.exists(cfg.clone); err != nil {
 		return fmt.Errorf("check dreamer clone: %w", err)
 	} else if exists {
-		brokenClones, err := deps.fs.Glob(deps.clone + ".broken-*")
+		brokenClones, err := deps.fs.Glob(cfg.clone + ".broken-*")
 		if err != nil {
 			return fmt.Errorf("list moved-aside clones: %w", err)
 		}
@@ -186,34 +207,34 @@ func (deps dependencies) ensureClone(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("read UTC broken-clone time: %w", err)
 		}
-		if err := deps.fs.Rename(deps.clone, deps.clone+".broken-"+stamp); err != nil {
+		if err := deps.fs.Rename(cfg.clone, cfg.clone+".broken-"+stamp); err != nil {
 			return fmt.Errorf("move broken dreamer clone aside: %w", err)
 		}
 	}
-	if err := deps.fs.MkdirAll(filepath.Dir(deps.clone), 0o700); err != nil {
+	if err := deps.fs.MkdirAll(filepath.Dir(cfg.clone), 0o700); err != nil {
 		return fmt.Errorf("create dreamer clone parent: %w", err)
 	}
-	if err := deps.runCommand(ctx, "", jj, "git", "clone", "--colocate", deps.remote, deps.clone); err != nil {
+	if err := deps.runCommand(ctx, "", jj, "git", "clone", "--colocate", cfg.remote, cfg.clone); err != nil {
 		return fmt.Errorf("clone dreamer repository: %w", err)
 	}
 	return nil
 }
 
-func (deps dependencies) cloneIsValid(ctx context.Context, jj string) bool {
+func (deps dependencies) cloneIsValid(ctx context.Context, cfg config, jj string) bool {
 	remotes, err := deps.execute(ctx, command{
-		dir:    deps.clone,
+		dir:    cfg.clone,
 		name:   jj,
-		args:   []string{"-R", deps.clone, "--ignore-working-copy", "git", "remote", "list"},
+		args:   []string{"-R", cfg.clone, "--ignore-working-copy", "git", "remote", "list"},
 		stdout: captureOutput,
 		stderr: discardOutput,
 	})
-	if err != nil || !hasRemote(string(remotes), deps.remote) {
+	if err != nil || !hasRemote(string(remotes), cfg.remote) {
 		return false
 	}
 	_, err = deps.execute(ctx, command{
-		dir:    deps.clone,
+		dir:    cfg.clone,
 		name:   jj,
-		args:   []string{"-R", deps.clone, "--ignore-working-copy", "log", "-r", "main@origin", "--no-graph", "-T", "commit_id"},
+		args:   []string{"-R", cfg.clone, "--ignore-working-copy", "log", "-r", "main@origin", "--no-graph", "-T", "commit_id"},
 		stdout: discardOutput,
 		stderr: discardOutput,
 	})

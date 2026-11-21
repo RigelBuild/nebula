@@ -121,6 +121,7 @@ func TestHostBaoSeal(t *testing.T) {
 		{name: "plaintext is removed from encryptor environment", run: func(t *testing.T) { testHostBaoSealPlaintextRemoved(t, parsed) }},
 		{name: "no plaintext in argv or env of any child process", run: func(t *testing.T) { testHostBaoSealChildProcess(t, parsed) }},
 		{name: "CLI requires generation and rejects recipients flag", run: func(t *testing.T) { testHostBaoSealCLI(t, parsed, recipients) }},
+		{name: "CLI requires pulumi-dir", run: func(t *testing.T) { testHostBaoSealPulumiDirRequired(t, parsed) }},
 		{name: "output basename must match host", run: func(t *testing.T) { testHostBaoSealOutputBasename(t, tempDir) }},
 		{name: "SOPS matching rule supplies recipients", run: func(t *testing.T) { testHostBaoSealMatchingRule(t, parsed, recipients) }},
 		{name: "rule for another host is not used", run: func(t *testing.T) { testHostBaoSealOtherHostRule(t, tempDir, recipients) }},
@@ -211,6 +212,14 @@ func testHostBaoSealCLI(t *testing.T, parsed options, recipients string) {
 	withRecipients := slices.Concat(withGeneration, []string{"--recipients", recipients})
 	if _, err := parseArgs(withRecipients); err == nil {
 		t.Fatal("parseArgs() accepted removed --recipients flag")
+	}
+}
+
+func testHostBaoSealPulumiDirRequired(t *testing.T, parsed options) {
+	t.Helper()
+	args := []string{"--stack", parsed.stack, "--host", parsed.host, "--out", parsed.out, "--generation", "1"}
+	if _, err := parseArgs(args); err == nil || !strings.Contains(err.Error(), "--pulumi-dir") {
+		t.Fatalf("parseArgs() error = %v, want required --pulumi-dir", err)
 	}
 }
 
@@ -499,4 +508,41 @@ func TestCommandChildProcess(t *testing.T) {
 		t.Fatalf("write fake sops ciphertext: %v", err)
 	}
 	os.Exit(0)
+}
+
+type recordingCommandRunner struct {
+	name string
+	args []string
+}
+
+func (runner *recordingCommandRunner) Run(
+	_ context.Context,
+	name string,
+	args []string,
+	_ io.Reader,
+	_ []string,
+) ([]byte, error) {
+	runner.name = name
+	runner.args = slices.Clone(args)
+	return []byte(`{"example-host":{"1":"secret-id"}}`), nil
+}
+
+func TestPulumiStackOutputReaderPassesPulumiDir(t *testing.T) {
+	runner := &recordingCommandRunner{}
+	reader := pulumiStackOutputReader{runner: runner, pulumiDir: "infra/pulumi/secrets"}
+	if _, err := reader.ReadSecretIDs(t.Context(), "example-org/prod"); err != nil {
+		t.Fatalf("ReadSecretIDs() error = %v", err)
+	}
+	if runner.name != "pulumi" {
+		t.Fatalf("command = %q, want pulumi", runner.name)
+	}
+	want := []string{
+		"stack", "output", "secretIdsByHost",
+		"--json", "--show-secrets",
+		"--stack", "example-org/prod",
+		"-C", "infra/pulumi/secrets",
+	}
+	if !slices.Equal(runner.args, want) {
+		t.Fatalf("pulumi args = %q, want %q", runner.args, want)
+	}
 }

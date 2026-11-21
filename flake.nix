@@ -24,8 +24,8 @@
       goCommands = {
         code-shape-gate = "sha256-Ee6lA9fZjXfNx2tkoScY+Su5JULWUpK4DshrXO3fmkU=";
         cotal-sys-creds-check = null;
-        design-ledger-gate = "sha256-euBbY7ewPBNIwVPjPkAX9DVbH6XaJ81n+5aMJfBzPW8=";
         depsupdate-wake = null;
+        design-ledger-gate = "sha256-euBbY7ewPBNIwVPjPkAX9DVbH6XaJ81n+5aMJfBzPW8=";
         dev-hygiene = null;
         dl-claim = "sha256-3EcIygo4CNKJmMCIWrIL/bFMqBUznQCV9HI6h1EyeGU=";
         dl-list = "sha256-+YGOcD3K7shRymY29qRJa49GfFkOc8wsdeMdmpvv44A=";
@@ -84,7 +84,6 @@
       # drifts from them, so a nix flake update cannot break the check phase
       # silently. The input to pin is nixpkgs (nixpkgs.url in this flake).
       checkTools = {
-        host-bao-seal = pkgs: [ pkgs.sops pkgs.age ];
         code-shape-gate = pkgs:
           let
             requireVersion = pkg: expected:
@@ -105,6 +104,8 @@
         dev-hygiene = pkgs: [ pkgs.jujutsu ];
         # hk-hook's tests create jj workspaces with jj on PATH.
         hk-hook = pkgs: [ pkgs.jujutsu ];
+        # host-bao-seal's tests run a sops/age round-trip.
+        host-bao-seal = pkgs: [ pkgs.sops pkgs.age ];
       };
 
       buildCommand = pkgs: name: vendorHash:

@@ -59,6 +59,7 @@
         rigel-storeload-nightly = "sha256-usHhvjEtwEdT/hyGXFkC2nmC41/WAEWkA+Ng4TJ4FGo=";
         rjc-gates-gc = "sha256-7K17JaXFsjf163g5PXCb5ng2gYdotnZ2IDKk8KFjNj0=";
         rjc-gates-image = "sha256-WJ+DzF3TydFNjIOq2MAQxEDI62G8xJcjTCAyMZtwgP0=";
+        run-cd = "sha256-s9UTOYZs+Y7UQUbQuANYejHSr2QJb/GdqelRT8z0gOA=";
         ssh-orphan-reap = null;
         wave-dreamer = "sha256-7K17JaXFsjf163g5PXCb5ng2gYdotnZ2IDKk8KFjNj0=";
         wave-host = "sha256-3/tNPMYKxKjwprceoPRjRJuTNBwJSJE4LD8grnh+haI=";

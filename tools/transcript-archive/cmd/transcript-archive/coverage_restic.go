@@ -60,7 +60,7 @@ func resticCommand(opts coverageOptions, subcommand string, args ...string) (*ex
 	}
 	arguments := make([]string, 0, 7+len(args))
 	arguments = append(arguments, "--repo", repo, "--password-file", filepath.Base(opts.passwordFile))
-	// State-dir coverage caches tree blobs in the state dir, so each batch's tree walk reads R2 once.
+	// State-dir coverage caches tree blobs in the state dir, so each batch's tree walk reads S3 once.
 	if opts.cacheDir != "" {
 		arguments = append(arguments, "--cache-dir", opts.cacheDir, subcommand)
 	} else {

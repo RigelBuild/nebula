@@ -213,7 +213,7 @@ func buildManifest(p Plan, tag, assets, previous, baseURL string, systems, held 
 		}
 		entry := Package{Version: b.Version, UpstreamRev: b.UpstreamRev, Systems: map[string]Asset{}}
 		for _, system := range targetSystems(b, systems) {
-			name := fmt.Sprintf("%s-%s-%s.tar.zst", b.Package, b.Version, system)
+			name := assetName(b.Package, b.Version, system)
 			sum, err := fileSHA256(filepath.Join(assets, name))
 			if err != nil {
 				return Manifest{}, fmt.Errorf("%w %s: %w", errMissingAsset, name, err)
@@ -226,21 +226,31 @@ func buildManifest(p Plan, tag, assets, previous, baseURL string, systems, held 
 	return m, nil
 }
 
-// targetSystems returns the release systems a built package has assets for: its
-// artifact's systems that the Release also ships, or every Release system when
-// the artifact names none. A package limited to x86_64-linux gets no asset for
-// aarch64-linux, so the Release does not need one there.
+// targetSystems returns the release systems a built package has assets for: the
+// systems its artifact names that the Release also ships. An artifact that names
+// none gets defaultSystems only, never an opt-in system such as windows-amd64, so
+// the asset set of every existing tool stays the same.
 func targetSystems(b Binary, systems []string) []string {
-	if len(b.Systems) == 0 {
-		return systems
-	}
 	var out []string
 	for _, s := range systems {
-		if slices.Contains(b.Systems, s) {
+		if len(b.Systems) == 0 {
+			if slices.Contains(defaultSystems, s) {
+				out = append(out, s)
+			}
+		} else if slices.Contains(b.Systems, s) {
 			out = append(out, s)
 		}
 	}
 	return out
+}
+
+// assetName is the release asset for one package on one system. A Windows
+// asset takes an .exe suffix so its name says what runs.
+func assetName(pkg, version, system string) string {
+	if system == windowsAMD64 {
+		return fmt.Sprintf("%s-%s-%s.exe.tar.zst", pkg, version, system)
+	}
+	return fmt.Sprintf("%s-%s-%s.tar.zst", pkg, version, system)
 }
 
 // carry copies a previous entry into this Release. Each asset is read from

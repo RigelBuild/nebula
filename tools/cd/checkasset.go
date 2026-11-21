@@ -5,6 +5,7 @@ package main
 import (
 	"debug/elf"
 	"debug/macho"
+	"debug/pe"
 	"errors"
 	"fmt"
 	"slices"
@@ -39,8 +40,49 @@ func checkAssetWithRuntime(path, system string, runtime []string) error {
 		return checkELF(path, arch, runtime)
 	case "darwin":
 		return checkMachO(path, arch)
+	case "windows":
+		return checkPE(path, arch)
 	}
 	return fmt.Errorf("%w: unsupported system %q", errAssetCheck, system)
+}
+
+// checkPE requires a Windows PE executable for the system's machine that
+// imports only Windows system DLLs. It does not allow a bundled runtime.
+func checkPE(path, arch string) error {
+	f, err := pe.Open(path)
+	if err != nil {
+		return fmt.Errorf("%w: %s: %w", errAssetCheck, path, err)
+	}
+	defer f.Close()
+	want := map[string]uint16{"amd64": pe.IMAGE_FILE_MACHINE_AMD64}[arch]
+	if want == 0 || f.FileHeader.Machine != want {
+		return fmt.Errorf("%w: %s: machine %#x, want %s", errAssetCheck, path, f.FileHeader.Machine, arch)
+	}
+	if f.FileHeader.Characteristics&pe.IMAGE_FILE_EXECUTABLE_IMAGE == 0 {
+		return fmt.Errorf("%w: %s: not an executable image", errAssetCheck, path)
+	}
+	libs, err := f.ImportedLibraries()
+	if err != nil {
+		return fmt.Errorf("%w: %s: %w", errAssetCheck, path, err)
+	}
+	for _, lib := range libs {
+		if !strings.HasPrefix(strings.ToLower(lib), "api-ms-") && !strings.HasPrefix(strings.ToLower(lib), "ext-ms-") && !isWindowsSystemDLL(lib) {
+			return fmt.Errorf("%w: %s: imports %s, which is not a Windows system DLL", errAssetCheck, path, lib)
+		}
+	}
+	return nil
+}
+
+// isWindowsSystemDLL reports whether lib is one of the system DLLs every
+// Windows install provides.
+func isWindowsSystemDLL(lib string) bool {
+	switch strings.ToLower(lib) {
+	case "kernel32.dll", "ntdll.dll", "user32.dll", "advapi32.dll", "ws2_32.dll",
+		"bcrypt.dll", "crypt32.dll", "shell32.dll", "ole32.dll", "msvcrt.dll",
+		"ucrtbase.dll", "secur32.dll", "userenv.dll", "iphlpapi.dll":
+		return true
+	}
+	return false
 }
 
 func checkELF(path, arch string, runtime []string) error {

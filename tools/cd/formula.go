@@ -100,6 +100,10 @@ func renderFormula(name string, p Package) ([]byte, error) {
 		return nil, fmt.Errorf("%w: %s has no assets", errFormulaSystem, name)
 	}
 	for system := range p.Systems {
+		// Homebrew has no Windows block: a Windows asset is not a formula system.
+		if system == windowsAMD64 {
+			continue
+		}
 		if _, ok := formulaBlocks[system]; !ok {
 			return nil, fmt.Errorf("%w: %s for %s", errFormulaSystem, system, name)
 		}

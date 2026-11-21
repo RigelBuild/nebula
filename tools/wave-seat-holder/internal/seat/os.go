@@ -6,7 +6,6 @@ import (
 	_ "embed"
 	"errors"
 	"io"
-	"io/fs"
 	"log/slog"
 	"net"
 	"os"
@@ -28,11 +27,11 @@ func ProductionDeps(getenv socket.Environment, stdout, stderr io.Writer) Deps {
 		Now:      time.Now,
 		Sleep:    sleepContext,
 		Files: Files{
-			Mkdir:     os.MkdirAll,
-			WriteFile: writePrivateFile,
-			Readdir:   readDirNames,
-			ReadText:  readFileText,
-			Connect:   connectSocket,
+			Mkdir:       os.MkdirAll,
+			OpenSeatDir: openSeatDirFiles,
+			Readdir:     readDirNames,
+			ReadText:    readFileText,
+			Connect:     connectSocket,
 		},
 		Which:  lookPath,
 		Spawn:  spawnCommand,
@@ -55,20 +54,9 @@ func emitTo(w io.Writer) func(string) {
 //go:embed seat.conf
 var seatConfig []byte
 
-// writePrivateFile writes data to path and sets perm even when the file already exists, so the mode is never left stale.
-func writePrivateFile(path string, data []byte, perm fs.FileMode) error {
-	//nolint:gosec // path is the seat's own directory, created by the holder.
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, perm)
-	if err != nil {
-		return err
-	}
-	if _, err := file.Write(data); err != nil {
-		return errors.Join(err, file.Close())
-	}
-	if err := file.Chmod(perm); err != nil {
-		return errors.Join(err, file.Close())
-	}
-	return file.Close()
+// openSeatDirFiles adapts openSeatDirectory to the SeatDir seam, so the holder's Files can hand back an open handle.
+func openSeatDirFiles(path string) (SeatDir, error) {
+	return openSeatDirectory(path)
 }
 
 func lookPath(command string) (string, bool) {

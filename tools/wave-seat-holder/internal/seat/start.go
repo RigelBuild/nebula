@@ -117,12 +117,11 @@ func startLinuxSeat(ctx context.Context, name string, command []string, deps Dep
 	if !ok {
 		return reportFailure(deps, "tmux is not on PATH")
 	}
-	launch := seatLaunch{directory: directory, socketPath: socketPath, unit: unit, tmux: tmux, command: command}
 	config, err := writeSeatConfig(deps, directory, name)
 	if err != nil {
 		return reportFailure(deps, err.Error())
 	}
-	launch.config = config
+	launch := seatLaunch{directory: directory, socketPath: socketPath, unit: unit, tmux: tmux, config: config, command: command}
 	if err := startSeatUnit(ctx, launch, envOr(deps.Getenv, "WAVE_SEAT_SLICE", defaultSlice), deps); err != nil {
 		return reportFailure(deps, err.Error())
 	}
@@ -140,17 +139,24 @@ func seatAlreadyLive(name string, deps Deps) int {
 	return 4
 }
 
-// writeSeatConfig creates the seat's directory and writes the embedded tmux configuration to <directory>/<name>.conf
+// writeSeatConfig creates the seat's directory and writes the embedded tmux configuration to <name>.conf inside it,
 // at mode 0600. The file sits beside the seat's socket, so no other seat shares it. It returns the file's path.
+//
+// Every step after the mkdir is relative to one open directory handle, so a path swapped for a link after the
+// check cannot redirect the write. The config is recreated, not reopened, so a planted hardlink is never written.
 func writeSeatConfig(deps Deps, directory, name string) (string, error) {
 	if err := deps.Files.Mkdir(directory, 0o700); err != nil {
 		return "", err
 	}
-	path := filepath.Join(directory, name+".conf")
-	if err := deps.Files.WriteFile(path, seatConfig, 0o600); err != nil {
+	dir, err := deps.Files.OpenSeatDir(directory)
+	if err != nil {
+		return "", err
+	}
+	defer dir.Close()
+	if err := dir.WriteFile(name+".conf", seatConfig); err != nil {
 		return "", fmt.Errorf("write seat config: %w", err)
 	}
-	return path, nil
+	return filepath.Join(directory, name+".conf"), nil
 }
 
 // envOr returns the variable's value when it is set, even when empty. It falls back only when unset.

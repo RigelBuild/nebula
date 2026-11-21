@@ -1,16 +1,19 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/RigelBuild/nebula/tools/nemo-move/internal/phase"
+	"github.com/RigelBuild/nebula/tools/nemo-move/internal/transfer"
 )
 
 func TestWaitForOwner(t *testing.T) {
@@ -113,4 +116,42 @@ func TestMaintSideOperations(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	})
+}
+
+// homeMismatchRemote reports a $HOME other than the expected source home and
+// records every command it is asked to run.
+type homeMismatchRemote struct{ commands *[]string }
+
+func (r homeMismatchRemote) Run(_ context.Context, _ string, args ...string) (string, error) {
+	command := args[len(args)-1]
+	*r.commands = append(*r.commands, command)
+	if command == transfer.HomeCommand {
+		return "/Users/other", nil
+	}
+	return "", errors.New("unexpected remote command")
+}
+func (homeMismatchRemote) StreamReader(context.Context, string, ...string) (io.ReadCloser, error) {
+	return nil, errors.New("unexpected stream")
+}
+func (homeMismatchRemote) Upload(context.Context, string, string, string, string, os.FileMode) error {
+	return errors.New("unexpected upload")
+}
+func (homeMismatchRemote) Hash(context.Context, string, string, string) (string, error) {
+	return "", errors.New("unexpected hash")
+}
+
+func TestInventoryRefusesMismatchedRemoteHome(t *testing.T) {
+	var commands []string
+	var stdout bytes.Buffer
+	args := []string{"--mac", "example@192.0.2.10", "--ssh", testSSHPath, "--mac-binary", "mac-binary", "--home-root", testHome, "--ssh-user", "example"}
+	err := inventory(t.Context(), args, homeMismatchRemote{commands: &commands}, &stdout)
+	if err == nil || !strings.Contains(err.Error(), "does not match source home") {
+		t.Fatalf("error = %v, want source home mismatch", err)
+	}
+	if want := []string{transfer.HomeCommand}; !reflect.DeepEqual(commands, want) {
+		t.Fatalf("remote commands = %q, want only the home read %q", commands, want)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("inventory wrote output: %q", stdout.String())
+	}
 }

@@ -23,6 +23,7 @@ type cutoverOperations interface {
 	readPhase(context.Context) (string, error)
 	writePhase(context.Context, string) error
 	writeRecord(context.Context, string, string) error
+	checkHome(context.Context, string) error
 	stop(context.Context, string) error
 	export(context.Context, string) error
 	extract(context.Context, func() error) error
@@ -102,6 +103,9 @@ func cutover(ctx context.Context, args []string, deps cutoverDeps, stdout, stder
 	}
 	if value == "owner" {
 		return errors.Join(errors.New("phase already owner"), ops.close(ctx))
+	}
+	if err := ops.checkHome(ctx, *mac); err != nil {
+		return errors.Join(fmt.Errorf("check source home: %w", err), ops.close(ctx))
 	}
 	if err := ops.stop(ctx, *mac); err != nil {
 		return fmt.Errorf("stop mac: %w", err)
@@ -233,6 +237,13 @@ func (p *productionCutover) writePhase(ctx context.Context, value string) error 
 func (p *productionCutover) writeRecord(ctx context.Context, id, state string) error {
 	_, err := p.maint(ctx, "cutover-write", id, state)
 	return err
+}
+func (p *productionCutover) checkHome(ctx context.Context, target string) error {
+	ssh, err := resolveSSHPath("", exec.LookPath)
+	if err != nil {
+		return err
+	}
+	return transfer.CheckSourceHome(ctx, p.source, target, ssh, transfer.SSHRemote())
 }
 func (p *productionCutover) stop(ctx context.Context, target string) error {
 	ssh, err := resolveSSHPath("", exec.LookPath)

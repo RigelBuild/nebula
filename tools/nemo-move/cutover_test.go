@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/RigelBuild/nebula/tools/nemo-move/internal/transfer"
@@ -15,6 +16,7 @@ type fakeCutover struct {
 	events                  []string
 	state, id, phase, fault string
 	lostAck                 bool
+	homeErr                 error
 }
 
 func (f *fakeCutover) event(s string)              { f.events = append(f.events, s) }
@@ -43,6 +45,10 @@ func (f *fakeCutover) writeRecord(_ context.Context, id, state string) error {
 	f.event("record:" + state)
 	f.id, f.state = id, state
 	return nil
+}
+func (f *fakeCutover) checkHome(context.Context, string) error {
+	f.event("check-home")
+	return f.homeErr
 }
 func (f *fakeCutover) stop(context.Context, string) error   { f.event("stop"); return nil }
 func (f *fakeCutover) export(context.Context, string) error { f.event("export"); return nil }
@@ -103,7 +109,7 @@ func TestCutoverNormalAndFaults(t *testing.T) {
 			f := &fakeCutover{phase: "blocked", fault: point}
 			err := cutover(t.Context(), args, cutoverDeps{ops: f, newID: func() (string, error) { return "new", nil }, fault: f.inject}, io.Discard, io.Discard)
 			if point == "" {
-				want := []string{"open", "record", "read-phase", "stop", "export", "record:started", "phase:blocked", "record", "read-phase", "extract", "verify", "record:committing", "phase:owner", "read-phase", "record:committed", "cleanup", "close"}
+				want := []string{"open", "record", "read-phase", "check-home", "stop", "export", "record:started", "phase:blocked", "record", "read-phase", "extract", "verify", "record:committing", "phase:owner", "read-phase", "record:committed", "cleanup", "close"}
 				if err != nil || !reflect.DeepEqual(f.events, want) {
 					t.Fatalf("error %v, events %v", err, f.events)
 				}
@@ -124,8 +130,8 @@ func TestCutoverTransferFailureStopsCommit(t *testing.T) {
 		failure string
 		want    []string
 	}{
-		{"extract", []string{"open", "record", "read-phase", "stop", "export", "record:started", "phase:blocked", "record", "read-phase", "extract"}},
-		{"verify", []string{"open", "record", "read-phase", "stop", "export", "record:started", "phase:blocked", "record", "read-phase", "extract", "verify"}},
+		{"extract", []string{"open", "record", "read-phase", "check-home", "stop", "export", "record:started", "phase:blocked", "record", "read-phase", "extract"}},
+		{"verify", []string{"open", "record", "read-phase", "check-home", "stop", "export", "record:started", "phase:blocked", "record", "read-phase", "extract", "verify"}},
 	} {
 		t.Run(tc.failure, func(t *testing.T) {
 			f := &fakeCutover{phase: "blocked", fault: tc.failure}
@@ -221,5 +227,17 @@ func TestProductionCutoverExtractSendsSourceHome(t *testing.T) {
 	want := []string{"-n", "nemo", "exec", "-i", maintName, "--", "nemo-move", "maint-side", "extract", "/Users/example"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("extract argv = %v, want %v", got, want)
+	}
+}
+
+func TestCutoverHomeMismatchStopsNothing(t *testing.T) {
+	f := &fakeCutover{phase: "blocked", homeErr: errors.New(`remote home "/Users/other" does not match source home "/Users/example"`)}
+	args := []string{"--kubeconfig", "config", "--mac", "example@192.0.2.10", "--home-root", "/Users/example", "--ssh-user", "example", "--launchd-label", "com.example.agent:gui", "--mac-binary", "mac-binary"}
+	err := cutover(t.Context(), args, cutoverDeps{ops: f, newID: func() (string, error) { return "new", nil }, fault: f.inject}, io.Discard, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "check source home") {
+		t.Fatalf("error = %v, want source home check failure", err)
+	}
+	if want := []string{"open", "record", "read-phase", "check-home", "close"}; !reflect.DeepEqual(f.events, want) {
+		t.Fatalf("events = %v, want %v", f.events, want)
 	}
 }

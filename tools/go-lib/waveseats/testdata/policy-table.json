@@ -1,0 +1,76 @@
+{
+	"rolePolicies": {
+		"build.coordination.lead": {
+			"team": "agents-build",
+			"policyId": "agents-build-v1"
+		},
+		"design.architect": {
+			"team": "agents-design",
+			"policyId": "agents-design-v1"
+		}
+	},
+	"policies": {
+		"agents-build-v1": {
+			"id": "agents-build-v1",
+			"revision": 1,
+			"models": ["model-a"],
+			"accounting": "reserved-liability",
+			"fleet": {
+				"cap": {
+					"usd": 100,
+					"window": { "kind": "rolling", "seconds": 86400 }
+				},
+				"maxLiveKeys": 10
+			},
+			"stableSeat": {
+				"cap": { "usd": 50, "window": { "kind": "rolling", "seconds": 86400 } }
+			},
+			"keyCap": {
+				"usd": 20,
+				"window": { "kind": "rolling", "seconds": 86400 }
+			},
+			"perModel": {
+				"model-a": {
+					"tokens": 1000,
+					"window": { "kind": "rolling", "seconds": 86400 },
+					"tpm": 100,
+					"rpm": 10,
+					"maxInputTokens": 100,
+					"maxOutputTokens": 100,
+					"maxRequestUsd": 1
+				}
+			},
+			"maxParallelRequests": 1,
+			"maxFleetParallelRequests": 10,
+			"ttlSeconds": 3600,
+			"renewMarginSeconds": 300,
+			"budgetPageThresholdUsd": 10
+		},
+		"agents-design-v1": {
+			"id": "agents-design-v1",
+			"revision": 1,
+			"models": [],
+			"accounting": "reserved-liability",
+			"fleet": {
+				"cap": {
+					"usd": 100,
+					"window": { "kind": "rolling", "seconds": 86400 }
+				},
+				"maxLiveKeys": 10
+			},
+			"stableSeat": {
+				"cap": { "usd": 50, "window": { "kind": "rolling", "seconds": 86400 } }
+			},
+			"keyCap": {
+				"usd": 20,
+				"window": { "kind": "rolling", "seconds": 86400 }
+			},
+			"perModel": {},
+			"maxParallelRequests": 1,
+			"maxFleetParallelRequests": 10,
+			"ttlSeconds": 3600,
+			"renewMarginSeconds": 300,
+			"budgetPageThresholdUsd": 10
+		}
+	}
+}

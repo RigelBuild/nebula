@@ -6,7 +6,6 @@ release: {
 			kind:     "nix"
 			attr:     "cotal-presence-probe"
 			binaries: ["cotal-presence-probe"]
-			systems: ["x86_64-linux"]
 			runtimeDeps: [
 				"libc.so.6",
 				"ld-linux-x86-64.so.2",

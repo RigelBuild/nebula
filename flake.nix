@@ -396,6 +396,42 @@
               }
               touch $out
             '';
+          # packagesFor must serve a prebuilt fetch on every release system, never a source
+          # build. Evaluated against a fixture that declares all three systems, not the live
+          # release-manifest.json: the live Release lags until CD ships the new legs.
+          manifest-fetch-all-systems =
+            let
+              releaseSystems = [ "x86_64-linux" "aarch64-linux" "aarch64-darwin" ];
+              fixture = {
+                source = "abc";
+                tag = "nebula-20261117-45";
+                held = [ ];
+                demo = {
+                  version = "1.0.0";
+                  upstreamRev = null;
+                  "x86_64-linux" = {
+                    url = "https://example.invalid/demo-x86_64-linux.tar.zst";
+                    sha256 = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+                  };
+                  "aarch64-linux" = {
+                    url = "https://example.invalid/demo-aarch64-linux.tar.zst";
+                    sha256 = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+                  };
+                  "aarch64-darwin" = {
+                    url = "https://example.invalid/demo-aarch64-darwin.tar.zst";
+                    sha256 = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+                  };
+                };
+              };
+              fetchedPname = system: (packagesFor fixture system).demo.pname;
+            in
+            pkgs.runCommand "nebula-manifest-fetch-all-systems" { } ''
+              test '${builtins.toJSON (map fetchedPname releaseSystems)}' = '${builtins.toJSON (map (_: "demo-prebuilt") releaseSystems)}' || {
+                echo "a release system did not get the prebuilt fetch for demo" >&2
+                exit 1
+              }
+              touch $out
+            '';
           # A command that replaces go-lib must ship tools/go-lib in its source.
           go-lib-included = pkgs.runCommand "nebula-go-lib-included" { } ''
             test -f "${commandSource "dl-claim"}/tools/go-lib/go.mod" || {

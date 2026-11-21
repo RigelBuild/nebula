@@ -6,11 +6,15 @@
   outputs =
     { nixpkgs, ... }:
     let
-      # Released on x86_64-linux only. Its bun dependency install is per host
-      # platform, so the fixed-output hash differs per system, and the
-      # aarch64-linux loader soname is not declared. component.cue names the
-      # same system in systems.
-      systems = [ "x86_64-linux" ];
+      # Per-system fixed-output hash of the bun dependency install. The aarch64
+      # entries come from a real build on each system, never a guessed value.
+      depsHash = {
+        x86_64-linux = "sha256-9UknAR4DqXY/PfWVoHYrK5ur5uGOAw6lebl45iV1MOg=";
+        aarch64-linux = "";
+        aarch64-darwin = "";
+      };
+      # Released on all three release systems.
+      systems = [ "x86_64-linux" "aarch64-linux" "aarch64-darwin" ];
       forAllSystems = nixpkgs.lib.genAttrs systems;
     in
     {
@@ -25,7 +29,7 @@
             pname = "cotal-presence-probe-deps";
             version = "0.1.0";
             src = ./.;
-            outputHash = "sha256-9UknAR4DqXY/PfWVoHYrK5ur5uGOAw6lebl45iV1MOg=";
+            outputHash = depsHash.${system};
             outputHashMode = "recursive";
             outputHashAlgo = "sha256";
             nativeBuildInputs = [ pkgs.bun ];

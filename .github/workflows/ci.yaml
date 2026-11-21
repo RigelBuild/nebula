@@ -95,6 +95,18 @@ jobs:
           if [ -z "$names" ]; then echo "no packages found for ${system}" >&2; exit 1; fi
           attrs=(); while IFS= read -r a; do attrs+=("$a"); done <<<"$names"
           nix build --no-link "${attrs[@]/#/.#packages.${system}.}"
+      # Builds each nix sub-flake the CD batch leg releases, with the same command, so a
+      # bad hash or a missing system fails here before a release. Reads attr from component.cue.
+      - name: Build release nix sub-flakes
+        run: |
+          set -euo pipefail
+          for f in tools/*/component.cue forks/*/component.cue; do
+            grep -q 'kind: *"nix"' "$f" || continue
+            project="$(dirname "$f")"
+            attr="$(sed -n 's/.*attr: *"\([^"]*\)".*/\1/p' "$f" | head -1)"
+            [ -n "$attr" ] || { echo "no attr in $f" >&2; exit 1; }
+            nix build --no-link "./$project#$attr"
+          done
       - name: Set up Moon
         run: nix develop --command moon --version
       - name: Run affected projects

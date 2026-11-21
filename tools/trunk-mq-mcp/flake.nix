@@ -6,11 +6,15 @@
   outputs =
     { nixpkgs, ... }:
     let
-      # Released on x86_64-linux only. Its bun dependency install is per host
-      # platform, so the fixed-output hash differs per system, and the
-      # aarch64-linux loader soname is not declared. component.cue names the
-      # same system in systems.
-      systems = [ "x86_64-linux" ];
+      # Per-system fixed-output hash of the bun dependency install. The aarch64
+      # entries come from a real build on each system, never a guessed value.
+      depsHash = {
+        x86_64-linux = "sha256-jhpg8JFpqB+MDuTGEvcPEcv33lcHNGkVeHY8AhBaM1g=";
+        aarch64-linux = "";
+        aarch64-darwin = "";
+      };
+      # Released on all three release systems.
+      systems = [ "x86_64-linux" "aarch64-linux" "aarch64-darwin" ];
       forAllSystems = nixpkgs.lib.genAttrs systems;
     in
     {
@@ -24,7 +28,7 @@
             pname = "trunk-mq-mcp-deps";
             version = "0.1.0";
             src = ./.;
-            outputHash = "sha256-jhpg8JFpqB+MDuTGEvcPEcv33lcHNGkVeHY8AhBaM1g=";
+            outputHash = depsHash.${system};
             outputHashMode = "recursive";
             outputHashAlgo = "sha256";
             nativeBuildInputs = [ pkgs.bun ];

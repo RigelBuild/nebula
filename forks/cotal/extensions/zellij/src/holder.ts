@@ -182,6 +182,9 @@ export class HolderRuntime implements Runtime {
           holderRecord.state === "Z" || holderRecord.state === "X" ||
           agentRecord.state === "Z" || agentRecord.state === "X")
         throw new Error(`holder runtime: could not read live process identities for seat ${name}`);
+      // Read the agent's run-p scope while its pid is proved live. At wait time the pid is usually gone, and its
+      // /proc entry with it, so the omp scope would go unchecked.
+      const agentScope = this.agentRunScope(agentPid);
 
       const reference: RuntimeReference = {
         kind: "holder",
@@ -216,7 +219,7 @@ export class HolderRuntime implements Runtime {
         waitForExit: async () => {
           while (status() !== "exited") await this.sleep(POLL_MS);
         },
-        ...(this.platform === "darwin" ? {} : { waitForWorkExit: () => this.waitForUnitWorkExit(name, this.agentRunScope(agentPid)) }),
+        ...(this.platform === "darwin" ? {} : { waitForWorkExit: () => this.waitForUnitWorkExit(name, agentScope) }),
         attach: () => {
           throw new Error("holder runtime: attach with wave-seat-holder attach");
         },
@@ -266,9 +269,10 @@ export class HolderRuntime implements Runtime {
     };
   }
 
-  /** The agent's own `run-p<panePid>-*.scope` unit, read from its cgroup path. The omp scope is not listed in the seat's
-   *  `ConsistsOf`, so the wait must name it. Undefined when the agent runs in no run-p scope (for example on a host
-   *  without systemd-run) or the cgroup cannot be read; the seat's own members still gate the wait then. */
+  /** The agent's own `run-p<agentPid>-*.scope` unit, read from `/proc/<agentPid>/cgroup` while the agent pid is live
+   *  (called from spawn, never at wait time). The omp scope is not listed in the seat's `ConsistsOf`, so the wait must
+   *  name it. Undefined when the agent runs in no run-p scope (for example on a host without systemd-run) or the cgroup
+   *  cannot be read; the seat's own members still gate the wait then. */
   private agentRunScope(agentPid: number): string | undefined {
     let cgroup: string;
     try {

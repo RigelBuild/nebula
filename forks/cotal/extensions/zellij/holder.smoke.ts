@@ -104,7 +104,8 @@ function fixture(options: FixtureOptions = {}) {
         }
         const cgroupOf = /^\/proc\/(\d+)\/cgroup$/.exec(path);
         if (cgroupOf !== null) {
-          if (options.agentCgroup === undefined) throw Object.assign(new Error("not found"), { code: "ENOENT" });
+          // Like /proc: the cgroup file exists only while the pid does.
+          if (options.agentCgroup === undefined || !proc.has(Number(cgroupOf[1]))) throw Object.assign(new Error("not found"), { code: "ENOENT" });
           return `0::${options.agentCgroup}\n`;
         }
         const match = /^\/proc\/(\d+)\/stat$/.exec(path);
@@ -852,6 +853,30 @@ await check("waitForWorkExit keeps holding when the seat unloads while the agent
     assert.ok(handle.waitForWorkExit, "linux handle must expose waitForWorkExit");
     await handle.waitForWorkExit();
     assert.ok(polls >= 2, `the agent scope must hold the wait even after the seat unloads, polled ${polls}`);
+  } finally {
+    f.cleanup();
+  }
+});
+
+await check("waitForWorkExit still waits on the agent's run-p scope when /proc no longer has the agent pid", async () => {
+  let polls = 0;
+  let events = "populated 1\n";
+  const f = fixture({
+    ...seatLayout(),
+    unit: () => undefined,
+    agentCgroup,
+    cgroupEvents: (path: string) => (path === agentCgroup ? events : "populated 0\n"),
+    onSleep: () => {
+      polls++;
+      if (polls === 2) events = "populated 0\n";
+    },
+  });
+  try {
+    const handle = f.spawn();
+    f.proc.clear();
+    assert.ok(handle.waitForWorkExit, "linux handle must expose waitForWorkExit");
+    await handle.waitForWorkExit();
+    assert.ok(polls >= 2, `the scope read at spawn must hold the wait after the agent pid is gone, polled ${polls}`);
   } finally {
     f.cleanup();
   }

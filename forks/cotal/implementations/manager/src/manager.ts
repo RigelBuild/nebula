@@ -318,9 +318,6 @@ const OPERATOR_READINESS_MS = 3_000;
 const SESSION_RESTART_LIMIT = 3;
 const SESSION_RESTART_WINDOW_MS = 120_000;
 const RESTART_WORK_EXIT_MS = 10_000;
-/** One retry of the work-exit proof after this delay. A seat that is still unloading gets one more chance; a second
- *  refusal retires the seat as before. */
-const RESTART_WORK_EXIT_RETRY_MS = 1_000;
 /** Upper bound on a detached agent-exit deprovision (#159 B2). A wedged broker must not leave the
  *  fire-and-forget teardown pending forever with no log — past this it rejects into freeSlot's fail-loud
  *  `.catch`. Generous over the helper's 5s connect timeout to allow the two consumer-deletes + ACL purge
@@ -6402,16 +6399,8 @@ export class Manager {
         // a replacement until the runtime proves the whole prior execution closed.
         if (!a.handle.waitForWorkExit)
           throw new Error(`runtime "${a.handle.kind}" cannot prove prior local work ended; automatic restart refused`);
-        const proofStart = Date.now();
-        const proveWorkEnded = (budgetMs: number): Promise<void> => withTimeout(a.handle.waitForWorkExit!(), budgetMs,
+        await withTimeout(a.handle.waitForWorkExit(), RESTART_WORK_EXIT_MS,
           `prior local work was not proved ended within ${RESTART_WORK_EXIT_MS}ms; automatic restart refused`);
-        try { await proveWorkEnded(RESTART_WORK_EXIT_MS); }
-        catch {
-          // One more chance for a seat still unloading. The retry spends only what is left of the one cap, so a seat
-          // that never proves still refuses within RESTART_WORK_EXIT_MS in total.
-          await new Promise((resolve) => setTimeout(resolve, RESTART_WORK_EXIT_RETRY_MS));
-          await proveWorkEnded(Math.max(1, RESTART_WORK_EXIT_MS - (Date.now() - proofStart)));
-        }
         if (this.agents.get(a.name) !== a || a.terminalizing || this.maintenanceState !== "active") return;
         const connector = await this.resolveConnector(a.agent);
         if (this.agents.get(a.name) !== a || a.terminalizing || this.maintenanceState !== "active") return;

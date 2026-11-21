@@ -1,0 +1,9 @@
+# Scrubbed fixture: the manifest that seeds the release queue ConfigMap.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cd-release-queue
+  annotations:
+    kustomize.toolkit.fluxcd.io/ssa: IfNotPresent
+data:
+  state: '{"pending":[],"failed":{}}'

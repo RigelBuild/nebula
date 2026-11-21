@@ -67,34 +67,31 @@ func TestRun(t *testing.T) {
 	}
 }
 
-// lookupTestOwner returns the current user and one of its groups, the identity
-// the fixture files are created and reconciled to.
+// lookupTestOwner returns the running process's uid and effective gid, with
+// their account and group names. The fixture files are created and reconciled
+// to this identity.
 func lookupTestOwner(t *testing.T) testOwner {
 	t.Helper()
 	current, err := user.Current()
 	if err != nil {
 		t.Fatal(err)
 	}
-	groups, err := current.GroupIds()
+	group, err := user.LookupGroupId(strconv.Itoa(os.Getegid()))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(groups) == 0 {
-		t.Fatal("current user has no groups")
+	return testOwner{name: current.Username, group: group.Name, uid: os.Getuid(), gid: os.Getegid()}
+}
+
+// writeFixture writes a secret fixture and pins its owner and group to owner.
+// A new file's group can come from the parent directory on BSD-style systems,
+// so the group is set explicitly and the fixture does not depend on the
+// environment.
+func writeFixture(path string, content []byte, mode os.FileMode, owner testOwner) error {
+	if err := os.WriteFile(path, content, mode); err != nil {
+		return err
 	}
-	group, err := user.LookupGroupId(groups[0])
-	if err != nil {
-		t.Fatal(err)
-	}
-	uid, err := strconv.Atoi(current.Uid)
-	if err != nil {
-		t.Fatal(err)
-	}
-	gid, err := strconv.Atoi(group.Gid)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return testOwner{name: current.Username, group: group.Name, uid: uid, gid: gid}
+	return os.Chown(path, owner.uid, owner.gid)
 }
 
 // checkReadyCase runs one run() case against a fresh fixture file and checks
@@ -103,7 +100,7 @@ func checkReadyCase(t *testing.T, owner testOwner, test readyCase) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "secret")
 	if !test.missing {
-		if err := os.WriteFile(path, []byte("not logged"), test.mode); err != nil {
+		if err := writeFixture(path, []byte("not logged"), test.mode, owner); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -195,7 +192,7 @@ func TestRunDelayedRender(t *testing.T) {
 		done := make(chan error, 1)
 		go func() {
 			<-time.After(300 * time.Millisecond)
-			done <- os.WriteFile(path, []byte("secret"), 0o400)
+			done <- writeFixture(path, []byte("secret"), 0o400, owner)
 		}()
 		var stdout, stderr bytes.Buffer
 		err := run([]string{"--path", path, "--owner", owner.name, "--group", owner.group, "--mode", "0400", "--timeout", "2s"}, &stdout, &stderr)
@@ -233,7 +230,7 @@ func TestRunReconcileGroup(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := filepath.Join(t.TempDir(), "secret")
-	if err := os.WriteFile(path, nil, 0o400); err != nil {
+	if err := writeFixture(path, nil, 0o400, owner); err != nil {
 		t.Fatal(err)
 	}
 	info, err := os.Stat(path)

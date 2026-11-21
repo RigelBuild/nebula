@@ -12,8 +12,30 @@ import (
 	"golang.org/x/sys/windows"
 )
 
+// currentUserSID returns the string SID of the user in the process token.
+func currentUserSID() (sid string, err error) {
+	token, err := windows.OpenCurrentProcessToken()
+	if err != nil {
+		return "", fmt.Errorf("opening process token: %w", err)
+	}
+	defer func() {
+		if closeErr := token.Close(); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("closing process token: %w", closeErr))
+		}
+	}()
+	user, err := token.GetTokenUser()
+	if err != nil {
+		return "", fmt.Errorf("reading token user: %w", err)
+	}
+	return user.User.Sid.String(), nil
+}
+
 func privateAttributes() (*windows.SecurityAttributes, *windows.SECURITY_DESCRIPTOR, error) {
-	sd, err := windows.SecurityDescriptorFromString(privateSDDL)
+	userSID, err := currentUserSID()
+	if err != nil {
+		return nil, nil, err
+	}
+	sd, err := windows.SecurityDescriptorFromString(privateSDDL(userSID))
 	if err != nil {
 		return nil, nil, fmt.Errorf("parsing private security descriptor: %w", err)
 	}
@@ -22,8 +44,9 @@ func privateAttributes() (*windows.SecurityAttributes, *windows.SECURITY_DESCRIP
 	return attributes, sd, nil
 }
 
-// MkdirPrivate creates dir with a protected DACL that grants only the owner and
-// SYSTEM, and applies the same DACL to an existing dir.
+// MkdirPrivate creates dir owned by the current user with a protected DACL that
+// grants only that user and SYSTEM, and applies the same owner and DACL to an
+// existing dir.
 func MkdirPrivate(dir string) error {
 	if err := os.MkdirAll(filepath.Dir(dir), 0o700); err != nil {
 		return err
@@ -39,12 +62,16 @@ func MkdirPrivate(dir string) error {
 	if err := windows.CreateDirectory(name, attributes); err != nil && !errors.Is(err, windows.ERROR_ALREADY_EXISTS) {
 		return fmt.Errorf("creating private directory: %w", err)
 	}
+	owner, _, err := sd.Owner()
+	if err != nil {
+		return fmt.Errorf("reading private owner: %w", err)
+	}
 	dacl, _, err := sd.DACL()
 	if err != nil {
 		return fmt.Errorf("reading private DACL: %w", err)
 	}
-	info := windows.SECURITY_INFORMATION(windows.DACL_SECURITY_INFORMATION | windows.PROTECTED_DACL_SECURITY_INFORMATION)
-	if err := windows.SetNamedSecurityInfo(dir, windows.SE_FILE_OBJECT, info, nil, nil, dacl, nil); err != nil {
+	info := windows.SECURITY_INFORMATION(windows.OWNER_SECURITY_INFORMATION | windows.DACL_SECURITY_INFORMATION | windows.PROTECTED_DACL_SECURITY_INFORMATION)
+	if err := windows.SetNamedSecurityInfo(dir, windows.SE_FILE_OBJECT, info, owner, nil, dacl, nil); err != nil {
 		return fmt.Errorf("applying private DACL: %w", err)
 	}
 	return nil

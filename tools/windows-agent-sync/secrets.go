@@ -122,8 +122,22 @@ const secretsDir = "/run/secrets"
 // varNamePattern is the shape of every exported Windows variable name.
 var varNamePattern = regexp.MustCompile(`^[A-Z][A-Z0-9_]*$`)
 
+// reservedDeviceNames are Windows device names that a file export base name
+// must not map to, compared case-insensitively.
+var reservedDeviceNames = map[string]bool{"con": true, "prn": true, "aux": true, "nul": true}
+
+func init() {
+	for digit := '0'; digit <= '9'; digit++ {
+		reservedDeviceNames["com"+string(digit)] = true
+		reservedDeviceNames["lpt"+string(digit)] = true
+	}
+}
+
 func validVarName(name string) bool {
-	return varNamePattern.MatchString(name)
+	if !varNamePattern.MatchString(name) {
+		return false
+	}
+	return !isFileExportName(name) || !reservedDeviceNames[strings.ToLower(exportFileName(name))]
 }
 
 // validSecretKey reports whether key names one file directly under secretsDir.
@@ -239,6 +253,11 @@ func applySecrets(store EnvStore, vars, files map[string]string, fileDir string,
 const stagedExportPattern = ".windows-agent-sync-*.tmp"
 
 func stageExports(files map[string]string, fileNames []string, fileDir string) (map[string]string, error) {
+	if len(fileNames) > 0 {
+		if err := envstore.MkdirPrivate(fileDir); err != nil {
+			return nil, oops.In("windows-agent-sync").Wrapf(err, "creating export directory")
+		}
+	}
 	if err := sweepStaleExports(fileDir); err != nil {
 		return nil, err
 	}
@@ -253,13 +272,23 @@ func stageExports(files map[string]string, fileNames []string, fileDir string) (
 
 // sweepStaleExports deletes temp files a previous interrupted run left behind.
 func sweepStaleExports(fileDir string) error {
-	stale, err := filepath.Glob(filepath.Join(fileDir, stagedExportPattern))
+	entries, err := os.ReadDir(fileDir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
 	if err != nil {
 		return oops.In("windows-agent-sync").Wrapf(err, "listing stale exports")
 	}
 	var removeErr error
-	for _, temp := range stale {
-		if err := os.Remove(temp); err != nil && !errors.Is(err, os.ErrNotExist) {
+	for _, entry := range entries {
+		stale, err := filepath.Match(stagedExportPattern, entry.Name())
+		if err != nil {
+			return oops.In("windows-agent-sync").Wrapf(err, "matching stale exports")
+		}
+		if !stale || entry.IsDir() {
+			continue
+		}
+		if err := os.Remove(filepath.Join(fileDir, entry.Name())); err != nil && !errors.Is(err, os.ErrNotExist) {
 			removeErr = errors.Join(removeErr, err)
 		}
 	}
@@ -270,10 +299,6 @@ func sweepStaleExports(fileDir string) error {
 }
 
 func stageExport(staged map[string]string, fileDir, name, value string) error {
-	if err := envstore.MkdirPrivate(fileDir); err != nil {
-		cleanupErr := removeStaged(staged)
-		return oops.In("windows-agent-sync").Wrapf(errors.Join(err, cleanupErr), "creating export directory")
-	}
 	target := filepath.Join(fileDir, exportFileName(name))
 	current, readErr := os.ReadFile(target) //nolint:gosec // target is a file export under %LOCALAPPDATA%/rigel/secrets at runtime.
 	if readErr == nil && bytes.Equal(current, []byte(value)) {

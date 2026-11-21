@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"path/filepath"
 	"strings"
 
 	"github.com/RigelBuild/nebula/tools/nemo-move/internal/layout"
@@ -151,10 +152,12 @@ exec /usr/bin/tar -c "$@"
 `
 
 // stageUnpackScript is the user half of staging. It runs as the SSH user with no
-// sudo. It refuses a symlinked parent, unpacks the archive on stdin into a
-// mktemp dir the user owns, sets the modes, and renames the tree into place. The
-// arguments are the staging path, then the account names.
+// sudo. It refuses a symlinked parent, unpacks the archive file into a mktemp
+// dir the user owns, sets the modes, and renames the tree into place. The
+// arguments are the archive path, the staging path, then the account names.
 const stageUnpackScript = `set -eu
+archive=$1
+shift
 base=$1
 shift
 parent=${base%/*}
@@ -166,7 +169,7 @@ if [ -L "$base" ]; then echo "refusing symlinked staging $base" >&2; exit 1; fi
 temp=$(/usr/bin/mktemp -d "$parent/.nemo-move-staging.XXXXXX")
 old=$(/usr/bin/mktemp -d "$parent/.nemo-move-old.XXXXXX")
 trap '/bin/rm -rf "$temp"; /bin/rmdir "$old" 2>/dev/null || true' EXIT
-/usr/bin/tar -x -C "$temp"
+/usr/bin/tar -x -C "$temp" -f "$archive"
 for account in "$@"; do
   if [ -z "$(/bin/ls -A "$temp/$account/credentials" 2>/dev/null)" ]; then echo "no credentials for $account" >&2; exit 1; fi
   /usr/bin/find "$temp/$account" -type d -exec /bin/chmod 700 {} \;
@@ -192,22 +195,38 @@ func stageShell(opts Options) string {
 }
 
 // stageUnpackShell is the user command that consumes the archive. It runs with
-// no sudo. Its arguments are the staging path, then the account names.
+// no sudo. Its arguments are the archive path (the shell variable archive, set
+// by stageRun), the staging path, then the account names.
 func stageUnpackShell(opts Options) string {
 	args := append([]string{opts.stageRoot()}, opts.Layout.Google.Accounts...)
-	return "/bin/sh -c " + ShellQuote(stageUnpackScript) + " sh " + shellJoin(args)
+	return "/bin/sh -c " + ShellQuote(stageUnpackScript) + " sh \"$archive\" " + shellJoin(args)
 }
 
 func stageCredentialsCommand(opts Options) string {
-	return "/bin/bash -o pipefail -c " + ShellQuote("sudo "+stageShell(opts)+" | "+stageUnpackShell(opts))
+	return stageRun(opts, "sudo ")
 }
 
-// stagePipeline runs the root tar stream into the user unpack. Only the first
-// stage runs under sudo, so root reads the Google source and writes the archive
-// into a pipe. The unpack runs as the SSH user and is the only writer under the
-// user's staging parent.
+// stageRun is the one staging command, used by the production run and the
+// printed fallback so the two cannot drift. The user shell makes a 0600 archive
+// in its own mktemp dir and removes that dir on every exit. Root streams into the
+// archive; the unpack runs only if root exited 0. A root failure therefore
+// leaves the old staging untouched.
+func stageRun(opts Options, rootPrefix string) string {
+	script := "umask 077; " +
+		"parent=" + ShellQuote(filepath.Dir(opts.stageRoot())) + "; " +
+		"/bin/mkdir -p \"$parent\" && " +
+		"work=$(/usr/bin/mktemp -d \"$parent/.nemo-move-run.XXXXXX\") && " +
+		"trap '/bin/rm -rf \"$work\"' EXIT && " +
+		"archive=\"$work/stream.tar\" && : > \"$archive\" && " +
+		rootPrefix + stageShell(opts) + " > \"$archive\" && " +
+		stageUnpackShell(opts)
+	return "/bin/bash -o pipefail -c " + ShellQuote(script)
+}
+
+// stagePipeline is the production staging command. Only the root stream runs
+// under sudo, and the user side runs as the SSH user.
 func stagePipeline(opts Options) string {
-	return "/bin/bash -o pipefail -c " + ShellQuote("/usr/bin/sudo -n "+stageShell(opts)+" | "+stageUnpackShell(opts))
+	return stageRun(opts, "/usr/bin/sudo -n ")
 }
 
 func stagePresenceCommand(opts Options) string {

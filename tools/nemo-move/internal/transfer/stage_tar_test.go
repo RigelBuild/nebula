@@ -64,14 +64,18 @@ func rootHalf(t *testing.T, source string, accounts ...string) ([]byte, error) {
 	return stdout.Bytes(), nil
 }
 
-// unpackStagingAsUser runs the user side of staging: it reads the archive on
-// stdin and unpacks it into a mktemp dir the user owns, then renames the tree
-// into place. It runs as the test user, the role the SSH user plays in production.
+// unpackStagingAsUser runs the user side of staging: it writes the archive to a
+// 0600 file, then unpacks it into a mktemp dir the user owns and renames the
+// tree into place. It runs as the test user, the role the SSH user plays in
+// production.
 func unpackStagingAsUser(t *testing.T, home, stage string, archive []byte, accounts ...string) error {
 	t.Helper()
-	args := append([]string{"-c", stageUnpackScript, "sh", stage}, accounts...)
+	path := filepath.Join(t.TempDir(), "stream.tar")
+	if err := os.WriteFile(path, archive, 0o600); err != nil {
+		return err
+	}
+	args := append([]string{"-c", stageUnpackScript, "sh", path, stage}, accounts...)
 	cmd := exec.CommandContext(t.Context(), "/bin/sh", args...)
-	cmd.Stdin = bytes.NewReader(archive)
 	cmd.Env = append(os.Environ(), "HOME="+home)
 	out, err := cmd.CombinedOutput()
 	if err != nil {

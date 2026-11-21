@@ -175,3 +175,43 @@ func TestVerifyJujutsuRepositoriesWalksEveryCopyDest(t *testing.T) {
 		}
 	}
 }
+
+func TestVerifyJujutsuRepositoriesSkipsLostFound(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("root reads a mode 000 directory; the regression needs the runtime user")
+	}
+	lay := layout.Layout{Rows: []layout.Row{
+		{Path: "example", Kind: layout.Copy, Dest: "/opt/data"},
+		{Path: "example/reports", Kind: layout.Copy, Dest: "/opt/data/example/reports"},
+	}}
+	root := t.TempDir()
+	repo := filepath.Join(root, "opt/data/example/reports/repo")
+	if err := os.MkdirAll(filepath.Join(repo, ".jj"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	lost := filepath.Join(root, "opt/data/lost+found")
+	if err := os.Mkdir(lost, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(lost, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chmod(lost, 0o700); err != nil {
+			t.Error(err)
+		}
+	})
+	calls := map[string]int{}
+	run := func(_ context.Context, name string, args ...string) (string, error) {
+		if name == "jj" && len(args) == 3 && args[0] == "status" && args[1] == "--repository" {
+			calls[args[2]]++
+		}
+		return "", nil
+	}
+	if err := verifyAsRuntimeUser(t.Context(), root, Manifest{Roots: []string{dataRoot}}, lay, run); err != nil {
+		t.Fatal(err)
+	}
+	if calls[repo] != 1 {
+		t.Fatalf("jj status ran %d times in %s, want 1", calls[repo], repo)
+	}
+}

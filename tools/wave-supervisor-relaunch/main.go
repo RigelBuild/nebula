@@ -181,7 +181,7 @@ func runSupervisor(ctx context.Context, deps runDeps) Outcome {
 		return finish(classificationFailed(err, startedAt, deps))
 	}
 	currentFingerprint := fingerprint(trigger)
-	if fact := unitFact(trigger, "cotal-manager.service"); fact != nil && fact.ActiveState != "active" {
+	if fact := unitFact(trigger, trigger.ManagerUnit); fact != nil && fact.ActiveState != "active" {
 		return finish(Outcome{Outcome: outcomeSkipped, Reason: "manager-stopping", ElapsedMS: elapsedMS(deps, startedAt)})
 	}
 	supervisorState, err := classify(ctx, deps)
@@ -326,7 +326,7 @@ func requestedRestart(ctx context.Context, deps runDeps, startedAt time.Time, re
 func notifyLiveSupervisor(ctx context.Context, deps runDeps, state relaunch.RelaunchState, trigger Trigger, currentFingerprint string, startedAt time.Time) Outcome {
 	finish := func(outcome Outcome) Outcome { return outcome }
 	if trigger.ZellijServer == identityUnavailable && strings.HasPrefix(state.LastFingerprint, legacyPrefix(trigger)+":") {
-		return finish(Outcome{Outcome: outcomeSkipped, Reason: "zellij-unavailable", State: stateLive, ElapsedMS: elapsedMS(deps, startedAt)})
+		return finish(Outcome{Outcome: outcomeSkipped, Reason: "devbox-unavailable", State: stateLive, ElapsedMS: elapsedMS(deps, startedAt)})
 	}
 	if trigger.ZellijServer != identityNone && state.LastFingerprint != "" && (!strings.Contains(state.LastFingerprint, ":devbox=") || strings.HasSuffix(state.LastFingerprint, ":devbox=unavailable")) && strings.HasPrefix(state.LastFingerprint, legacyPrefix(trigger)+":") {
 		state.LastFingerprint = currentFingerprint

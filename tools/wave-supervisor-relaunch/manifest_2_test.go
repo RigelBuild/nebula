@@ -22,7 +22,7 @@ func testProcessCensusAndAtomicManifestUsesParentFallbackAndMarksA(t *testing.T)
 	fsys.times["/sessions/-project/older.jsonl"] = time.UnixMilli(1)
 	fsys.times["/sessions/-project/newer.jsonl"] = time.UnixMilli(2)
 
-	census, err := readWaveManifest("/proc-fixture", fsys, "/sessions")
+	census, err := readWaveManifest("/proc-fixture", fsys, "/sessions", "wave-agents.slice")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -32,7 +32,7 @@ func testProcessCensusAndAtomicManifestUsesParentFallbackAndMarksA(t *testing.T)
 	}
 	delete(fsys.files, "/sessions/-project/older.jsonl")
 	delete(fsys.files, "/sessions/-project/newer.jsonl")
-	census, err = readWaveManifest("/proc-fixture", fsys, "/sessions")
+	census, err = readWaveManifest("/proc-fixture", fsys, "/sessions", "wave-agents.slice")
 	if err != nil {
 		t.Fatal(err)
 	}

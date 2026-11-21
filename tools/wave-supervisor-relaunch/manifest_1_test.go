@@ -32,7 +32,7 @@ func TestProcessCensusAndAtomicManifest(t *testing.T) {
 	t.Run("fails census when proc cannot be enumerated", func(t *testing.T) {
 		fsys := newMemoryFS()
 		fsys.readDirErr = errors.New("denied")
-		_, err := readWaveManifest("/proc-fixture", fsys, "/sessions")
+		_, err := readWaveManifest("/proc-fixture", fsys, "/sessions", "wave-agents.slice")
 		if err == nil || !strings.Contains(err.Error(), "cannot enumerate proc") {
 			t.Fatalf("readWaveManifest() error = %v, want cannot enumerate proc", err)
 		}
@@ -154,19 +154,19 @@ func TestManifestProcessEnumeration(t *testing.T) {
 	fsys.files["/proc-fixture/8/cgroup"] = []byte("0::/user.slice/other.slice/scope")
 	fsys.files["/proc-fixture/8/cmdline"] = []byte("omp\x00")
 
-	pids, err := listSliceOmpPIDs("/proc-fixture", fsys)
+	pids, err := listSliceOmpPIDs("/proc-fixture", fsys, "wave-agents.slice")
 	if err != nil || len(pids) != 1 || pids[0] != "0007" {
 		t.Fatalf("listSliceOmpPIDs() = %v, %v", pids, err)
 	}
-	if !waveProcessesPresent("/proc-fixture", fsys) {
+	if !waveProcessesPresent("/proc-fixture", fsys, "wave-agents.slice") {
 		t.Fatal("waveProcessesPresent() = false with an in-slice OMP process")
 	}
 	delete(fsys.files, "/proc-fixture/0007/cmdline")
-	if waveProcessesPresent("/proc-fixture", fsys) {
+	if waveProcessesPresent("/proc-fixture", fsys, "wave-agents.slice") {
 		t.Fatal("waveProcessesPresent() = true without a readable OMP process")
 	}
 	fsys.readDirErr = errors.New("denied")
-	if !waveProcessesPresent("/proc-fixture", fsys) {
+	if !waveProcessesPresent("/proc-fixture", fsys, "wave-agents.slice") {
 		t.Fatal("waveProcessesPresent() = false when process enumeration fails")
 	}
 }
@@ -244,7 +244,7 @@ func testProcessCensusAndAtomicManifestResolvesForkParentToTheOpen(t *testing.T)
 	fsys.links["/proc-fixture/123/fd/3"] = "/home/test/.omp/agent/sessions/-agents/child.jsonl"
 	fsys.files["/home/test/.omp/agent/sessions/-agents/child.jsonl"] = []byte(`{"type":"session","id":"child-id","parentSession":"parent-id","title":"foreman","cwd":"/home/mattw/agents"}`)
 
-	manifest, err := readWaveManifest("/proc-fixture", fsys, "/home/test/.omp/agent/sessions")
+	manifest, err := readWaveManifest("/proc-fixture", fsys, "/home/test/.omp/agent/sessions", "wave-agents.slice")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -270,7 +270,7 @@ func testProcessCensusAndAtomicManifestPrefersAMatchingSessionIdHeader(t *testin
 	fsys.files["/proc-fixture/901/cgroup"] = []byte("0::/wave-agents.slice/scope")
 	fsys.files["/proc-fixture/901/cmdline"] = []byte("bash\x00--session-id\x00not-omp\x00")
 
-	manifest, err := readWaveManifest("/proc-fixture", fsys, "/home/test/.omp/agent/sessions")
+	manifest, err := readWaveManifest("/proc-fixture", fsys, "/home/test/.omp/agent/sessions", "wave-agents.slice")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -278,7 +278,7 @@ func testProcessCensusAndAtomicManifestPrefersAMatchingSessionIdHeader(t *testin
 	if !slices.Equal(manifest.Agents, want) {
 		t.Fatalf("readWaveManifest().Agents = %#v, want %#v", manifest.Agents, want)
 	}
-	pids, err := listSliceOmpPIDs("/proc-fixture", fsys)
+	pids, err := listSliceOmpPIDs("/proc-fixture", fsys, "wave-agents.slice")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -297,7 +297,7 @@ func testProcessCensusAndAtomicManifestCountsUnmappedScopesAndPreservesAn(t *tes
 	fsys.files["/proc-fixture/127/cmdline"] = []byte("omp\x00--session-id\x00stale-session\x00")
 	fsys.files["/proc-fixture/127/environ"] = []byte("COTAL_AGENT_FILE=/home/test/.cotal/agents/accounts.md\x00HOME=/home/test\x00")
 
-	census, err := readWaveManifest("/proc-fixture", fsys, "/sessions")
+	census, err := readWaveManifest("/proc-fixture", fsys, "/sessions", "wave-agents.slice")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -341,7 +341,7 @@ func testManifestCensusAndAtomicWriteCase1(t *testing.T) {
 	fsys.links["/proc-fixture/123/fd/3"] = "/home/test/.omp/agent/sessions/-agents/child.jsonl"
 	fsys.files["/home/test/.omp/agent/sessions/-agents/child.jsonl"] = []byte(`{"type":"session","id":"child-id","parentSession":"parent-id","title":"foreman","cwd":"/home/mattw/agents"}`)
 
-	got, err := readWaveManifest("/proc-fixture", fsys, "/home/test/.omp/agent/sessions")
+	got, err := readWaveManifest("/proc-fixture", fsys, "/home/test/.omp/agent/sessions", "wave-agents.slice")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -360,13 +360,13 @@ func testManifestCensusAndAtomicWriteCase2(t *testing.T) {
 	fsys.files["/sessions/-project/newer.jsonl"] = []byte(`{"type":"session","id":"newer","parentSession":"parent-id"}`)
 	fsys.times["/sessions/-project/older.jsonl"] = time.UnixMilli(1)
 	fsys.times["/sessions/-project/newer.jsonl"] = time.UnixMilli(2)
-	got, err := readWaveManifest("/proc-fixture", fsys, "/sessions")
+	got, err := readWaveManifest("/proc-fixture", fsys, "/sessions", "wave-agents.slice")
 	if err != nil || len(got.Agents) != 1 || got.Agents[0].SessionID != "newer" {
 		t.Fatalf("census = %#v, error = %v; want newest fork child", got, err)
 	}
 	delete(fsys.files, "/sessions/-project/older.jsonl")
 	delete(fsys.files, "/sessions/-project/newer.jsonl")
-	got, err = readWaveManifest("/proc-fixture", fsys, "/sessions")
+	got, err = readWaveManifest("/proc-fixture", fsys, "/sessions", "wave-agents.slice")
 	if err != nil || len(got.Agents) != 1 || got.Agents[0].SessionID != "parent-id" || !got.Agents[0].Stale {
 		t.Fatalf("census = %#v, error = %v; want stale parent fallback", got, err)
 	}
@@ -387,7 +387,7 @@ func testManifestCensusAndAtomicWriteCase3(t *testing.T) {
 	fsys.files["/proc-fixture/127/cmdline"] = []byte("omp\x00--session-id\x00stale-session\x00")
 	fsys.files["/proc-fixture/127/environ"] = []byte("COTAL_AGENT_FILE=/home/test/.cotal/agents/runners.md\x00HOME=/home/test\x00")
 
-	got, err := readWaveManifest("/proc-fixture", fsys, "/home/test/.omp/agent/sessions")
+	got, err := readWaveManifest("/proc-fixture", fsys, "/home/test/.omp/agent/sessions", "wave-agents.slice")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -408,7 +408,7 @@ func testManifestCensusAndAtomicWriteCase3(t *testing.T) {
 func testManifestCensusAndAtomicWriteCase4(t *testing.T) {
 	fsys := newMemoryFS()
 	fsys.files["/proc-fixture/123/cgroup"] = []byte("0::/wave-agents.slice/scope")
-	if _, err := readWaveManifest("/proc-fixture", fsys, "/sessions"); err == nil || !strings.Contains(err.Error(), "command line for wave process 123") {
+	if _, err := readWaveManifest("/proc-fixture", fsys, "/sessions", "wave-agents.slice"); err == nil || !strings.Contains(err.Error(), "command line for wave process 123") {
 		t.Fatalf("readWaveManifest error = %v", err)
 	}
 }
@@ -416,7 +416,7 @@ func testManifestCensusAndAtomicWriteCase4(t *testing.T) {
 func testManifestCensusAndAtomicWriteCase5(t *testing.T) {
 	fsys := newMemoryFS()
 	fsys.readDirErr = errors.New("denied")
-	if _, err := readWaveManifest("/proc-fixture", fsys, "/sessions"); err == nil || !strings.Contains(err.Error(), "cannot enumerate proc") {
+	if _, err := readWaveManifest("/proc-fixture", fsys, "/sessions", "wave-agents.slice"); err == nil || !strings.Contains(err.Error(), "cannot enumerate proc") {
 		t.Fatalf("readWaveManifest error = %v", err)
 	}
 }

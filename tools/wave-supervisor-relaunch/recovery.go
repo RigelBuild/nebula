@@ -102,7 +102,7 @@ func restartViewer(ctx context.Context, deps runDeps, start time.Time, request *
 	deadline := deps.now().Add(2 * time.Minute)
 	for deps.now().Before(deadline) {
 		text, err := deps.ZellijSessions(ctx)
-		if err == nil && relaunch.DevboxLive(text) {
+		if err == nil && text != "" {
 			ok, err := deps.ProbeZellij(ctx)
 			if err == nil && ok {
 				return finishViewerRestart(ctx, deps, start)
@@ -143,7 +143,7 @@ func restartWedged(ctx context.Context, deps runDeps, start time.Time) recoveryR
 	deadline := deps.now().Add(2 * time.Minute)
 	for deps.now().Before(deadline) {
 		text, err := deps.ZellijSessions(ctx)
-		if err == nil && relaunch.DevboxLive(text) {
+		if err == nil && text != "" {
 			ok, err := deps.ProbeZellij(ctx)
 			if err == nil && ok {
 				return recoveredTrigger(ctx, deps, start)

@@ -25,7 +25,7 @@ func testConfig() Config {
 		ZellijUnit:       "zellij-server.service",
 		CotalManagerUnit: "cotal-manager.service",
 		RelaunchUnit:     "wave-supervisor-relaunch.service",
-		WaveSlice:        "wave.slice",
+		WaveSlice:        "wave-agents.slice",
 		SeatsPath:        "/state/wave-seats.json",
 		StateDir:         "/state",
 		HomeDir:          "/home/fixture",
@@ -156,7 +156,7 @@ func initializeRunHarnessDeps(h *runHarness) {
 			return h.endpoints, nil
 		},
 		Trigger: func(context.Context) (Trigger, error) {
-			return Trigger{BootID: "boot", Units: []UnitFact{{Unit: "cotal-manager.service", InvocationID: "manager", ActiveState: "active"}}, ZellijServer: h.identity}, nil
+			return Trigger{BootID: "boot", ManagerUnit: "cotal-manager.service", Units: []UnitFact{{Unit: "cotal-manager.service", InvocationID: "manager", ActiveState: "active"}}, ZellijServer: h.identity}, nil
 		},
 		StopSeats: func(_ context.Context, names []string) error {
 			for _, name := range names {
@@ -337,7 +337,7 @@ func TestRunHoldAndReadiness(t *testing.T) {
 	t.Run("manager stopping skips before classification", func(t *testing.T) {
 		h := newRunHarness()
 		h.deps.Trigger = func(context.Context) (Trigger, error) {
-			return Trigger{BootID: "boot", Units: []UnitFact{{Unit: "cotal-manager.service", InvocationID: "manager", ActiveState: "deactivating"}}}, nil
+			return Trigger{BootID: "boot", ManagerUnit: "cotal-manager.service", Units: []UnitFact{{Unit: "cotal-manager.service", InvocationID: "manager", ActiveState: "deactivating"}}}, nil
 		}
 		if got := runSupervisor(t.Context(), h.deps); got.Reason != "manager-stopping" {
 			t.Fatalf("run=%#v", got)
@@ -357,8 +357,8 @@ func TestRunLiveSupervisorNotices(t *testing.T) {
 		{name: "old zellij identity is silently rebaselined", fingerprint: "boot:manager:old-zellij-unit-id", server: "500:1", want: "rebaselined"},
 		{name: "manager change notifies", fingerprint: "boot:old-manager:zellij", server: "500:1", want: "trigger-changed", wantDM: true},
 		{name: "boot change notifies", fingerprint: "old-boot:manager:zellij", server: "500:1", want: "trigger-changed", wantDM: true},
-		{name: "unreadable unchanged server waits", fingerprint: "boot:manager:devbox=500:1", server: "unavailable", want: "zellij-unavailable"},
-		{name: "unreadable old baseline waits", fingerprint: "boot:manager:devbox=unavailable", server: "unavailable", want: "zellij-unavailable"},
+		{name: "unreadable unchanged server waits", fingerprint: "boot:manager:devbox=500:1", server: "unavailable", want: "devbox-unavailable"},
+		{name: "unreadable old baseline waits", fingerprint: "boot:manager:devbox=unavailable", server: "unavailable", want: "devbox-unavailable"},
 		{name: "unavailable baseline is not replaced by no server", fingerprint: "boot:manager:devbox=unavailable", server: "none", want: "trigger-changed", wantDM: true},
 		{name: "legacy baseline is not replaced by no server", fingerprint: "boot:manager:old-zellij-unit-id", server: "none", want: "trigger-changed", wantDM: true},
 		{name: "unreadable after manager change notifies", fingerprint: "boot:old-manager:devbox=500:1", server: "unavailable", want: "trigger-changed", wantDM: true},
@@ -407,7 +407,7 @@ func testRunLiveSupervisorNoticesUnreadableServerArmsOnceAndAdopts(t *testing.T)
 		t.Fatalf("armed state=%#v notices=%q valid=%t", state, notices, valid)
 	}
 	h.time = h.time.Add(time.Hour)
-	if got := runSupervisor(t.Context(), h.deps); got.Reason != "zellij-unavailable" {
+	if got := runSupervisor(t.Context(), h.deps); got.Reason != "devbox-unavailable" {
 		t.Fatalf("unreadable repeat=%#v", got)
 	}
 	h.identity = "500:1"

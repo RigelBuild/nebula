@@ -145,14 +145,14 @@ func pollPostCondition(ctx context.Context, deps runDeps) bool {
 }
 func managerChanged(ctx context.Context, deps runDeps, trigger Trigger) (bool, error) {
 	before := ""
-	if unit := unitFact(trigger, "cotal-manager.service"); unit != nil {
+	if unit := unitFact(trigger, trigger.ManagerUnit); unit != nil {
 		before = unit.InvocationID
 	}
 	current, err := deps.Trigger(ctx)
 	if err != nil {
 		return true, err
 	}
-	unit := unitFact(current, "cotal-manager.service")
+	unit := unitFact(current, trigger.ManagerUnit)
 	return unit == nil || unit.ActiveState != "active" || unit.InvocationID != before, nil
 }
 func serverWedgedNow(ctx context.Context, deps runDeps) (bool, error) {

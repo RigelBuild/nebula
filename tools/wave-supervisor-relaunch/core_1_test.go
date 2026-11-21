@@ -78,18 +78,18 @@ func TestCoreReadinessAndClassification(t *testing.T) {
 func TestCoreTriggerAndSupervisorState(t *testing.T) {
 	t.Run("parses unit show records; fingerprint keys the manager invocation and the devbox server", func(t *testing.T) {
 		facts := parseUnitFacts("Id=cotal-manager.service\nActiveEnterTimestamp=Sun 2026-11-01 02:52:00 UTC\nInvocationID=manager-id\nNRestarts=2\nActiveState=active\nResult=success\n\nId=zellij-server.service\nActiveEnterTimestamp=Sun 2026-11-01 02:50:00 UTC\nInvocationID=zellij-id\nNRestarts=1\nActiveState=active\nResult=success\n")
-		trigger := Trigger{BootID: "boot-fixture", Units: facts, ZellijServer: "3845913:9828715"}
+		trigger := Trigger{BootID: "boot-fixture", ManagerUnit: "cotal-manager.service", Units: facts, ZellijServer: "3845913:9828715"}
 		if len(facts) != 2 || facts[0].InvocationID != "manager-id" || fingerprint(trigger) != "boot-fixture:manager-id:devbox=3845913:9828715" {
 			t.Fatalf("facts=%#v fingerprint=%q", facts, fingerprint(trigger))
 		}
 	})
 
 	t.Run("a failed zellij-server re-run with devbox still up keeps the fingerprint", func(t *testing.T) {
-		trigger := Trigger{BootID: "boot", Units: []UnitFact{{Unit: "cotal-manager.service", InvocationID: "manager"}, {Unit: "zellij-server.service", InvocationID: "zellij", ActiveState: "active", Result: "success"}}, ZellijServer: "500:1"}
+		trigger := Trigger{BootID: "boot", ManagerUnit: "cotal-manager.service", Units: []UnitFact{{Unit: "cotal-manager.service", InvocationID: "manager"}, {Unit: "zellij-server.service", InvocationID: "zellij", ActiveState: "active", Result: "success"}}, ZellijServer: "500:1"}
 		rerun := trigger
 		rerun.Units = append([]UnitFact(nil), trigger.Units...)
 		rerun.Units[1].InvocationID, rerun.Units[1].ActiveState, rerun.Units[1].Result = "new", "failed", "exit-code"
-		if fingerprint(rerun) != fingerprint(trigger) || fingerprint(Trigger{BootID: "boot", Units: trigger.Units, ZellijServer: "400:2"}) == fingerprint(trigger) || fingerprint(Trigger{BootID: "boot", Units: trigger.Units, ZellijServer: "none"}) == fingerprint(trigger) {
+		if fingerprint(rerun) != fingerprint(trigger) || fingerprint(Trigger{BootID: "boot", ManagerUnit: "cotal-manager.service", Units: trigger.Units, ZellijServer: "400:2"}) == fingerprint(trigger) || fingerprint(Trigger{BootID: "boot", ManagerUnit: "cotal-manager.service", Units: trigger.Units, ZellijServer: "none"}) == fingerprint(trigger) {
 			t.Fatal("fingerprint included zellij unit fields or ignored devbox identity")
 		}
 	})
@@ -392,7 +392,7 @@ func testCoreSessionHelpersAndPresentationCase3(t *testing.T) {
 }
 
 func testCoreSessionHelpersAndPresentationCase4(t *testing.T) {
-	trigger := Trigger{BootID: "boot-fixture", UptimeS: 12345, Units: []UnitFact{{Unit: "cotal-manager.service", ActiveSince: "Sun 2026-11-01 02:52:00 UTC", InvocationID: "manager-id", NRestarts: 2, ActiveState: "active", Result: "success"}, {Unit: "zellij-server.service", ActiveSince: "Sun 2026-11-01 02:50:00 UTC", InvocationID: "zellij-id", NRestarts: 1, ActiveState: "active", Result: "success"}}, ZellijServer: "3845913:9828715"}
+	trigger := Trigger{BootID: "boot-fixture", UptimeS: 12345, ManagerUnit: "cotal-manager.service", Units: []UnitFact{{Unit: "cotal-manager.service", ActiveSince: "Sun 2026-11-01 02:52:00 UTC", InvocationID: "manager-id", NRestarts: 2, ActiveState: "active", Result: "success"}, {Unit: "zellij-server.service", ActiveSince: "Sun 2026-11-01 02:50:00 UTC", InvocationID: "zellij-id", NRestarts: 1, ActiveState: "active", Result: "success"}}, ZellijServer: "3845913:9828715"}
 	for _, written := range []bool{true, false} {
 		prompt := relaunchPrompt(testConfig(), trigger, "~/agents/state/wave-relaunch-manifest.json", written)
 		if len(prompt) > 2000 || strings.Contains(prompt, "spawn-agent") || strings.Contains(prompt, "--fresh-session") || !strings.Contains(prompt, "Lanes relaunch from /state/wave-seats.json; do not spawn them. For a seat wave-seats parks, run wave-seats resume <name>.") || strings.Contains(prompt, "wave-relaunch-manifest.json") != written || !strings.Contains(prompt, "zellij server pid:starttime") {

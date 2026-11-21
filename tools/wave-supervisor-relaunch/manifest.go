@@ -52,20 +52,23 @@ func readText(fileSystem relaunch.FileSystem, path string) ([]byte, bool) {
 	return data, err == nil
 }
 
-func inWaveSlice(fileSystem relaunch.FileSystem, procRoot, pid string) bool {
+// inWaveSlice reports whether pid's cgroup lies under the configured slice. A systemd slice's
+// cgroup directory carries the unit name, so the match is "/<slice>/" or a path ending "/<slice>".
+func inWaveSlice(fileSystem relaunch.FileSystem, procRoot, pid, slice string) bool {
 	data, ok := readText(fileSystem, filepath.Join(procRoot, pid, "cgroup"))
 	if !ok {
 		return false
 	}
+	segment := "/" + slice + "/"
 	for line := range strings.SplitSeq(string(data), "\n") {
-		if strings.Contains(line, "/wave-agents.slice/") || strings.HasSuffix(line, "/wave-agents.slice") {
+		if strings.Contains(line, segment) || strings.HasSuffix(line, "/"+slice) {
 			return true
 		}
 	}
 	return false
 }
 
-func slicePIDs(procRoot string, fileSystem relaunch.FileSystem) ([]string, error) {
+func slicePIDs(procRoot string, fileSystem relaunch.FileSystem, slice string) ([]string, error) {
 	if fileSystem == nil {
 		fileSystem = relaunch.NodeFileSystem{}
 	}
@@ -75,7 +78,7 @@ func slicePIDs(procRoot string, fileSystem relaunch.FileSystem) ([]string, error
 	}
 	pids := make([]string, 0)
 	for _, entry := range entries {
-		if decimalDigits(entry.Name()) && inWaveSlice(fileSystem, procRoot, entry.Name()) {
+		if decimalDigits(entry.Name()) && inWaveSlice(fileSystem, procRoot, entry.Name(), slice) {
 			pids = append(pids, entry.Name())
 		}
 	}
@@ -90,8 +93,8 @@ func isOmpProcess(cmdline string) bool {
 	return filepath.Base(argv[0]) == "omp" || argv[0] == "omp"
 }
 
-func listSliceOmpPIDs(procRoot string, fileSystem relaunch.FileSystem) ([]string, error) {
-	pids, err := slicePIDs(procRoot, fileSystem)
+func listSliceOmpPIDs(procRoot string, fileSystem relaunch.FileSystem, slice string) ([]string, error) {
+	pids, err := slicePIDs(procRoot, fileSystem, slice)
 	if err != nil {
 		return nil, err
 	}
@@ -150,8 +153,8 @@ func decimalDigits(value string) bool {
 	return true
 }
 
-func readWaveManifest(procRoot string, fileSystem relaunch.FileSystem, sessionDir string) (WaveCensus, error) {
-	pids, err := slicePIDs(procRoot, fileSystem)
+func readWaveManifest(procRoot string, fileSystem relaunch.FileSystem, sessionDir, slice string) (WaveCensus, error) {
+	pids, err := slicePIDs(procRoot, fileSystem, slice)
 	if err != nil {
 		return WaveCensus{}, err
 	}
@@ -229,8 +232,8 @@ func resolveProcessSession(base, cmdline string, environmentBytes []byte, envOK 
 	return resolved
 }
 
-func waveProcessesPresent(procRoot string, fileSystem relaunch.FileSystem) bool {
-	pids, err := slicePIDs(procRoot, fileSystem)
+func waveProcessesPresent(procRoot string, fileSystem relaunch.FileSystem, slice string) bool {
+	pids, err := slicePIDs(procRoot, fileSystem, slice)
 	if err != nil {
 		return true
 	}

@@ -432,9 +432,15 @@ func ReconcileSessions(before map[string]struct{}, after []string, eligibleNames
 
 // DevboxLive reports whether list-sessions shows a live devbox session.
 func DevboxLive(listSessionsText string) bool {
+	return SessionLive(listSessionsText, "devbox")
+}
+
+// SessionLive reports whether list-sessions shows a live session named name. An EXITED line is
+// not live, and a line naming a longer session (a prefix sibling) does not match.
+func SessionLive(listSessionsText, name string) bool {
 	for line := range strings.SplitSeq(listSessionsText, "\n") {
 		trimmed := strings.TrimLeft(line, " \t\r\n\v\f")
-		if trimmed == "devbox" || strings.HasPrefix(trimmed, "devbox ") || strings.HasPrefix(trimmed, "devbox\t") {
+		if trimmed == name || strings.HasPrefix(trimmed, name+" ") || strings.HasPrefix(trimmed, name+"\t") {
 			if !strings.Contains(strings.ToUpper(line), "EXITED") {
 				return true
 			}

@@ -26,6 +26,8 @@ type Trigger struct {
 	UptimeS      float64
 	Units        []UnitFact
 	ZellijServer string
+	// ManagerUnit is the configured cotal manager unit name. legacyPrefix reads its InvocationID.
+	ManagerUnit string
 }
 
 func parsePropertyBlocks(text string) ([]string, map[string]map[string]string) {
@@ -87,7 +89,7 @@ func fingerprint(trigger Trigger) string {
 func legacyPrefix(trigger Trigger) string {
 	manager := ""
 	for _, unit := range trigger.Units {
-		if unit.Unit == "cotal-manager.service" {
+		if unit.Unit == trigger.ManagerUnit {
 			manager = unit.InvocationID
 			break
 		}

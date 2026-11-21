@@ -74,7 +74,7 @@ func testRunOrphanAndSpawnFlowManagerInvocationChangeAfterARefused(t *testing.T)
 		if spawned {
 			id = "manager-2"
 		}
-		return Trigger{BootID: "boot", Units: []UnitFact{{Unit: "cotal-manager.service", InvocationID: id, ActiveState: "active"}}, ZellijServer: "500:1"}, nil
+		return Trigger{BootID: "boot", ManagerUnit: "cotal-manager.service", Units: []UnitFact{{Unit: "cotal-manager.service", InvocationID: id, ActiveState: "active"}}, ZellijServer: "500:1"}, nil
 	}
 	got := runSupervisor(t.Context(), h.deps)
 	state, valid := relaunch.ReadState(h.deps.Paths.State, h.fs)
@@ -95,7 +95,7 @@ func testRunOrphanAndSpawnFlowManagerInvocationChangeAfterAcceptedSpawn(t *testi
 		if spawned {
 			id = "manager-2"
 		}
-		return Trigger{BootID: "boot", Units: []UnitFact{{Unit: "cotal-manager.service", InvocationID: id, ActiveState: "active"}}, ZellijServer: "500:1"}, nil
+		return Trigger{BootID: "boot", ManagerUnit: "cotal-manager.service", Units: []UnitFact{{Unit: "cotal-manager.service", InvocationID: id, ActiveState: "active"}}, ZellijServer: "500:1"}, nil
 	}
 	got := runSupervisor(t.Context(), h.deps)
 	state, valid := relaunch.ReadState(h.deps.Paths.State, h.fs)
@@ -119,7 +119,7 @@ func testRunOrphanAndSpawnFlowExit5AfterManagerRestartsDuring(t *testing.T) {
 		if spawned {
 			id = "manager-2"
 		}
-		return Trigger{BootID: "boot", Units: []UnitFact{{Unit: "cotal-manager.service", InvocationID: id, ActiveState: "active"}}, ZellijServer: "500:1"}, nil
+		return Trigger{BootID: "boot", ManagerUnit: "cotal-manager.service", Units: []UnitFact{{Unit: "cotal-manager.service", InvocationID: id, ActiveState: "active"}}, ZellijServer: "500:1"}, nil
 	}
 	got := runSupervisor(t.Context(), h.deps)
 	state, valid := relaunch.ReadState(h.deps.Paths.State, h.fs)
@@ -235,7 +235,7 @@ func testRunRestartRequestsAndWedgeRecoveryWedgedOrphanRestartCannotUseUncapped(
 		if restarted {
 			server = "700:3"
 		}
-		return Trigger{BootID: "boot", Units: []UnitFact{{Unit: "cotal-manager.service", InvocationID: "manager", ActiveState: "active"}}, ZellijServer: server}, nil
+		return Trigger{BootID: "boot", ManagerUnit: "cotal-manager.service", Units: []UnitFact{{Unit: "cotal-manager.service", InvocationID: "manager", ActiveState: "active"}}, ZellijServer: server}, nil
 	}
 	got := runSupervisor(t.Context(), h.deps)
 	if got.Reason != "zellij-restart-uncapped" || !h.hasCall("restart") || h.countPrefix("spawn:") != 0 {

@@ -84,12 +84,12 @@ func buildDefaultDeps(cfg Config, getenv envGetter, paths toolPaths, fsys relaun
 		StopSeats: func(ctx context.Context, names []string) error {
 			return stopManagedSeats(ctx, names, cfg.CotalSpace, runner)
 		},
-		ProcScopesPresent: func() bool { return waveProcessesPresent("/proc", fsys) },
+		ProcScopesPresent: func() bool { return waveProcessesPresent("/proc", fsys, cfg.WaveSlice) },
 		SeatNames: func(ctx context.Context) (map[string]struct{}, error) {
 			return readActiveSeatNames(ctx, paths.Seats, hosts)
 		},
 		ReadRootCWD:    func(ctx context.Context) (string, error) { return readActiveRootCWD(ctx, paths.Seats, hosts) },
-		ZellijSessions: func(ctx context.Context) (string, error) { return listZellijSessions(ctx, runner) },
+		ZellijSessions: func(ctx context.Context) (string, error) { return liveZellijSession(ctx, runner, cfg.ZellijSession) },
 		ProbeZellij:    func(ctx context.Context) (bool, error) { return probeZellij(ctx, runner, cfg.ZellijSession) },
 		ZellijIdentity: identity,
 		ZellijUnitProcs: func(ctx context.Context) (string, error) {
@@ -134,15 +134,17 @@ func endpointsClear(ctx context.Context, cfg Config, readCotal func(context.Cont
 	return len(ParseEligibleEndpointNames(text, cfg.RootSeat, cfg.EndpointKind, names)) == 0, nil
 }
 
-func listZellijSessions(ctx context.Context, runner processRunner) (string, error) {
+// liveZellijSession returns session when list-sessions shows it live, and "" otherwise. A failed
+// or non-zero list-sessions run reads as not live, the same as before.
+func liveZellijSession(ctx context.Context, runner processRunner, session string) (string, error) {
 	result, err := runner(ctx, []string{zellijCommand, "list-sessions", "--no-formatting"}, "")
 	if err != nil {
 		return "", err
 	}
-	if result.ExitCode != 0 {
+	if result.ExitCode != 0 || !relaunch.SessionLive(result.Stdout, session) {
 		return "", nil
 	}
-	return result.Stdout, nil
+	return session, nil
 }
 
 func probeZellij(ctx context.Context, runner processRunner, session string) (bool, error) {
@@ -168,18 +170,6 @@ func zellijUnitProcesses(ctx context.Context, runner processRunner, fsys relaunc
 	}
 	data, err := fsys.ReadFile(filepath.Join("/sys/fs/cgroup", group, "cgroup.procs"))
 	return string(data), err
-}
-
-func resolveHome(getenv envGetter) (string, error) {
-	home := getenv("HOME")
-	if home != "" {
-		return home, nil
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", fmt.Errorf("resolve home directory: %w", err)
-	}
-	return home, nil
 }
 
 func readActiveSeatNames(ctx context.Context, seatsPath string, hosts waveseats.HostSet) (map[string]struct{}, error) {
@@ -242,7 +232,7 @@ func readSystemTrigger(ctx context.Context, runner processRunner, fsys relaunch.
 	if err != nil {
 		return Trigger{}, fmt.Errorf("read uptime: %w", err)
 	}
-	return Trigger{BootID: strings.TrimSpace(string(boot)), UptimeS: parseUptime(string(up)), Units: parseUnitFacts(show.Stdout), ZellijServer: identity(ctx)}, nil
+	return Trigger{BootID: strings.TrimSpace(string(boot)), UptimeS: parseUptime(string(up)), Units: parseUnitFacts(show.Stdout), ZellijServer: identity(ctx), ManagerUnit: managerUnit}, nil
 }
 
 func execRunner(ctx context.Context, args []string, cwd string) (cotalreach.CommandResult, error) {
@@ -285,7 +275,7 @@ func seatStepDeps(ctx context.Context, deps runDeps, stderr io.Writer) seats.Dep
 		Restart: func(ctx context.Context, name string) (int, error) {
 			restartCtx, cancel := context.WithTimeout(ctx, seats.ReadTimeout)
 			defer cancel()
-			result, err := deps.Runner(restartCtx, []string{"wave-seats", "restart", name}, "")
+			result, err := deps.Runner(restartCtx, []string{deps.Config.SeatCLI, "restart", name}, "")
 			return result.ExitCode, err
 		},
 		Now:   deps.now,
@@ -302,7 +292,7 @@ func seatStepDeps(ctx context.Context, deps runDeps, stderr io.Writer) seats.Dep
 
 // seatProcesses walks the wave slice's omp processes once and reads each one's seat name and cgroup.
 func seatProcesses(deps runDeps) ([]seats.Process, error) {
-	pids, err := listSliceOmpPIDs(deps.Paths.Proc, deps.FS)
+	pids, err := listSliceOmpPIDs(deps.Paths.Proc, deps.FS, deps.Config.WaveSlice)
 	if err != nil {
 		return nil, err
 	}

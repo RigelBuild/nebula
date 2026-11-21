@@ -202,7 +202,7 @@ func testRunRestartRequestsAndWedgeRecoveryWedgedServerRestartToUncappedIdentity
 		if restarted {
 			server = "700:3"
 		}
-		return Trigger{BootID: "boot", Units: []UnitFact{{Unit: "cotal-manager.service", InvocationID: "manager", ActiveState: "active"}}, ZellijServer: server}, nil
+		return Trigger{BootID: "boot", ManagerUnit: "cotal-manager.service", Units: []UnitFact{{Unit: "cotal-manager.service", InvocationID: "manager", ActiveState: "active"}}, ZellijServer: server}, nil
 	}
 	got := runSupervisor(t.Context(), h.deps)
 	state, valid := relaunch.ReadState(h.deps.Paths.State, h.fs)
@@ -322,7 +322,7 @@ func testRunRestartRequestsAndWedgeRecoveryWedgedRestartWithReplacementServerOut
 	h := newRunHarness()
 	h.probe = []bool{false, false, false, true}
 	h.deps.Trigger = func(context.Context) (Trigger, error) {
-		return Trigger{BootID: "boot", Units: []UnitFact{{Unit: "cotal-manager.service", InvocationID: "manager", ActiveState: "active"}}, ZellijServer: "700:3"}, nil
+		return Trigger{BootID: "boot", ManagerUnit: "cotal-manager.service", Units: []UnitFact{{Unit: "cotal-manager.service", InvocationID: "manager", ActiveState: "active"}}, ZellijServer: "700:3"}, nil
 	}
 	if got := runSupervisor(t.Context(), h.deps); got.Reason != "zellij-restart-uncapped" || h.countPrefix("spawn:") != 0 {
 		t.Fatalf("run=%#v calls=%v", got, h.calls)

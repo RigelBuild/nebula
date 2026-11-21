@@ -174,7 +174,7 @@ func censusOrphan(ctx context.Context, deps runDeps, state relaunch.RelaunchStat
 	}
 	supervisorState = repeated
 	censusBefore = relaunch.SnapshotSessionFiles(deps.Paths.Sessions, deps.FS)
-	census, err := readWaveManifest(deps.Paths.Proc, deps.FS, deps.Paths.Sessions)
+	census, err := readWaveManifest(deps.Paths.Proc, deps.FS, deps.Paths.Sessions, deps.Config.WaveSlice)
 	if err != nil {
 		return finish(failed("census-failed", startedAt, deps, stateOrphaned, ""))
 	}

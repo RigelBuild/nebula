@@ -129,7 +129,7 @@ func testRunOrphanAndSpawnFlowOrphanRelaunchWithUnreadableDevboxIs(t *testing.T)
 		t.Fatalf("initial orphan recovery = %#v", got)
 	}
 	h.endpoints = ""
-	if got := runSupervisor(t.Context(), h.deps); got.Reason != "zellij-unavailable" {
+	if got := runSupervisor(t.Context(), h.deps); got.Reason != "devbox-unavailable" {
 		t.Fatalf("follow-up run = %#v", got)
 	}
 	if h.hasCall("dm") {

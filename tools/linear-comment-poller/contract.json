@@ -1,0 +1,5 @@
+{
+	"successPrefix": "linear-comment-poller: sweep ok",
+	"staleAfterMs": 1800000,
+	"fallbackAfterMs": 7200000
+}

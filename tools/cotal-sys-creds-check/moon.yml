@@ -1,30 +1,13 @@
 # yaml-language-server: $schema=https://moonrepo.dev/schemas/project.json
-#
-# cotal-sys-creds-check: logs days until the Cotal $SYS eviction creds expire. The
-# CotalSysCredsExpiring alert reads its line; contract.json is the shared contract.
-layer: 'tool'
-language: 'go'
-tags: ['go']
+layer: "tool"
+language: "go"
+tags: ["go"]
 
-# main.go embeds contract.json, so the compile and test tasks must track it.
 tasks:
-  build:
-    inputs: ['contract.json']
-  vet:
-    inputs: ['contract.json']
-  lint:
-    inputs: ['contract.json']
   test:
-    command: 'go'
-    args: ['test', './...']
+    command: "go"
+    args: ["test", "./..."]
     env:
-      CGO_ENABLED: '0'
-    inputs: ['**/*.go', 'go.mod', 'go.sum', '**/testdata/**/*', 'contract.json']
-    options:
-      cache: false
-  nilaway:
-    command: 'nilaway'
-    args: ['-include-pkgs=github.com/RigelBuild/nebula/tools/cotal-sys-creds-check', '-test=false', './...']
-    options:
-      mergeArgs: 'replace'
-    inputs: ['contract.json']
+      CGO_ENABLED: "0"
+    # main.go embeds contract.json, so the test task must track it.
+    inputs: ["**/*.go", "go.mod", "go.sum", "**/testdata/**/*", "contract.json"]

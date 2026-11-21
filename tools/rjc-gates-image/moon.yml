@@ -1,21 +1,12 @@
 # yaml-language-server: $schema=https://moonrepo.dev/schemas/project.json
-layer: 'tool'
-language: 'go'
-tags: ['go', 'static-runner']
+layer: "tool"
+language: "go"
+tags: ["go"]
 
 tasks:
   test:
-    command: 'go'
-    args: ['test', './...']
+    command: "go"
+    args: ["test", "./..."]
     env:
-      CGO_ENABLED: '0'
-    inputs: ['**/*.go', 'go.mod', 'go.sum']
-  nilaway:
-    command: 'nilaway'
-    args: ['-include-pkgs=github.com/RigelBuild/nebula/tools/rjc-gates-image', '-test=false', './...']
-    env:
-      GOWORK: 'off'
-    options:
-      mergeArgs: 'replace'
-      runFromWorkspaceRoot: false
-    inputs: ['**/*.go', 'go.mod', 'go.sum']
+      CGO_ENABLED: "0"
+    inputs: ["**/*.go", "go.mod", "go.sum", "**/testdata/**/*"]

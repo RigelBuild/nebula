@@ -58,7 +58,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	flags.SetOutput(stderr)
 	var opts options
 	var home, maxIdleText string
-	flags.StringVar(&opts.root, "root", "", "rbuild workspace root, for example $HOME/rbuild")
+	flags.StringVar(&opts.root, "root", "", "rbuild workspace root, for example $HOME/workspaces")
 	flags.StringVar(&home, "home", "", "rbuild home to prune instead of --root, for example $HOME")
 	flags.StringVar(&maxIdleText, "max-idle", defaultMaxIdle.String(), "remove workspaces untouched for longer than this")
 	flags.StringVar(&opts.procDir, "proc", "/proc", "process table checked for busy workspaces")

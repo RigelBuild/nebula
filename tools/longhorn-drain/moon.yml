@@ -1,17 +1,12 @@
 # yaml-language-server: $schema=https://moonrepo.dev/schemas/project.json
-layer: 'application'
-language: 'go'
-tags: ['go']
+layer: "tool"
+language: "go"
+tags: ["go"]
 
 tasks:
   test:
-    command: 'go'
-    args: ['test', './...']
+    command: "go"
+    args: ["test", "./..."]
     env:
-      CGO_ENABLED: '0'
-    inputs: ['**/*.go', 'go.mod', 'go.sum', '**/testdata/**/*']
-  nilaway:
-    command: 'nilaway'
-    args: ['-include-pkgs=github.com/RigelBuild/nebula/tools/longhorn-drain', '-test=false', './...']
-    options:
-      mergeArgs: 'replace'
+      CGO_ENABLED: "0"
+    inputs: ["**/*.go", "go.mod", "go.sum", "**/testdata/**/*"]

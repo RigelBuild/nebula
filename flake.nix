@@ -25,8 +25,8 @@
         code-shape-gate = "sha256-Ee6lA9fZjXfNx2tkoScY+Su5JULWUpK4DshrXO3fmkU=";
         cotal-sys-creds-check = null;
         design-ledger-gate = "sha256-euBbY7ewPBNIwVPjPkAX9DVbH6XaJ81n+5aMJfBzPW8=";
-        dev-hygiene = null;
         depsupdate-wake = null;
+        dev-hygiene = null;
         dl-claim = "sha256-3EcIygo4CNKJmMCIWrIL/bFMqBUznQCV9HI6h1EyeGU=";
         dl-list = "sha256-+YGOcD3K7shRymY29qRJa49GfFkOc8wsdeMdmpvv44A=";
         dl-reconcile = "sha256-M9sG3Wt4un2pQ17tcrLI+K/u1K8JjXy2DXyGrGU8emk=";

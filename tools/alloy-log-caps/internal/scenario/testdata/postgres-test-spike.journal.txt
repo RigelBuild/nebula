@@ -1,0 +1,2 @@
+2026-10-13 14:17:13.845 UTC [63] WARNING:  SET LOCAL can only be used in transaction blocks
+2026-10-13 14:17:13.846 UTC [63] WARNING:  SET LOCAL can only be used in transaction blocks

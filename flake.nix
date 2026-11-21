@@ -22,8 +22,11 @@
       # Each first-party Go command is its own module at tools/<name>/. The
       # value is that module's vendorHash.
       goCommands = {
+        alloy-log-caps = "sha256-DCp9LMbw8It+HtwVdcUkEV/zQGEzPjOaqSAUMRhKvEg=";
+        ci-queue = "sha256-j0u4b4+5wznZHBa0y2U1C/FvXRbYC94RWXci329hvy8=";
         code-shape-gate = "sha256-Ee6lA9fZjXfNx2tkoScY+Su5JULWUpK4DshrXO3fmkU=";
         cotal-sys-creds-check = null;
+        deploy-output = "sha256-Zox9Va4DSkxx0nAjNBwu7XaXel6dIWvbNYQ15RtUOrc=";
         depsupdate-wake = null;
         design-ledger-gate = "sha256-euBbY7ewPBNIwVPjPkAX9DVbH6XaJ81n+5aMJfBzPW8=";
         dev-hygiene = null;
@@ -33,14 +36,19 @@
         filevault-unlock = "sha256-QRkNiaX+C0MKkhJxxfEhkmTSRvw2qn0IqBTDFwKdeo8=";
         fleet-gc-roots = null;
         fork-sync = "sha256-3CiEdm8Db78vQ8JG1KOBt5w55pmxuTs04in8RUhzwoM=";
+        get-pr-diff = "sha256-wPWPi6JxoMxze13kM2E//CT2pfvHCQDIpIKoDr9B+OM=";
         gh-route = "sha256-7K17JaXFsjf163g5PXCb5ng2gYdotnZ2IDKk8KFjNj0=";
         hk-hook = null;
         host-bao-seal = "sha256-i9/7BGDMvMIbVBaYM4cMUtLzK7m7ZEdsYuvOKlLzSAo=";
         host-secret-ready = null;
         length-gate = "sha256-m4lHVyrsYIrQpPFIblIZcMc5rPmJJJsHt6RS8QAoXCk=";
         linear-acceptance = null;
+        linear-agent-token = "sha256-usHhvjEtwEdT/hyGXFkC2nmC41/WAEWkA+Ng4TJ4FGo=";
         linear-comment-poller = "sha256-usHhvjEtwEdT/hyGXFkC2nmC41/WAEWkA+Ng4TJ4FGo=";
         longhorn-drain = null;
+        mem-sampler = null;
+        node-removal = null;
+        openbao-agent-macos-smoke = null;
         rbuild-workspace-prune = null;
         reddit-fetch = null;
         ref-gate = "sha256-WVoZkg5kdUYlATXDDxAA/yozThBwyYSKHwLoUsuIBfg=";

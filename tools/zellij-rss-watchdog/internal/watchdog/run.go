@@ -1,0 +1,218 @@
+package watchdog
+
+import (
+	"context"
+	"errors"
+	"flag"
+	"fmt"
+	"io"
+	"log/slog"
+	"os"
+	"os/user"
+	"path/filepath"
+	"time"
+
+	"github.com/RigelBuild/nebula/tools/zellij-rss-watchdog/internal/capture"
+	"github.com/RigelBuild/nebula/tools/zellij-rss-watchdog/internal/proc"
+	"github.com/RigelBuild/nebula/tools/zellij-rss-watchdog/internal/seam"
+)
+
+// Run is the testable entry point: it samples until ctx is cancelled and returns an exit code.
+func Run(ctx context.Context, args []string, getenv func(string) string, stdout, stderr io.Writer) int {
+	cfg, err := parseConfig(args, getenv, lookupUID)
+	if err != nil {
+		if _, werr := fmt.Fprintf(stderr, "zellij-rss-watchdog: %v\n", err); werr != nil {
+			slog.Error("writing usage error", "error", werr)
+		}
+		return 2
+	}
+	return runWatchdog(ctx, newSystemIO(cfg, stdout, stderr))
+}
+
+// lookupUID returns the numeric uid of the named account.
+func lookupUID(name string) (string, error) {
+	account, err := user.Lookup(name)
+	if err != nil {
+		return "", fmt.Errorf("looking up --user %q: %w", name, err)
+	}
+	return account.Uid, nil
+}
+
+// parseConfig reads the required --user, --session, --journal-unit and --client-tmpdir
+// flags. None has a default: they belong to the operator's host. The tool runs as root,
+// so the log directory and the runtime-dir fallback follow the uid of --user, not the
+// process uid. XDG_RUNTIME_DIR overrides the runtime dir. --client-tmpdir must exist.
+func parseConfig(args []string, getenv func(string) string, uidOf func(string) (string, error)) (seam.Config, error) {
+	flags := flag.NewFlagSet("zellij-rss-watchdog", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	account := flags.String("user", "", "account that owns the zellij server (required)")
+	session := flags.String("session", "", "zellij session name whose server is sampled (required)")
+	journal := flags.String("journal-unit", "", "user systemd unit whose journal is captured (required)")
+	clientTmp := flags.String("client-tmpdir", "", "existing directory used as TMPDIR for the zellij client-list command (required)")
+	if err := flags.Parse(args); err != nil {
+		return seam.Config{}, fmt.Errorf("parsing flags: %w", err)
+	}
+	if flags.NArg() != 0 {
+		return seam.Config{}, fmt.Errorf("unexpected arguments: %v", flags.Args())
+	}
+	if *account == "" || *session == "" || *journal == "" || *clientTmp == "" {
+		return seam.Config{}, errors.New(requiredFlagsMessage)
+	}
+	info, err := os.Stat(*clientTmp)
+	if err != nil {
+		return seam.Config{}, fmt.Errorf("--client-tmpdir: %w", err)
+	}
+	if !info.IsDir() {
+		return seam.Config{}, fmt.Errorf("--client-tmpdir %s is not a directory", *clientTmp)
+	}
+	uid, err := uidOf(*account)
+	if err != nil {
+		return seam.Config{}, err
+	}
+	runtimeDir := getenv("XDG_RUNTIME_DIR")
+	if runtimeDir == "" {
+		runtimeDir = "/run/user/" + uid
+	}
+	return seam.Config{
+		ProcRoot:       "/proc",
+		RuntimeDir:     runtimeDir,
+		CaptureRoot:    "/var/lib/zellij-rss-watchdog",
+		RelaunchBinary: getenv("WAVE_SUPERVISOR_RELAUNCH"),
+		User:           *account,
+		Session:        *session,
+		LogDirectory:   "/tmp/zellij-" + uid + "/zellij-log",
+		JournalUnit:    *journal,
+		ClientTmpDir:   *clientTmp,
+	}, nil
+}
+
+const requiredFlagsMessage = "--user, --session, --journal-unit and --client-tmpdir are required"
+
+// runWatchdog samples the session server every sampleIntervalMS until ctx is cancelled.
+func runWatchdog(ctx context.Context, io seam.IO) int {
+	if err := io.Mkdir(io.Config().CaptureRoot); err != nil {
+		io.Log("error", sampleFailed(err))
+		return 1
+	}
+	for {
+		if err := sampleOnce(ctx, io); err != nil {
+			io.Log("error", sampleFailed(err))
+		}
+		if err := io.Sleep(ctx, time.Duration(sampleIntervalMS)*time.Millisecond); err != nil {
+			return 0
+		}
+	}
+}
+
+// sampleFailed is the event=sample_failed log line for a sampling error.
+func sampleFailed(err error) string {
+	return "event=sample_failed message=" + capture.Logfmt(err.Error())
+}
+
+// sampleOnce takes one sample of the session server and acts on the decision.
+// A sampling failure is logged and swallowed; only state I/O errors return.
+func sampleOnce(ctx context.Context, io seam.IO) error {
+	identity := io.Identity()
+	switch identity {
+	case "none":
+		io.RecordUnavailableTransition(identity)
+		return nil
+	case proc.IdentityUnavailable:
+		if io.RecordUnavailableTransition(identity) {
+			io.Log("error", "event=identity_unavailable")
+		}
+		return nil
+	}
+	io.RecordUnavailableTransition(identity)
+	statePath := filepath.Join(io.Config().CaptureRoot, stateFile)
+	previous := loadState(io, statePath)
+	if previous != nil && previous.Identity != identity {
+		if err := saveState(io, statePath, watchState{Identity: identity, Armed: true, Observations: []observation{}}); err != nil {
+			return err
+		}
+	}
+	pid, err := proc.IdentityPid(identity)
+	if err != nil {
+		return err
+	}
+	if io.Identity() != identity {
+		io.Log("error", "event=identity_changed message=server identity changed before status read")
+		return nil
+	}
+	rssBytes, swapBytes, ok := readSample(io, pid)
+	if !ok {
+		return nil
+	}
+	now := io.Now()
+	decided := decideSample(loadState(io, statePath), sample{
+		time:      now,
+		identity:  identity,
+		rssBytes:  rssBytes,
+		swapBytes: swapBytes,
+	})
+	if err := saveState(io, statePath, decided.state); err != nil {
+		return err
+	}
+	if decided.capture {
+		if err := capture.CaptureServer(ctx, io, identity, rssBytes); err != nil {
+			return err
+		}
+	}
+	if !decided.shouldRequest {
+		return nil
+	}
+	return requestRestart(ctx, io, statePath, identity, now, decided.state)
+}
+
+// readSample reads the server's VmRSS and VmSwap, logging and reporting a failure as !ok.
+func readSample(io seam.IO, pid string) (rssBytes, swapBytes int64, ok bool) {
+	status, err := io.ReadText(io.Config().ProcRoot + "/" + pid + "/status")
+	if err != nil {
+		io.Log("error", sampleFailed(err))
+		return 0, 0, false
+	}
+	rssBytes, err = parseVmRss(status)
+	if err != nil {
+		io.Log("error", sampleFailed(err))
+		return 0, 0, false
+	}
+	swapBytes, err = parseVmSwap(status)
+	if err != nil {
+		io.Log("error", sampleFailed(err))
+		return 0, 0, false
+	}
+	return rssBytes, swapBytes, true
+}
+
+// requestRestart asks the relaunch tool to restart the server as the configured user, then records the request time.
+// Any failure, including the state write, is logged as restart_request_failed.
+func requestRestart(ctx context.Context, io seam.IO, statePath, identity string, now int64, state watchState) error {
+	relaunch := io.Config().RelaunchBinary
+	if len(relaunch) == 0 || relaunch[0] != '/' {
+		io.Log("error", "event=restart_request_failed message=absolute relaunch path unavailable")
+		return nil
+	}
+	err := func() error {
+		if _, err := capture.RunAsUser(ctx, io, []string{
+			capture.EnvCommand,
+			"XDG_RUNTIME_DIR=" + io.Config().RuntimeDir,
+			"DBUS_SESSION_BUS_ADDRESS=unix:path=" + io.Config().RuntimeDir + "/bus",
+			relaunch,
+			"request-zellij-restart",
+			"--reason",
+			"rss",
+			"--rss",
+			identity,
+		}); err != nil {
+			return err
+		}
+		state.LastRequestAt = &now
+		return saveState(io, statePath, state)
+	}()
+	if err != nil {
+		io.Log("error", "event=restart_request_failed message="+capture.Logfmt(err.Error()))
+		return nil
+	}
+	io.Log("info", "event=restart_requested identity="+identity)
+	return nil
+}

@@ -5,8 +5,13 @@ tags: ["go"]
 
 tasks:
   test:
-    command: "go"
-    args: ["test", "./..."]
+    command: "nix"
+    args: ["develop", "../..#host-bao-seal", "--command", "go", "test", "./..."]
     env:
       CGO_ENABLED: "0"
     inputs: ["**/*.go", "go.mod", "go.sum", "**/testdata/**/*"]
+    options:
+      cache: false
+      # Enters the .#host-bao-seal devShell, which provides sops and age for the round-trip test.
+      # The root devShell lacks them.
+      runInCI: true

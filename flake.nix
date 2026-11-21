@@ -475,6 +475,10 @@
           jj-hooks = pkgs.mkShell {
             packages = basePackages ++ hookPackages;
           };
+          # host-bao-seal's round-trip test runs sops and age-keygen.
+          host-bao-seal = pkgs.mkShell {
+            packages = basePackages ++ checkTools.host-bao-seal pkgs;
+          };
         });
     };
 }

@@ -26,20 +26,31 @@ _SECRET_NAME_RE = re.compile(
     r"PASSWORD|PASSWD|PWD|SECRET|CREDENTIAL|TOKEN"
     r"|(?:^|[_.\-])(?:PASS|AUTH|(?:API|PRIVATE[_.\-]?)?KEYS?)(?:$|[_.\-])",
     re.IGNORECASE)
-# A name allowlist for settings about a credential, not the credential itself: limits, counts,
-# switches and locations. ``*_SECRET_ID`` is not on it, as a Vault AppRole secret_id is live.
-_NOT_SECRET_NAME_RE = re.compile(
-    r"(?:^|[_.\-])(?:MAX|MIN)[_.\-]|TOKENIZER"
-    r"|[_.\-](?:TTL|PATH|FILE|DIR|URL|NAME|ENABLED|DISABLED|MODE|TYPE|LENGTH|DAYS|HOURS|SECONDS"
-    r"|TIMEOUT|COUNT|SIZE|LIMIT|PARALLELISM|TOKENS)$",
-    re.IGNORECASE)
+# Exact names of settings about a credential, not the credential itself: counters, limits,
+# switches and locations. A suffix alone never unmasks a name (``API_TOKENS`` is a token list).
+# ``*_SECRET_ID`` is not here, as a Vault AppRole secret_id is live.
+_NOT_SECRET_NAMES = frozenset((
+    "MAX_TOKENS", "MIN_TOKENS", "TOTAL_TOKENS", "NUM_TOKENS", "MAX_NEW_TOKENS",
+    "MAX_INPUT_TOKENS", "MAX_OUTPUT_TOKENS", "MAX_COMPLETION_TOKENS", "PROMPT_TOKENS",
+    "COMPLETION_TOKENS", "TOKENIZERS_PARALLELISM", "TOKEN_TTL", "TOKEN_URL",
+    "PASSWORD_MIN_LENGTH", "AUTH_ENABLED", "AUTH_DISABLED", "AUTH_MODE", "AUTH_TYPE",
+    "SECRET_ROTATION_DAYS", "VAULT_SECRET_PATH",
+))
+_SEP_RE = re.compile(r"[.\-]")
 _API_VERSION_RE = re.compile(r"(?:[a-z0-9.\-]+/)?v\d+(?:(?:alpha|beta)\d+)?")
 _LAST_APPLIED = "kubectl.kubernetes.io/last-applied-configuration"
 
 
-def _secret_name(name: str) -> bool:
+def _secret_name(name: str, value: str = "") -> bool:
+    """Whether the value of env entry ``name`` is masked. A ``*_FILE`` value stays visible only
+    when it is an absolute path."""
     name = name.strip().strip("\"'")
-    return _SECRET_NAME_RE.search(name) is not None and _NOT_SECRET_NAME_RE.search(name) is None
+    if _SECRET_NAME_RE.search(name) is None:
+        return False
+    if name.upper().endswith(("_FILE", ".FILE", "-FILE")):
+        return not value.strip().strip("\"'").startswith("/")
+    # A dotted metric namespace (``llm.total_tokens``) is not part of the name.
+    return _SEP_RE.sub("_", name.rpartition(".")[2]).upper() not in _NOT_SECRET_NAMES
 
 
 def _apply(text: str, spans: list, mask: str) -> str:
@@ -139,7 +150,8 @@ def _json_spans(text: str, mask: str) -> list:
             spans.extend(frame.deferred)
         # A name cut off before it is read fails closed.
         if frame.env_ctx and frame.value is not None and (
-                (frame.name is None and eof) or (frame.name is not None and _secret_name(frame.name))):
+                (frame.name is None and eof) or (frame.name is not None and _secret_name(
+                    frame.name, text[frame.value[0]:frame.value[1]]))):
             spans.append(frame.value)
 
     for m in _JSON_TOKEN_RE.finditer(text):
@@ -212,9 +224,15 @@ def _plain_scalar(s: str) -> str:
 def _strip_props(rest: str) -> str:
     """The value after any ``&anchor`` and ``!tag`` properties."""
     rest = rest.strip()
-    while rest[:1] in ("&", "!"):
-        rest = rest.partition(" ")[2].strip()
-    return rest
+    i, n = 0, len(rest)
+    while i < n and rest[i] in "&!":
+        sp = rest.find(" ", i)
+        if sp < 0:
+            return ""
+        i = sp
+        while i < n and rest[i].isspace():
+            i += 1
+    return rest[i:]
 
 
 class _Map:
@@ -275,7 +293,8 @@ def _yaml_spans(text: str, mask: str) -> list:
                 mp.parent.deferred.extend(mp.data)
         if mp.deferred and (mp.kind == "SecretList" or (mp.kind is None and eof and mp.api)):
             spans.extend(mp.deferred)
-        if mp.name is not None and mp.value is not None and _secret_name(mp.name):
+        if mp.name is not None and mp.value is not None and _secret_name(
+                mp.name, text[mp.value[0][0]:mp.value[0][1]] if mp.value else ""):
             spans.extend(mp.value)
 
     i, n = 0, len(bodies)
@@ -389,7 +408,7 @@ def _flow_spans(text: str) -> list:
             else:
                 name, g = m.group(6), 4
             value = m.group(g).rstrip()
-            if value and _secret_name(name):
+            if value and _secret_name(name, value):
                 s = m.start(g)
                 if value[0] in "\"'" and value.endswith(value[0]) and len(value) > 1:
                     spans.append((s + 1, s + len(value) - 1, None))
@@ -400,12 +419,12 @@ def _flow_spans(text: str) -> list:
             inner = m.group(1)
             nm = _GO_NAME_RE.search(inner)
             vm = _GO_VALUE_RE.search(inner)
-            if not nm or not vm or not _secret_name(nm.group(1)):
+            if not nm or not vm:
                 continue
             vs = vm.end()
             nk = _GO_NEXT_KEY_RE.search(inner, vs)
             ve = nk.start() if nk else len(inner)
-            if ve > vs:
+            if ve > vs and _secret_name(nm.group(1), inner[vs:ve]):
                 spans.append((m.start(1) + vs, m.start(1) + ve, None))
     return spans
 
@@ -430,7 +449,7 @@ def _describe_spans(text: str) -> list:
                         spans.append((pos + lead, pos + len(body), None))
                 else:
                     value = stripped[m.end():].rstrip()
-                    in_value = bool(value) and _secret_name(m.group(1)) \
+                    in_value = bool(value) and _secret_name(m.group(1), value) \
                         and not _DESCRIBE_REF_RE.match(value)
                     if in_value:
                         s = pos + lead + m.end()

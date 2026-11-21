@@ -1,0 +1,19 @@
+internalHostSuffixes: ["internal.example.com"]
+tailscaleDomain:      "ts.example.net"
+dnsZone:              "internal.example.com"
+inventoryPath:        "docs/service-urls"
+linksPagePath:        "docs/links.md"
+glancePath:           "example/glance-config.yaml"
+portalSource:         "example/portal/"
+tailnetPath:          "example/tailnet.toml"
+unionPath:            "example/k8s/union.yaml"
+dnsRecordsPath:       "example/dns/records.json"
+managedReposPath:     "example/github/managed-repos.json"
+cloudflareHostsPath:  "example/cloudflare/hosts.json"
+workerDomainsPath:    "example/workers/sites.ts"
+owners: {
+	kubernetes: "example/k8s/"
+	dns:        "example/dns/"
+	cloudflare: "example/cloudflare/"
+	workers:    "example/workers/"
+}

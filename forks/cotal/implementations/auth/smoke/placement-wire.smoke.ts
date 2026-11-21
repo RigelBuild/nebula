@@ -21,6 +21,7 @@ import {
 } from "@cotal-ai/core";
 import { openAuthAuthorityPlane, type ServiceAuthenticator, type ReconcilerPort, type RolePolicyPort } from "../src/index.js";
 import { openAuthorityClient, type AuthorityClient } from "../src/authority-client.js";
+import { deferred } from "./_deferred.js";
 import { pickFreePort } from "../../../packages/core/smoke/_free-port.js";
 import { SMOKE_BROKER_TOKEN, teardownOnSignal } from "@cotal-ai/smoke-kit";
 
@@ -47,7 +48,7 @@ const srv: ChildProcess = spawn("nats-server", ["-c", join(tmp, "server.conf")],
 const releaseBroker = teardownOnSignal(srv, tmp);
 const awaitExit = (proc: ChildProcess, timeoutMs = 3000): Promise<void> => {
   if (proc.exitCode !== null || proc.signalCode !== null) return Promise.resolve();
-  const { promise, resolve } = Promise.withResolvers<void>();
+  const { promise, resolve } = deferred<void>();
   proc.once("exit", () => resolve());
   setTimeout(resolve, timeoutMs);
   return promise;
@@ -183,7 +184,7 @@ const cancelledAfterSend = (r: PlacementReply): boolean =>
 
 /** Bound an event wait; the bound is a failure deadline, not a pacing sleep. */
 async function within<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
-  const { promise: t, reject } = Promise.withResolvers<never>();
+  const { promise: t, reject } = deferred<never>();
   const timer = setTimeout(() => reject(new Error(`timed out waiting for ${label}`)), ms);
   try { return await Promise.race([p, t]); } finally { clearTimeout(timer); }
 }
@@ -194,7 +195,7 @@ let wide: AuthorityClient | undefined;
  *  Resolves with the reply data for `effectId` the first time auth answers it. */
 async function watchReply(caller: EpCaller, effectId: string): Promise<{ reply: Promise<EffectView>; stop(): void }> {
   if (!wide) throw new Error("harness client not open");
-  const { promise, resolve } = Promise.withResolvers<EffectView>();
+  const { promise, resolve } = deferred<EffectView>();
   const sub = wide.nc.subscribe(epCallerReplyFilter(space, caller), {
     callback: (err, msg) => {
       if (err) return;
@@ -218,7 +219,7 @@ const closedOnDisk = (effectId: string): boolean => existsSync(join(journal, `${
 /** Watch the journal for auth's own attempt on the effect lock (`publishAtomic`'s temp file), or for
  *  the close record. Resolves "stalled" only if auth tried the held lock before any close landed. */
 function watchStall(effectId: string): { stalled: Promise<"stalled" | "closed">; stop(): void } {
-  const { promise, resolve } = Promise.withResolvers<"stalled" | "closed">();
+  const { promise, resolve } = deferred<"stalled" | "closed">();
   const attempt = new RegExp(`^${effectId}\\.effect\\.lock\\.[0-9a-f]+\\.tmp$`);
   const watcher = watch(journal, (_event, name) => {
     if (name === `${effectId}.closed.json`) resolve("closed");
@@ -360,7 +361,7 @@ try {
     let lease: HeldLock | undefined = await holdEffect(stalledEffect);
     const gate = watchStall(stalledEffect);
     try {
-      const { promise: sentA, resolve: markSentA } = Promise.withResolvers<void>();
+      const { promise: sentA, resolve: markSentA } = deferred<void>();
       let stalledDone = false;
       const stalled = placement(stalledNc, RECONCILER, EP_CMD_CLOSE_ENROLLMENT_EFFECT, { effectId: stalledEffect, fenceId: randomUUID() },
         { deadlineMs: 40_000, onCommandPublished: markSentA }).finally(() => { stalledDone = true; });

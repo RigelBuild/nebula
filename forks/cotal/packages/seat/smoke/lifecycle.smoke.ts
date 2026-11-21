@@ -653,12 +653,13 @@ await h.waitForExit();
   {
     // A dead leader leaves no generation witness for its numeric group. Retain custody
     // rather than signalling members whose relationship to the recorded leader is unproved.
+    // The leader exits only after the grandchild reports its SIGHUP handler armed.
     const rec = launchSeat({
       root,
       name: "dead-leader-grandchild",
       spec: {
         command: process.execPath,
-        args: ["-e", "const c = require('child_process').spawn(process.execPath, ['-e', 'process.on(\"SIGHUP\", ()=>{}); setInterval(()=>{},1000)'], { stdio: 'ignore' }); c.on('spawn', () => { setTimeout(() => process.exit(0), 100); });"],
+        args: ["-e", "const c = require('child_process').spawn(process.execPath, ['-e', 'process.on(\"SIGHUP\", ()=>{}); process.send(\"armed\"); setInterval(()=>{},1000)'], { stdio: ['ignore', 'ignore', 'ignore', 'ipc'] }); c.on('message', () => process.exit(0));"],
         env: { PATH: process.env.PATH ?? "" },
       },
       cwd: process.cwd(),

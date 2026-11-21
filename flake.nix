@@ -51,6 +51,7 @@
         wave-host = "sha256-3/tNPMYKxKjwprceoPRjRJuTNBwJSJE4LD8grnh+haI=";
         wave-recall = null;
         wave-seat-holder = null;
+        zellij-rss-watchdog = "sha256-3/tNPMYKxKjwprceoPRjRJuTNBwJSJE4LD8grnh+haI=";
       };
 
       # Does a command's go.mod replace the shared go-lib module? The replace
@@ -109,6 +110,8 @@
         hk-hook = pkgs: [ pkgs.jujutsu ];
         # host-bao-seal's tests run a sops/age round-trip.
         host-bao-seal = pkgs: [ pkgs.sops pkgs.age ];
+        # zellij-rss-watchdog's process tests start a grandchild with setsid.
+        zellij-rss-watchdog = pkgs: [ pkgs.util-linux ];
       };
 
       buildCommand = pkgs: name: vendorHash:

@@ -9,7 +9,7 @@ linear-comment-poller --issue-prefix EX --issue-prefix DEMO sweep
 linear-comment-poller --issue-prefix EX read --watchlist <path>
 ```
 
-`--issue-prefix` is required and repeatable. The first prefix is the Linear team the sweep queries; every later prefix is an alias, so `DEMO-7` is read as `EX-7`. `LINEAR_ISSUE_PREFIXES` (comma-separated, same order) is used when no flag is given. There is no default.
+`--issue-prefix` is required and repeatable. The first prefix is the Linear team the sweep queries; every later prefix is an alias, so `DEMO-7` is read as `EX-7`. `LINEAR_ISSUE_PREFIXES` (comma-separated, same order) is used when no flag is given. There is no default. A missing or empty prefix exits 2 before any network call.
 
 ## Environment
 

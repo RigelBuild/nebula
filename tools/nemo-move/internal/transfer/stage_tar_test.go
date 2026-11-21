@@ -1,10 +1,10 @@
 package transfer
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"os/exec"
-	"os/user"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -19,21 +19,6 @@ func requireDarwin(t *testing.T) {
 	if runtime.GOOS != "darwin" {
 		t.Skip("staging tests run on macOS; run them on macmini")
 	}
-}
-
-// currentOwner returns the user:group of the test process. The staged tree must
-// end up owned by the SSH user, never by root.
-func currentOwner(t *testing.T) string {
-	t.Helper()
-	u, err := user.Current()
-	if err != nil {
-		t.Fatal(err)
-	}
-	g, err := user.LookupGroupId(u.Gid)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return u.Username + ":" + g.Name
 }
 
 // fixtureSource writes <source>/<account>/credentials/token.json for each
@@ -53,28 +38,35 @@ func fixtureSource(t *testing.T, token string, accounts ...string) string {
 	return source
 }
 
-// rootHalf is the root side of staging. It reads the Google source and returns
-// the archive it streams.
-//
-// STUB: this runs the current root script, which writes the staging tree
-// itself and streams no archive. The M1 change replaces this body.
-func rootHalf(t *testing.T, home, stage, source string, accounts ...string) ([]byte, error) {
+// rootHalf runs the root side of staging: the tar streamer, which reads the
+// Google source and writes one archive to stdout. The test runs it without sudo
+// so it can prove the streamer writes nothing under the user's home.
+func rootHalf(t *testing.T, source string, accounts ...string) ([]byte, error) {
 	t.Helper()
-	args := append([]string{"-c", stageCredentialsScript, "sh", home, stage, currentOwner(t), source}, accounts...)
-	out, err := exec.CommandContext(t.Context(), "/bin/sh", args...).CombinedOutput()
-	if err != nil {
-		return nil, fmt.Errorf("%w: %s", err, out)
+	args := append([]string{"-c", stageCredentialsScript, "sh", source}, accounts...)
+	var stdout, stderr bytes.Buffer
+	cmd := exec.CommandContext(t.Context(), "/bin/sh", args...)
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("%w: %s", err, stderr.String())
 	}
-	return nil, nil
+	return stdout.Bytes(), nil
 }
 
-// unpackStagingAsUser is the user side of staging. It unpacks the root's archive
-// into a mktemp dir the user owns, then renames it into place.
-//
-// STUB: this keeps the current behaviour, where the root script already wrote
-// the staging tree and there is no separate user step.
-func unpackStagingAsUser(t *testing.T, home, stage string, archive []byte) error {
+// unpackStagingAsUser runs the user side of staging: it reads the archive on
+// stdin and unpacks it into a mktemp dir the user owns, then renames the tree
+// into place. It runs as the test user, the role the SSH user plays in production.
+func unpackStagingAsUser(t *testing.T, home, stage string, archive []byte, accounts ...string) error {
 	t.Helper()
+	args := append([]string{"-c", stageUnpackScript, "sh", stage}, accounts...)
+	cmd := exec.CommandContext(t.Context(), "/bin/sh", args...)
+	cmd.Stdin = bytes.NewReader(archive)
+	cmd.Env = append(os.Environ(), "HOME="+home)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%w: %s", err, out)
+	}
 	return nil
 }
 
@@ -186,7 +178,7 @@ func TestStagingRootNeverWritesUserTree(t *testing.T) {
 	}
 	source := fixtureSource(t, `{"refresh":"new"}`, "workspace")
 	before := snapshotTree(t, home)
-	archive, err := rootHalf(t, home, stage, source, "workspace")
+	archive, err := rootHalf(t, source, "workspace")
 	if err != nil {
 		t.Fatalf("root half failed: %v", err)
 	}
@@ -208,14 +200,14 @@ func TestStagingUserUnpackIsUserOwned(t *testing.T) {
 		t.Fatal(err)
 	}
 	source := fixtureSource(t, `{"refresh":"new"}`, "workspace")
-	archive, err := rootHalf(t, home, stage, source, "workspace")
+	archive, err := rootHalf(t, source, "workspace")
 	if err != nil {
 		t.Fatalf("root half failed: %v", err)
 	}
 	if len(archive) == 0 {
 		t.Fatal("root half streamed no archive; root must stream the accounts as tar")
 	}
-	if err := unpackStagingAsUser(t, home, stage, archive); err != nil {
+	if err := unpackStagingAsUser(t, home, stage, archive, "workspace"); err != nil {
 		t.Fatalf("user unpack failed: %v", err)
 	}
 	assertStagedAs(t, stage, os.Getuid())
@@ -236,11 +228,11 @@ func TestStagingUserUnpackRefusesSymlinkedParent(t *testing.T) {
 	}
 	stage := filepath.Join(home, ".local", "state", "nemo-move-staging")
 	source := fixtureSource(t, `{"refresh":"new"}`, "workspace")
-	archive, err := rootHalf(t, home, stage, source, "workspace")
+	archive, err := rootHalf(t, source, "workspace")
 	if err != nil {
 		t.Fatalf("root half refused the user's tree; it must read only the Google source: %v", err)
 	}
-	if err := unpackStagingAsUser(t, home, stage, archive); err == nil {
+	if err := unpackStagingAsUser(t, home, stage, archive, "workspace"); err == nil {
 		t.Fatal("user unpack accepted a symlinked state parent")
 	}
 	entries, err := os.ReadDir(outside)
@@ -271,11 +263,11 @@ func TestStagingSuccessReplacesOldTree(t *testing.T) {
 		t.Fatal(err)
 	}
 	source := fixtureSource(t, `{"refresh":"new"}`, "workspace")
-	archive, err := rootHalf(t, home, stage, source, "workspace")
+	archive, err := rootHalf(t, source, "workspace")
 	if err != nil {
 		t.Fatalf("root half failed: %v", err)
 	}
-	if err := unpackStagingAsUser(t, home, stage, archive); err != nil {
+	if err := unpackStagingAsUser(t, home, stage, archive, "workspace"); err != nil {
 		t.Fatalf("user unpack failed: %v", err)
 	}
 	assertStagedAs(t, stage, os.Getuid())

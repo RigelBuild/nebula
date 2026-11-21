@@ -91,7 +91,7 @@ func ExportToSpool(ctx context.Context, opts Options, target, sshPath, binary, s
 	if err := CheckSourceHome(ctx, opts, target, sshPath, remote); err != nil {
 		return err
 	}
-	if _, stageErr := runRemote(ctx, target, sshPath, remote, "/usr/bin/sudo -n "+stageShell(opts)); stageErr != nil {
+	if _, stageErr := runRemote(ctx, target, sshPath, remote, stagePipeline(opts)); stageErr != nil {
 		stageState, err := runRemote(ctx, target, sshPath, remote, stagePresenceCommand(opts))
 		if err != nil {
 			return fmt.Errorf("check credential staging state: %w", err)
@@ -133,20 +133,30 @@ func ExportToSpool(ctx context.Context, opts Options, target, sshPath, binary, s
 	})
 }
 
-// stageCredentialsScript stages Google credentials as root. It takes the
-// source home, the staging path, the owner, the Google source, then the
-// account names as positional arguments, never as shell text. It refuses
-// symlinked directories before any copy. It builds the tree in a mktemp
-// directory and renames it into place. Every path it removes is a mktemp
-// directory this run created, and the staging it replaces is moved into one.
+// stageCredentialsScript is the root half of staging. It reads the Google
+// source and streams the named accounts' credentials out as one tar archive on
+// stdout. Root writes nothing in the user's tree: it creates, chowns, moves and
+// removes no path there. The arguments are the Google source, then the account
+// names, never shell text.
 const stageCredentialsScript = `set -eu
-home=$1
-base=$2
-owner=$3
-source=$4
-shift 4
+source=$1
+shift
+for account in "$@"; do
+  /bin/test -d "$source/$account/credentials"
+done
+cd "$source"
+exec /usr/bin/tar -c "$@"
+`
+
+// stageUnpackScript is the user half of staging. It runs as the SSH user with no
+// sudo. It refuses a symlinked parent, unpacks the archive on stdin into a
+// mktemp dir the user owns, sets the modes, and renames the tree into place. The
+// arguments are the staging path, then the account names.
+const stageUnpackScript = `set -eu
+base=$1
+shift
 parent=${base%/*}
-for dir in "$home" "$home/.local" "$home/.local/state" "$parent"; do
+for dir in "$parent" "${parent%/*}" "${parent%/*/*}"; do
   if [ -L "$dir" ]; then echo "refusing symlinked directory $dir" >&2; exit 1; fi
 done
 if [ -L "$base" ]; then echo "refusing symlinked staging $base" >&2; exit 1; fi
@@ -154,16 +164,11 @@ if [ -L "$base" ]; then echo "refusing symlinked staging $base" >&2; exit 1; fi
 temp=$(/usr/bin/mktemp -d "$parent/.nemo-move-staging.XXXXXX")
 old=$(/usr/bin/mktemp -d "$parent/.nemo-move-old.XXXXXX")
 trap '/bin/rm -rf "$temp"; /bin/rmdir "$old" 2>/dev/null || true' EXIT
-/bin/chmod 700 "$temp"
+/usr/bin/tar -x -C "$temp"
 for account in "$@"; do
-  /bin/test -d "$source/$account/credentials"
-  /bin/mkdir -p "$temp/$account"
-  /bin/cp -R "$source/$account/credentials" "$temp/$account/"
-  /usr/sbin/chown -R "$owner" "$temp/$account/credentials"
   /usr/bin/find "$temp/$account/credentials" -type d -exec /bin/chmod 700 {} \;
   /usr/bin/find "$temp/$account/credentials" -type f -exec /bin/chmod 600 {} \;
 done
-/usr/sbin/chown -R "$owner" "$temp"
 /bin/chmod 700 "$temp"
 if [ -e "$base" ]; then /bin/mv "$base" "$old/previous"; fi
 if ! /bin/mv "$temp" "$base"; then
@@ -175,17 +180,31 @@ trap - EXIT
 /usr/bin/touch "$base"
 `
 
-// stageShell runs stageCredentialsScript under sh. Its inventory values are
-// positional arguments: the source home, the staging path, the owner, the
-// Google source, then the account names. Each is quoted here, and none is
-// spliced into the script text.
+// stageShell is the root command. It streams the accounts out as tar. Its
+// inventory values are positional arguments: the Google source, then the account
+// names. Each is quoted here, and none is spliced into the script text.
 func stageShell(opts Options) string {
-	args := append([]string{opts.SourceHome, opts.stageRoot(), opts.MacUser + ":staff", opts.Layout.Google.Source}, opts.Layout.Google.Accounts...)
+	args := append([]string{opts.Layout.Google.Source}, opts.Layout.Google.Accounts...)
 	return "/bin/sh -c " + ShellQuote(stageCredentialsScript) + " sh " + shellJoin(args)
+}
+
+// stageUnpackShell is the user command that consumes the archive. It runs with
+// no sudo. Its arguments are the staging path, then the account names.
+func stageUnpackShell(opts Options) string {
+	args := append([]string{opts.stageRoot()}, opts.Layout.Google.Accounts...)
+	return "/bin/sh -c " + ShellQuote(stageUnpackScript) + " sh " + shellJoin(args)
 }
 
 func stageCredentialsCommand(opts Options) string {
 	return "sudo " + stageShell(opts)
+}
+
+// stagePipeline runs the root tar stream into the user unpack. Only the first
+// stage runs under sudo, so root reads the Google source and writes the archive
+// into a pipe. The unpack runs as the SSH user and is the only writer under the
+// user's staging parent.
+func stagePipeline(opts Options) string {
+	return "/usr/bin/sudo -n " + stageShell(opts) + " | " + stageUnpackShell(opts)
 }
 
 func stagePresenceCommand(opts Options) string {

@@ -33,8 +33,8 @@ func TestStageShellPassesValuesAsArguments(t *testing.T) {
 	if strings.Contains(stageCredentialsScript, "example-user") {
 		t.Fatal("staging script text contains an inventory value")
 	}
-	if want := "'example-user:staff'"; !strings.Contains(cmd, want) {
-		t.Fatalf("staging command lacks owner argument %q:\n%s", want, cmd)
+	if strings.Contains(cmd, "example-user") {
+		t.Fatalf("root staging command takes an owner argument; root must not chown:\n%s", cmd)
 	}
 	if !strings.Contains(cmd, " sh ") {
 		t.Fatalf("staging command does not pass the script as sh -c argument:\n%s", cmd)

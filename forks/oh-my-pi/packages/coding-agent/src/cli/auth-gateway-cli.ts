@@ -71,6 +71,7 @@ import {
 	type ClaudeResetBankingSettings,
 	cfgClaudeResets,
 	cfgCodexResets,
+	cfgOperatorClaudeResetsApprovedRedeems,
 	resetWindowModes,
 } from "../session/settings";
 import {
@@ -415,11 +416,15 @@ function hasUsableExhaustedClaudeWeeklyReset(report: UsageReport | null | undefi
 	);
 }
 
+/** Live reset times jitter by a few seconds, and an operator types a whole minute; match within this many ms. */
+const APPROVAL_RESET_TOLERANCE_MS = 5 * 60_000;
+
 export function createGatewayClaudeResetHook(args: {
 	storage: AuthStorage;
 	settings: Settings;
 	coordinator: GatewayClaudeResetCoordinator;
 }): NonNullable<Parameters<typeof startAuthGateway>[0]["onUsageLimit"]> {
+	const reportedApprovalNeeds = new Set<string>();
 	return async ({ provider, credentialId, modelId, signal }) => {
 		const cfg = cfgClaudeResets.get(args.settings);
 		if (provider !== "anthropic") return false;
@@ -455,6 +460,8 @@ export function createGatewayClaudeResetHook(args: {
 				!sharedWeeklyBlocked && hasUsableExhaustedClaudeWeeklyReset(report, "anthropic:7d:fable");
 			if (!sharedWeeklyBlocked && !fableOnlyBlocked) return false;
 			const blockedWindow = sharedWeeklyBlocked ? "anthropic:7d" : "anthropic:7d:fable";
+			const blockedLimit = report?.limits.find(limit => limit.id === blockedWindow);
+			const blockedResetsAt = blockedLimit?.window?.resetsAt;
 			let actions: ClaudeResetAction[] = [];
 			try {
 				const statuses = await args.storage.resets.list({
@@ -486,6 +493,36 @@ export function createGatewayClaudeResetHook(args: {
 				);
 			} catch (error) {
 				logger.info("auth-gateway Claude reset planning failed", { credentialId, error: String(error) });
+				return false;
+			}
+			// A drain-first weekly spend needs an operator approval bound to this window's reset time.
+			const approvals = cfgOperatorClaudeResetsApprovedRedeems.get(args.settings);
+			const matchingApproval = approvals.find(
+				approval =>
+					approval.accountId === credential.accountId &&
+					Date.parse(approval.expiresAt) > Date.now() &&
+					blockedResetsAt !== undefined &&
+					Math.abs(Date.parse(approval.windowResetsAt) - blockedResetsAt) <= APPROVAL_RESET_TOLERANCE_MS,
+			);
+			const drainFirstWeeklySpend = drainFirstRecovery && actions.some(action => action.window === "weekly");
+			if (drainFirstWeeklySpend && !matchingApproval) {
+				const needKey = `${credential.accountId}@${blockedResetsAt}`;
+				if (!reportedApprovalNeeds.has(needKey)) {
+					reportedApprovalNeeds.add(needKey);
+					logger.warn("auth-gateway Claude reset redeem needs approval", {
+						credentialId,
+						accountId: credential.accountId,
+						usedFraction: blockedLimit ? resolveUsedFraction(blockedLimit) : undefined,
+						minutesToReset:
+							blockedResetsAt !== undefined && Number.isFinite(blockedResetsAt)
+								? Math.max(0, Math.round((blockedResetsAt - Date.now()) / 60_000))
+								: undefined,
+						windowResetsAt:
+							blockedResetsAt !== undefined && Number.isFinite(blockedResetsAt)
+								? new Date(blockedResetsAt).toISOString()
+								: undefined,
+					});
+				}
 				return false;
 			}
 			for (const action of actions) {
@@ -522,6 +559,14 @@ export function createGatewayClaudeResetHook(args: {
 					code: outcome.code,
 					ok: outcome.ok,
 				});
+				if (outcome.ok) {
+					logger.warn("auth-gateway Claude reset redeemed", {
+						credentialId,
+						accountId: credential.accountId,
+						window: action.window,
+						approvalRef: drainFirstRecovery && action.window === "weekly" ? matchingApproval?.ref : undefined,
+					});
+				}
 				return outcome.ok;
 			}
 			return false;

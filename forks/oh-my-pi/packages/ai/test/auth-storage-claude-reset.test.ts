@@ -22,6 +22,8 @@ interface ResetFixture {
 		remaining: number;
 		weeklyUsed: number;
 		fiveHourNull?: boolean;
+		/** Defaults to exhausted, so a shared 5h block still stands unless a test lowers it. */
+		fiveHourUsed?: number;
 		discoveryStatus?: number;
 		genericUsageEnabled?: boolean;
 		response: unknown;
@@ -84,7 +86,10 @@ async function fixture(): Promise<ResetFixture> {
 				return Response.json({
 					five_hour: state.fiveHourNull
 						? null
-						: { utilization: 100, resets_at: new Date(Date.now() + 2 * hour).toISOString() },
+						: {
+								utilization: state.fiveHourUsed ?? 100,
+								resets_at: new Date(Date.now() + 2 * hour).toISOString(),
+							},
 					seven_day: { utilization: state.weeklyUsed, resets_at: new Date(Date.now() + 72 * hour).toISOString() },
 					limits: [
 						{
@@ -393,6 +398,23 @@ describe("Claude saved reset account safety", () => {
 		const outcome = await f.storage.resets.redeem({ target: f.target, baseUrlResolver: f.baseUrlResolver });
 		expect(outcome.ok).toBe(true);
 		expect(outcome.cleared).toEqual(["anthropic:7d"]);
+		expect(f.storage.blocks.list([f.target.credentialId]).map(block => block.blockScope)).toEqual(["tier:fable"]);
+	});
+
+	it("clears the shared 7d block after a weekly redeem and keeps the uncovered Fable wall", async () => {
+		const f = await fixture();
+		f.state.fiveHourUsed = 20;
+		f.state.weeklyUsed = 100;
+		f.state.response = { result: "reset", resets_left: 1, cleared: ["seven_day"] };
+		f.storage.blocks.upsert({
+			credentialId: f.target.credentialId,
+			providerKey: "anthropic:oauth",
+			blockScope: "",
+			blockedUntilMs: Date.now() + 3_600_000,
+		});
+		const outcome = await f.storage.resets.redeem({ target: f.target, baseUrlResolver: f.baseUrlResolver });
+		expect(outcome.ok).toBe(true);
+		// The Fable tier wall is uncovered by a 7d reset, so only the shared block goes.
 		expect(f.storage.blocks.list([f.target.credentialId]).map(block => block.blockScope)).toEqual(["tier:fable"]);
 	});
 

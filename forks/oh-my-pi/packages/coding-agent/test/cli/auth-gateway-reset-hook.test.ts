@@ -1,5 +1,6 @@
-import { afterEach, describe, expect, it, spyOn } from "bun:test";
+import { afterEach, describe, expect, it, mock, spyOn } from "bun:test";
 import { AuthStorage, type ResetCreditAccountStatus, type UsageLimit, type UsageReport } from "@oh-my-pi/pi-ai";
+import { logger } from "@oh-my-pi/pi-utils";
 import {
 	claudeResetBankingFor,
 	createGatewayClaudeResetHook,
@@ -8,6 +9,7 @@ import {
 } from "../../src/cli/auth-gateway-cli";
 import { Settings } from "../../src/config/settings";
 import {
+	cfgClaudeResetsApprovedRedeems,
 	cfgClaudeResetsAutoRedeem5h,
 	cfgClaudeResetsAutoRedeemFable,
 	cfgClaudeResetsAutoRedeemWeekly,
@@ -18,7 +20,20 @@ import {
 const storages: AuthStorage[] = [];
 afterEach(() => {
 	for (const storage of storages.splice(0)) storage.close();
+	mock.restore();
 });
+
+const NEEDS_APPROVAL = "auth-gateway Claude reset redeem needs approval";
+
+function approval(windowResetsAt: number, expiresAt: string, accountId = "acct-cedar") {
+	return {
+		accountId,
+		approvedBy: "matt",
+		ref: "RIG-11726",
+		expiresAt,
+		windowResetsAt: new Date(windowResetsAt).toISOString(),
+	};
+}
 
 function limit(id: "anthropic:5h" | "anthropic:7d", usedFraction: number): UsageLimit {
 	return {
@@ -130,7 +145,8 @@ async function setup(
 	const list = spyOn(storage.resets, "list").mockResolvedValue(statuses);
 	const redeem = spyOn(storage.resets, "redeem").mockResolvedValue({ ok: true, code: "reset", provider: "anthropic" });
 	const hook = createGatewayClaudeResetHook({ storage, settings, coordinator: coordinator() });
-	return { hook, list, redeem, report, credentialId: stored.id, settings };
+	const windowResetsAt = usage.limits.find(limit => limit.id === "anthropic:7d")?.window?.resetsAt ?? 0;
+	return { hook, list, redeem, report, credentialId: stored.id, settings, storage, usage, windowResetsAt };
 }
 
 describe("gateway Claude reset hook", () => {
@@ -208,8 +224,31 @@ describe("gateway Claude reset hook", () => {
 		expect(redeem).not.toHaveBeenCalled();
 	});
 
-	it("redeems an exhausted weekly reset for a drain-first account when auto-redeem is no", async () => {
-		const { hook, list, redeem, credentialId } = await setup("no", "anthropic:7d", { drainFirst: true });
+	it("does not redeem a drain-first weekly reset without an approval, and logs the need once", async () => {
+		const { hook, list, redeem, credentialId, windowResetsAt } = await setup("no", "anthropic:7d", {
+			drainFirst: true,
+		});
+		const warn = spyOn(logger, "warn").mockImplementation(() => {});
+		const signal = new AbortController().signal;
+		expect(await hook({ provider: "anthropic", credentialId, modelId: "claude-sonnet", signal })).toBe(false);
+		expect(await hook({ provider: "anthropic", credentialId, modelId: "claude-sonnet", signal })).toBe(false);
+		expect(list).toHaveBeenCalledTimes(2);
+		expect(redeem).not.toHaveBeenCalled();
+		const needs = warn.mock.calls.filter(([message]) => message === NEEDS_APPROVAL);
+		expect(needs).toHaveLength(1);
+		expect(needs[0]?.[1]).toMatchObject({
+			credentialId,
+			accountId: "acct-cedar",
+			windowResetsAt: new Date(windowResetsAt).toISOString(),
+		});
+	});
+
+	it("redeems a drain-first weekly reset once with a matching unexpired approval", async () => {
+		const { hook, redeem, credentialId, settings, windowResetsAt } = await setup("no", "anthropic:7d", {
+			drainFirst: true,
+		});
+		cfgClaudeResetsApprovedRedeems.set(settings, [approval(windowResetsAt, "2099-01-01T00:00:00.000Z")]);
+		const warn = spyOn(logger, "warn").mockImplementation(() => {});
 		expect(
 			await hook({
 				provider: "anthropic",
@@ -218,8 +257,105 @@ describe("gateway Claude reset hook", () => {
 				signal: new AbortController().signal,
 			}),
 		).toBe(true);
-		expect(list).toHaveBeenCalledTimes(1);
 		expect(redeem).toHaveBeenCalledTimes(1);
+		expect(warn).toHaveBeenCalledWith(
+			"auth-gateway Claude reset redeemed",
+			expect.objectContaining({ credentialId, accountId: "acct-cedar", window: "weekly", approvalRef: "RIG-11726" }),
+		);
+	});
+	it("redeems with an approval typed to the whole minute of a jittered live reset time", async () => {
+		const { hook, redeem, credentialId, settings, windowResetsAt } = await setup("no", "anthropic:7d", {
+			drainFirst: true,
+		});
+		// The live reset carries sub-minute jitter; the operator types only the minute.
+		const wholeMinuteIso = new Date(Math.floor(windowResetsAt / 60_000) * 60_000).toISOString();
+		cfgClaudeResetsApprovedRedeems.set(settings, [
+			{
+				accountId: "acct-cedar",
+				approvedBy: "matt",
+				ref: "RIG-11726",
+				expiresAt: "2099-01-01T00:00:00.000Z",
+				windowResetsAt: wholeMinuteIso,
+			},
+		]);
+		expect(
+			await hook({
+				provider: "anthropic",
+				credentialId,
+				modelId: "claude-sonnet",
+				signal: new AbortController().signal,
+			}),
+		).toBe(true);
+		expect(redeem).toHaveBeenCalledTimes(1);
+	});
+
+	it("does not redeem with an expired approval", async () => {
+		const { hook, redeem, credentialId, settings, windowResetsAt } = await setup("no", "anthropic:7d", {
+			drainFirst: true,
+		});
+		cfgClaudeResetsApprovedRedeems.set(settings, [approval(windowResetsAt, "2000-01-01T00:00:00.000Z")]);
+		expect(
+			await hook({
+				provider: "anthropic",
+				credentialId,
+				modelId: "claude-sonnet",
+				signal: new AbortController().signal,
+			}),
+		).toBe(false);
+		expect(redeem).not.toHaveBeenCalled();
+	});
+
+	it("does not redeem with an approval for another account", async () => {
+		const { hook, redeem, credentialId, settings, windowResetsAt } = await setup("no", "anthropic:7d", {
+			drainFirst: true,
+		});
+		cfgClaudeResetsApprovedRedeems.set(settings, [
+			approval(windowResetsAt, "2099-01-01T00:00:00.000Z", "acct-other"),
+		]);
+		expect(
+			await hook({
+				provider: "anthropic",
+				credentialId,
+				modelId: "claude-sonnet",
+				signal: new AbortController().signal,
+			}),
+		).toBe(false);
+		expect(redeem).not.toHaveBeenCalled();
+	});
+
+	it("redeems an approved window once; a restarted gateway does not redeem the moved window", async () => {
+		const { hook, list, redeem, report, credentialId, settings, storage, usage, windowResetsAt } = await setup(
+			"no",
+			"anthropic:7d",
+			{ drainFirst: true },
+		);
+		cfgClaudeResetsApprovedRedeems.set(settings, [approval(windowResetsAt, "2099-01-01T00:00:00.000Z")]);
+		const signal = new AbortController().signal;
+		expect(await hook({ provider: "anthropic", credentialId, modelId: "claude-sonnet", signal })).toBe(true);
+		expect(redeem).toHaveBeenCalledTimes(1);
+
+		// The window rolls over: a new natural reset time, still exhausted, with the grant banked again.
+		const nextWindowResetsAt = Date.now() + 6 * 24 * 60 * 60_000;
+		const movedUsage: UsageReport = {
+			...usage,
+			limits: usage.limits.map(limit =>
+				limit.id === "anthropic:7d"
+					? { ...limit, window: { id: "anthropic:7d", label: "anthropic:7d", resetsAt: nextWindowResetsAt } }
+					: limit,
+			),
+		};
+		report.mockResolvedValue(movedUsage);
+		list.mockResolvedValue([{ ...status(movedUsage, ["anthropic:7d"]), credentialId }]);
+		const restarted = createGatewayClaudeResetHook({ storage, settings, coordinator: coordinator() });
+		expect(await restarted({ provider: "anthropic", credentialId, modelId: "claude-sonnet", signal })).toBe(false);
+		expect(redeem).toHaveBeenCalledTimes(1);
+
+		// A fresh approval bound to the rolled-over window redeems that window once, and no more.
+		cfgClaudeResetsApprovedRedeems.set(settings, [approval(nextWindowResetsAt, "2099-01-01T00:00:00.000Z")]);
+		expect(await restarted({ provider: "anthropic", credentialId, modelId: "claude-sonnet", signal })).toBe(true);
+		expect(redeem).toHaveBeenCalledTimes(2);
+		expect(await restarted({ provider: "anthropic", credentialId, modelId: "claude-sonnet", signal })).toBe(false);
+		expect(redeem).toHaveBeenCalledTimes(2);
 	});
 
 	it("does not redeem when auto-redeem is no and the account is not drain-first", async () => {
@@ -396,6 +532,91 @@ describe("gateway Claude reset hook", () => {
 		expect(calls[0]).toMatchObject({ provider: "anthropic", modelId: "" });
 	});
 
+	it("logs the need-approval warn line once per account when two accounts share a reset time", async () => {
+		const storage = await AuthStorage.create(":memory:");
+		storages.push(storage);
+		await storage.credentials.set("anthropic", [
+			{
+				type: "oauth" as const,
+				access: "cedar",
+				refresh: "cedar",
+				expires: Date.now() + 60_000,
+				accountId: "acct-cedar",
+			},
+			{
+				type: "oauth" as const,
+				access: "sibling",
+				refresh: "sibling",
+				expires: Date.now() + 60_000,
+				accountId: "acct-sibling",
+			},
+		]);
+		const storedCredentials = storage.credentials.list("anthropic");
+		const cedarId = storedCredentials.find(
+			row => row.credential.type === "oauth" && row.credential.accountId === "acct-cedar",
+		)?.id;
+		const siblingId = storedCredentials.find(
+			row => row.credential.type === "oauth" && row.credential.accountId === "acct-sibling",
+		)?.id;
+		if (cedarId === undefined || siblingId === undefined) throw new Error("expected both stored Claude accounts");
+		storage.setAccountPolicies({
+			accountPolicies: [
+				{ provider: "anthropic", account: { accountId: "acct-cedar" }, drainFirst: true },
+				{ provider: "anthropic", account: { accountId: "acct-sibling" }, drainFirst: true },
+			],
+			defaultReservePct: 10,
+		});
+		// Both accounts exhaust the same weekly window, so they share one natural reset time.
+		const windowResetsAt = Date.now() + 90 * 60_000;
+		const resetReport = (accountId: string, creditId: string): UsageReport => ({
+			provider: "anthropic",
+			fetchedAt: Date.now(),
+			limits: [{ ...limit("anthropic:7d", 1), window: { id: "7d", label: "7d", resetsAt: windowResetsAt } }],
+			metadata: { accountId },
+			resetCredits: {
+				availableCount: 1,
+				redeemableCount: 1,
+				eligible: true,
+				nextCreditId: creditId,
+				credits: [{ id: creditId, usable: true, clears: ["anthropic:7d"] }],
+			},
+		});
+		spyOn(storage.usage, "reports").mockResolvedValue([
+			resetReport("acct-cedar", "cedar-credit"),
+			resetReport("acct-sibling", "sibling-credit"),
+		]);
+		spyOn(storage.usage, "report").mockImplementation(async (_provider, credential) =>
+			credential.type === "oauth" && credential.accountId === "acct-sibling"
+				? resetReport("acct-sibling", "sibling-credit")
+				: resetReport("acct-cedar", "cedar-credit"),
+		);
+		spyOn(storage.resets, "list").mockResolvedValue([
+			{ ...status(resetReport("acct-cedar", "cedar-credit"), ["anthropic:7d"]), credentialId: cedarId },
+			{ ...status(resetReport("acct-sibling", "sibling-credit"), ["anthropic:7d"]), credentialId: siblingId },
+		]);
+		const redeem = spyOn(storage.resets, "redeem").mockResolvedValue({
+			ok: true,
+			code: "reset",
+			provider: "anthropic",
+		});
+		const warn = spyOn(logger, "warn").mockImplementation(() => {});
+		const settings = Settings.isolated();
+		cfgClaudeResetsAutoRedeem5h.set(settings, "no");
+		cfgClaudeResetsAutoRedeemWeekly.set(settings, "no");
+		cfgClaudeResetsAutoRedeemFable.set(settings, "no");
+		const hook = createGatewayClaudeResetHook({ storage, settings, coordinator: coordinator() });
+		await runGatewayClaudeResetSweep({
+			storage,
+			signal: new AbortController().signal,
+			hook: async context => hook(context),
+		});
+		expect(redeem).not.toHaveBeenCalled();
+		const needs = warn.mock.calls.filter(([message]) => message === NEEDS_APPROVAL);
+		expect(needs).toHaveLength(2);
+		expect(needs[0]?.[1]).toEqual(expect.objectContaining({ accountId: "acct-cedar" }));
+		expect(needs[1]?.[1]).toEqual(expect.objectContaining({ accountId: "acct-sibling" }));
+	});
+
 	it("sweeps only drain-first accounts when auto-redeem is no", async () => {
 		const storage = await AuthStorage.create(":memory:");
 		storages.push(storage);
@@ -428,10 +649,11 @@ describe("gateway Claude reset hook", () => {
 			accountPolicies: [{ provider: "anthropic", account: { accountId: "acct-cedar" }, drainFirst: true }],
 			defaultReservePct: 10,
 		});
+		const windowResetsAt = Date.now() + 90 * 60_000;
 		const resetReport = (accountId: string, creditId: string): UsageReport => ({
 			provider: "anthropic",
 			fetchedAt: Date.now(),
-			limits: [limit("anthropic:7d", 1)],
+			limits: [{ ...limit("anthropic:7d", 1), window: { id: "7d", label: "7d", resetsAt: windowResetsAt } }],
 			metadata: { accountId },
 			resetCredits: {
 				availableCount: 1,
@@ -461,6 +683,9 @@ describe("gateway Claude reset hook", () => {
 			provider: "anthropic",
 		});
 		const settings = Settings.isolated();
+		cfgClaudeResetsApprovedRedeems.set(settings, [
+			approval(windowResetsAt, "2099-01-01T00:00:00.000Z", "acct-cedar"),
+		]);
 		cfgClaudeResetsAutoRedeem5h.set(settings, "no");
 		cfgClaudeResetsAutoRedeemWeekly.set(settings, "no");
 		cfgClaudeResetsAutoRedeemFable.set(settings, "no");

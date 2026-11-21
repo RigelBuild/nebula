@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec" //nolint:depguard // The holder drives tmux, systemctl and wave-host directly, without a shell.
 	"runtime"
+	"syscall"
 	"time"
 
 	"github.com/RigelBuild/nebula/tools/wave-seat-holder/internal/socket"
@@ -29,6 +30,9 @@ func ProductionDeps(getenv socket.Environment, stdout, stderr io.Writer) Deps {
 		Sleep:    sleepContext,
 		Files: Files{
 			Mkdir:     os.MkdirAll,
+			Lstat:     os.Lstat,
+			Chmod:     os.Chmod,
+			Getuid:    os.Getuid,
 			WriteFile: writePrivateFile,
 			Readdir:   readDirNames,
 			ReadText:  readFileText,
@@ -58,7 +62,7 @@ var seatConfig []byte
 // writePrivateFile writes data to path and sets perm even when the file already exists, so the mode is never left stale.
 func writePrivateFile(path string, data []byte, perm fs.FileMode) error {
 	//nolint:gosec // path is the seat's own directory, created by the holder.
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, perm)
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC|syscall.O_NOFOLLOW, perm)
 	if err != nil {
 		return err
 	}

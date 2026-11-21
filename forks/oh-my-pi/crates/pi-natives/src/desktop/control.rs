@@ -1897,7 +1897,7 @@ mod tests {
 		let lease = KernelLease::at(&path).expect("lease");
 		// A process spawned while the lease is held carries a copy of its
 		// descriptor until it execs; this one keeps it.
-		let mut copy = std::process::Command::new("/bin/cat")
+		let mut copy = std::process::Command::new("cat")
 			.stdin(std::process::Stdio::piped())
 			.stdout(lease.file.try_clone().expect("descriptor copy"))
 			.spawn()
@@ -1922,7 +1922,7 @@ mod tests {
 		let (ownership, _handed) = shared_ownership().expect("held lock is shared");
 		// Started as the release helper is: the shared lock is its standard
 		// output, and it exits when its standard input ends.
-		let mut helper = std::process::Command::new("/bin/cat")
+		let mut helper = std::process::Command::new("cat")
 			.stdin(std::process::Stdio::piped())
 			.stdout(ownership)
 			.spawn()
@@ -1946,7 +1946,7 @@ mod tests {
 		}
 		let owner = KernelOwner::acquire(None).expect("test kernel owner");
 		let (ownership, handed) = shared_ownership().expect("held lock is shared");
-		let mut helper = std::process::Command::new("/bin/cat")
+		let mut helper = std::process::Command::new("cat")
 			.stdin(std::process::Stdio::piped())
 			.stdout(ownership)
 			.spawn()
@@ -1963,7 +1963,7 @@ mod tests {
 			.file
 			.try_clone()
 			.expect("descriptor copy");
-		let mut copy = std::process::Command::new("/bin/cat")
+		let mut copy = std::process::Command::new("cat")
 			.stdin(std::process::Stdio::piped())
 			.stdout(copy)
 			.spawn()

@@ -500,6 +500,10 @@
           host-bao-seal = pkgs.mkShell {
             packages = basePackages ++ checkTools.host-bao-seal pkgs;
           };
+          # The transcript-archive tests drive restic repositories; the default shell stays lean.
+          transcript-archive = pkgs.mkShell {
+            packages = basePackages ++ [ pkgs.restic ];
+          };
         });
     };
 }

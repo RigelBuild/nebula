@@ -31,7 +31,7 @@ unfinished pass, records a scan and runs one restic backup. Run it from a timer.
 
 The repository password is generated once in --state-dir and escrowed,
 age-encrypted, to --escrow-out before the repository is initialized. RESTIC_*
-variables in the environment are ignored. For an R2 (s3:) repository, set
+variables in the environment are ignored. For an S3 (s3:) repository, set
 AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY; they are passed through to restic.
 
 Exit 0 means the pass was acked. Any other result exits non-zero with one line

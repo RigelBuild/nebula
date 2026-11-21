@@ -211,8 +211,9 @@ jobs:
                 install -m 0755 "$nixOut/bin/$name" "$stage/bin/$name"
               done
             else
+              main=$(jq -r .main <<<"$b")
               for name in $(jq -r '.binaries[]' <<<"$b"); do
-                go -C "$project" build -trimpath -o "$stage/bin/$name" .
+                go -C "$project" build -trimpath -o "$stage/bin/$name" "$main"
               done
             fi
             # Every kind: a consumer runs the asset without this build's /nix/store.

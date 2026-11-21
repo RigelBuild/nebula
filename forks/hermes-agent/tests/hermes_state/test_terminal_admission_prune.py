@@ -86,3 +86,25 @@ def test_the_prune_set_excludes_live_rows_and_the_latest_row(tmp_path):
             'unknown row must stay'
         assert rt.find_session_admission(db, principal_id='api', session_id='stuck', request_id='s1') is not None, \
             'terminal row of a session with unknown work must stay'
+
+
+def test_a_pruned_live_request_stays_refused_after_the_second_horizon(tmp_path):
+    from hermes_state_terminal import ADMISSION_PREFIX, identity_key
+    with SessionDB(tmp_path / 'state.db') as db:
+        epoch = rt.begin_runtime_epoch(db, instance_id='owner')
+        db.create_session('live', source='api_server')
+        first, first_id = _settle(db, epoch, 'live', 'r1', 'charge card')
+        _settle(db, epoch, 'live', 'r2', 'second')
+        _age(db, 'live')
+        db.prune_sessions(older_than_days=90)
+
+        # Age the first pass's tombstone past the retry horizon, then sweep again.
+        old = time.time() - IDLE_DAYS * 86400
+        db._execute_write(lambda conn: conn.execute(
+            "UPDATE state_meta SET value=json_set(value, '$.retired_at', ?) WHERE key=?",
+            (old, ADMISSION_PREFIX + first_id)))
+        db.prune_sessions(older_than_days=90)
+
+        assert db.get_meta(identity_key('api', 'live', 'r1')) is not None, 'the identity pointer was reclaimed'
+        with pytest.raises(rt.RuntimeStoreError, match='not_found'):
+            rt.admit_session_input(db, epoch=epoch, **first)

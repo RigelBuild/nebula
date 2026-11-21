@@ -3,6 +3,7 @@ package seat
 import (
 	"context"
 	"errors"
+	"io/fs"
 	"strings"
 	"testing"
 )
@@ -21,7 +22,7 @@ func TestStartDarwinStartsSeatsThroughWaveHost(t *testing.T) {
 		args: []string{
 			"seat-start", "--name", "seat",
 			"--socket", "/home/test/agents/run/seats/seat.sock",
-			"--conf", testSeatConf,
+			"--conf", testDarwinSeatConf,
 			"--cwd", "/srv/agent",
 			"--", "omp",
 		},
@@ -163,11 +164,39 @@ func assertContainsLine(t *testing.T, lines []string, want string) {
 	}
 }
 
-func TestStartReportsASeatConfigFailureBeforeStartingAUnit(t *testing.T) {
-	fake := fakeDeps(fakeOptions{seatConfigErr: errors.New("seat.conf is missing")})
+func TestStartWritesTheEmbeddedSeatConfigIntoTheSeatDirectoryBeforeStartingAUnit(t *testing.T) {
+	fake := fakeDeps(fakeOptions{})
+	assertDeepEqual(t, Run(context.Background(), []string{"start", "--name", "seat", "--", "omp"}, fake.deps), 0)
+	if len(fake.writes) != 1 {
+		t.Fatalf("writes = %d, want 1 seat config write", len(fake.writes))
+	}
+	write := fake.writes[0]
+	assertDeepEqual(t, write.path, testSeatConf)
+	assertDeepEqual(t, write.perm, fs.FileMode(0o600))
+	assertDeepEqual(t, write.data, sourceSeatConf(t))
+}
+
+func TestStartPassesTheWrittenSeatConfigToTmuxWithoutAShareDirectory(t *testing.T) {
+	fake := fakeDeps(fakeOptions{})
+	assertDeepEqual(t, Run(context.Background(), []string{"start", "--name", "seat", "--", "omp"}, fake.deps), 0)
+	if len(fake.writes) != 1 {
+		t.Fatalf("writes = %d, want 1 seat config write", len(fake.writes))
+	}
+	assertDeepEqual(t, fake.calls[1], recordedCall{
+		command: systemdRunCommand,
+		args: []string{
+			"--user", "--unit=test-seat-seat", "--slice=test-agents.slice",
+			"-p", "Type=exec", "--collect", "--",
+			testTmux, "-S", testSocket, "-f", fake.writes[0].path, "-D",
+		},
+	})
+}
+
+func TestStartReportsAConfigWriteFailureBeforeStartingAUnit(t *testing.T) {
+	fake := fakeDeps(fakeOptions{writeErr: errors.New("no space left on device")})
 	assertDeepEqual(t, Run(context.Background(), []string{"start", "--name", "seat", "--", "omp"}, fake.deps), 1)
 	assertDeepEqual(t, recordedCommands(fake.calls), []string{systemctlCommand})
-	assertContainsLine(t, fake.errors, "seat.conf is missing")
+	assertContainsLine(t, fake.errors, "write seat config: no space left on device")
 }
 
 func TestStartStopsTheUnitWhenTheWorkingDirectoryCannotBeRead(t *testing.T) {

@@ -1,7 +1,8 @@
 # wave-seat-holder
 
 A Go CLI that runs each agent process in its own tmux server, managed by a
-transient systemd user unit. It reads `seat.conf` beside its binary. Zellij
+transient systemd user unit. It embeds `seat.conf` and writes it, mode 0600, into
+the seat's socket directory before launch, so it needs no share directory. Zellij
 panes attach to the tmux session and can be restarted without stopping the
 agent.
 

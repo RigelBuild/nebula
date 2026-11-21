@@ -26,20 +26,6 @@ func TestProcessIDAcceptsPositiveDecimalsOnly(t *testing.T) {
 	}
 }
 
-func TestSeatConfigForMapsBinDirectoryToShareDirectory(t *testing.T) {
-	// The nix install puts the binary in <prefix>/bin and seat.conf in <prefix>/share/wave-seat-holder.
-	tests := []struct {
-		exe  string
-		want string
-	}{
-		{exe: "/nix/store/abc-wave/bin/wave-seat-holder", want: "/nix/store/abc-wave/share/wave-seat-holder/seat.conf"},
-		{exe: "/usr/local/bin/wave-seat-holder", want: "/usr/local/share/wave-seat-holder/seat.conf"},
-	}
-	for _, test := range tests {
-		assertDeepEqual(t, seatConfigFor(test.exe), test.want)
-	}
-}
-
 func TestSpawnCommandReturnsTheExitCodeOfACompletedChild(t *testing.T) {
 	result, err := spawnCommand(context.Background(), "sh", []string{"-c", "exit 3"}, false)
 	if err != nil {

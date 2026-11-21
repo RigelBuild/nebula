@@ -9,4 +9,4 @@ tasks:
     args: ["test", "./..."]
     env:
       CGO_ENABLED: "0"
-    inputs: ["**/*.go", "go.mod", "go.sum", "**/testdata/**/*", "seat.conf"]
+    inputs: ["**/*.go", "go.mod", "go.sum", "**/testdata/**/*", "internal/seat/seat.conf"]

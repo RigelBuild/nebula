@@ -120,16 +120,16 @@ func TestRealTmuxDeadLauncherStopsTheRealServerOnTheSeatSocket(t *testing.T) {
 		Now:   time.Now,
 		Sleep: sleepContext,
 		Files: Files{
-			Mkdir:    os.MkdirAll,
-			Readdir:  readDirNames,
-			ReadText: readFileText,
-			Connect:  connectSocket,
+			Mkdir:     os.MkdirAll,
+			WriteFile: writePrivateFile,
+			Readdir:   readDirNames,
+			ReadText:  readFileText,
+			Connect:   connectSocket,
 		},
-		Which:      func(string) (string, bool) { return tmux, true },
-		Spawn:      systemd.spawn,
-		SeatConfig: func() (string, error) { return filepath.Abs("../../seat.conf") },
-		Stdout:     func(string) {},
-		Stderr:     func(line string) { errs = append(errs, line) },
+		Which:  func(string) (string, bool) { return tmux, true },
+		Spawn:  systemd.spawn,
+		Stdout: func(string) {},
+		Stderr: func(line string) { errs = append(errs, line) },
 	}
 	if got := Run(context.Background(), []string{"start", "--name", "seat", "--", "sh", "-c", "exit 3"}, deps); got != 1 {
 		t.Fatalf("Run = %d, want 1", got)

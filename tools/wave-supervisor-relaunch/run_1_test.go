@@ -426,7 +426,7 @@ func testRunLiveSupervisorNoticesUnreadableServerArmsOnceAndAdopts(t *testing.T)
 }
 func finishRunHarnessDeps(h *runHarness) {
 	h.deps.EndpointsClear = func(context.Context) (bool, error) { return true, nil }
-	h.deps.ZellijSessions = func(context.Context) (string, error) { return "devbox [Created 1h ago]", nil }
+	h.deps.ZellijSessions = func(context.Context) (string, error) { return "viewer [Created 1h ago]", nil }
 	h.deps.ProbeZellij = func(context.Context) (bool, error) {
 		h.calls = append(h.calls, "probe")
 		if len(h.probe) == 0 {

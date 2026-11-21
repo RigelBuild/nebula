@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/RigelBuild/nebula/tools/go-lib/cotalreach"
+	"github.com/RigelBuild/nebula/tools/go-lib/relaunch"
 )
 
 // renamedConfig gives the deployment names that differ from the old literals. A path that still
@@ -126,4 +127,44 @@ func TestLiveZellijSessionTable(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestBuildDefaultDepsRunsConfiguredSpawnAndHolderArgv pins the spawn and seat-holder argv to the
+// config. A renamed command must reach the runner; the old literals would fail here.
+func TestBuildDefaultDepsRunsConfiguredSpawnAndHolderArgv(t *testing.T) {
+	cfg := renamedConfig()
+	cfg.SpawnCommand = "ops-spawn"
+	cfg.SeatHolderCLI = "ops-holders"
+	var argvs [][]string
+	runner := func(_ context.Context, args []string, _ string) (cotalreach.CommandResult, error) {
+		argvs = append(argvs, args)
+		return cotalreach.CommandResult{}, nil
+	}
+	deps := buildDefaultDeps(cfg, func(string) string { return "" }, toolPaths{}, relaunch.NodeFileSystem{}, runner,
+		func(context.Context, []string) (cotalreach.CommandResult, error) {
+			return cotalreach.CommandResult{}, nil
+		},
+		func(context.Context, []string) (string, error) { return "", nil },
+		func(context.Context) string { return "" })
+	if _, err := deps.Spawn(context.Background(), []string{"--lane", "alpha"}, "/work"); err != nil {
+		t.Fatalf("Spawn() error = %v", err)
+	}
+	if _, err := deps.Holders(context.Background()); err != nil {
+		t.Fatalf("Holders() error = %v", err)
+	}
+	want := [][]string{
+		{"ops-spawn", "--lane", "alpha"},
+		{"ops-holders", "list", "--json"},
+	}
+	if strings.Join(flattenArgvs(argvs), "|") != strings.Join(flattenArgvs(want), "|") {
+		t.Fatalf("runner argv = %q, want %q: spawn and seat-holder commands must come from config", argvs, want)
+	}
+}
+
+func flattenArgvs(argvs [][]string) []string {
+	out := make([]string, 0, len(argvs))
+	for _, argv := range argvs {
+		out = append(out, strings.Join(argv, " "))
+	}
+	return out
 }

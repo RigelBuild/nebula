@@ -61,6 +61,7 @@
         rjc-gates-image = "sha256-WJ+DzF3TydFNjIOq2MAQxEDI62G8xJcjTCAyMZtwgP0=";
         run-cd = "sha256-s9UTOYZs+Y7UQUbQuANYejHSr2QJb/GdqelRT8z0gOA=";
         ssh-orphan-reap = null;
+        transcript-archive = "sha256-vTUY8s1LAmccPFBLiJsOk/rAnXe3/980mpXEKSPdL1c=";
         wave-dreamer = "sha256-7K17JaXFsjf163g5PXCb5ng2gYdotnZ2IDKk8KFjNj0=";
         wave-host = "sha256-3/tNPMYKxKjwprceoPRjRJuTNBwJSJE4LD8grnh+haI=";
         wave-ledger = "sha256-9TnmijwY7K3fhUngJXQRcn+eoYEKMKo5qd2YYgpHnN8=";
@@ -126,6 +127,8 @@
         hk-hook = pkgs: [ pkgs.jujutsu ];
         # host-bao-seal's tests run a sops/age round-trip.
         host-bao-seal = pkgs: [ pkgs.sops pkgs.age ];
+        # transcript-archive's tests drive real restic repositories.
+        transcript-archive = pkgs: [ pkgs.restic ];
         # zellij-rss-watchdog's process tests start a grandchild with setsid.
         zellij-rss-watchdog = pkgs: [ pkgs.util-linux ];
       };
@@ -478,6 +481,10 @@
           # host-bao-seal's round-trip test runs sops and age-keygen.
           host-bao-seal = pkgs.mkShell {
             packages = basePackages ++ checkTools.host-bao-seal pkgs;
+          };
+          # The transcript-archive tests drive restic repositories; the default shell stays lean.
+          transcript-archive = pkgs.mkShell {
+            packages = basePackages ++ [ pkgs.restic ];
           };
         });
     };

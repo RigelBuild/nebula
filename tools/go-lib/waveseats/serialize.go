@@ -123,8 +123,9 @@ func (list SeatListV2) MarshalJSON() ([]byte, error) {
 	}{Version: list.Version, Revision: list.Revision, GenerationBase: list.GenerationBase, Seats: list.Seats, Operations: operations})
 }
 
-// SerializeSeatListV2 returns the validated, indented on-disk representation.
-func SerializeSeatListV2(list SeatListV2) ([]byte, error) {
+// SerializeSeatListV2 returns the validated, indented on-disk representation. A host not in hosts
+// is refused, so the writer cannot persist a seat the reader would reject.
+func SerializeSeatListV2(list SeatListV2, hosts HostSet) ([]byte, error) {
 	list.Version = 2
 	if list.Seats == nil {
 		list.Seats = []SeatEntryV2{}
@@ -139,7 +140,7 @@ func SerializeSeatListV2(list SeatListV2) ([]byte, error) {
 	data = bytes.ReplaceAll(data, []byte(`\u2028`), []byte(" "))
 	data = bytes.ReplaceAll(data, []byte(`\u2029`), []byte(" "))
 	data = append(data, '\n')
-	if _, err := ParseSeatListV2(string(data)); err != nil {
+	if _, err := ParseSeatListV2(string(data), hosts); err != nil {
 		return nil, err
 	}
 	return data, nil

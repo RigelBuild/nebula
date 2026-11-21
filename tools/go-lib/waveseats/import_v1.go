@@ -155,8 +155,9 @@ func parseV1OptionalFields(row map[string]json.RawMessage, where string, entry *
 	return nil
 }
 
-// ImportSeatListV1 maps a legacy list with the explicit import map and role policies.
-func ImportSeatListV1(text string, inputs ImportInputs) (SeatListV2, error) {
+// ImportSeatListV1 maps a legacy list with the explicit import map and role policies. Hosts in the
+// result are checked against hosts.
+func ImportSeatListV1(text string, inputs ImportInputs, hosts HostSet) (SeatListV2, error) {
 	legacy, err := ParseSeatListV1ForImport(text)
 	if err != nil {
 		return SeatListV2{}, err
@@ -195,7 +196,7 @@ func ImportSeatListV1(text string, inputs ImportInputs) (SeatListV2, error) {
 		seats = append(seats, entry)
 	}
 	list := SeatListV2{Version: 2, Revision: 1, Seats: seats}
-	if _, err := SerializeSeatListV2(list); err != nil {
+	if _, err := SerializeSeatListV2(list, hosts); err != nil {
 		return SeatListV2{}, err
 	}
 	return list, nil

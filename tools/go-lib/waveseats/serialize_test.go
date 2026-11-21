@@ -14,7 +14,7 @@ func TestSeatListV2PreservesOperationOrder(t *testing.T) {
 	for _, id := range []string{"z", "a"} {
 		op := Operation{OperationID: id, Principal: Principal{Kind: "operator", Operator: "test"}, Request: new(id), Name: new("alpha")}
 		var err error
-		current, err = CommitLocked(path, current, []SeatEntryV2{v2TestSeat("alpha")}, op, fs)
+		current, err = CommitLocked(path, current, []SeatEntryV2{v2TestSeat("alpha")}, op, fs, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -23,11 +23,11 @@ func TestSeatListV2PreservesOperationOrder(t *testing.T) {
 	if strings.Index(want, `test\",\"z`) >= strings.Index(want, `test\",\"a`) {
 		t.Fatal("operation keys are not in insertion order")
 	}
-	parsed, err := ParseSeatListV2(want)
+	parsed, err := ParseSeatListV2(want, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := SerializeSeatListV2(parsed)
+	got, err := SerializeSeatListV2(parsed, nil)
 	if err != nil || string(got) != want {
 		t.Fatalf("round trip changed bytes: %v\ngot %s\nwant %s", err, got, want)
 	}
@@ -36,11 +36,11 @@ func TestSeatListV2PreservesOperationOrder(t *testing.T) {
 func TestSeatListV2PreservesModelOrder(t *testing.T) {
 	text := strings.Replace(v2TestListWithRaw(`"x":1`), `,"x":1`, "", 1)
 	text = strings.Replace(text, `"limits":{}`, `"limits":{"perModel":{"z":{"tokens":1},"a":{"rpm":2}}}`, 1)
-	list, err := ParseSeatListV2(text)
+	list, err := ParseSeatListV2(text, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := SerializeSeatListV2(list)
+	got, err := SerializeSeatListV2(list, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,12 +57,12 @@ func TestSerializeSeatListV2SortsNewModelKeys(t *testing.T) {
 	}
 	list := v2TestList(1, "alpha")
 	list.Seats[0].Key.Limits.PerModel = models
-	first, err := SerializeSeatListV2(list)
+	first, err := SerializeSeatListV2(list, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for range 20 {
-		again, err := SerializeSeatListV2(list)
+		again, err := SerializeSeatListV2(list, nil)
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -6,10 +6,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
-func parseV2Entry(raw json.RawMessage, index int) (SeatEntryV2, error) {
+func parseV2Entry(raw json.RawMessage, index int, hosts HostSet) (SeatEntryV2, error) {
 	where := fmt.Sprintf("seats[%d]", index)
 	row, err := v2Object(raw, where, "name", "seatRevision", "cwd", "tab", "state", "restartGeneration", "parent", "note", "updatedAt", "host", "profile", "role", "roleTreeRevision", "key", "workspace", "persona")
 	if err != nil {
@@ -67,13 +68,13 @@ func parseV2Entry(raw json.RawMessage, index int) (SeatEntryV2, error) {
 	if entry.Key, err = validateV2Key(row["key"], where+".key"); err != nil {
 		return SeatEntryV2{}, err
 	}
-	if err := parseV2OptionalEntryFields(row, where, &entry); err != nil {
+	if err := parseV2OptionalEntryFields(row, where, &entry, hosts); err != nil {
 		return SeatEntryV2{}, err
 	}
 	return entry, nil
 }
 
-func parseV2OptionalEntryFields(row map[string]json.RawMessage, where string, entry *SeatEntryV2) error {
+func parseV2OptionalEntryFields(row map[string]json.RawMessage, where string, entry *SeatEntryV2, hosts HostSet) error {
 	var err error
 	if value, ok := row["parent"]; ok {
 		entry.Parent, err = parseV2Parent(value, where)
@@ -88,7 +89,7 @@ func parseV2OptionalEntryFields(row map[string]json.RawMessage, where string, en
 		}
 	}
 	if value, ok := row["host"]; ok {
-		entry.Host, err = parseV2Host(value, where)
+		entry.Host, err = parseV2Host(value, where, hosts)
 		if err != nil {
 			return err
 		}
@@ -112,15 +113,28 @@ func parseV2Note(raw json.RawMessage, where string) (*string, error) {
 	return &note, nil
 }
 
-func parseV2Host(raw json.RawMessage, where string) (*SeatHost, error) {
+func parseV2Host(raw json.RawMessage, where string, hosts HostSet) (*SeatHost, error) {
 	var host SeatHost
 	if err := json.Unmarshal(raw, &host); err != nil {
 		return nil, v2Fail(where+".host", "must be a configured host name")
 	}
-	if _, ok := AllowedSeatHosts[host]; !ok {
-		return nil, v2Fail(where+".host", "must be a configured host name")
+	if _, ok := hosts[host]; !ok {
+		return nil, v2Fail(where+".host", "must be one of the configured hosts: "+configuredHostNames(hosts))
 	}
 	return &host, nil
+}
+
+// configuredHostNames lists the set's host names in sorted order for an error message.
+func configuredHostNames(hosts HostSet) string {
+	if len(hosts) == 0 {
+		return "(none configured)"
+	}
+	names := make([]string, 0, len(hosts))
+	for host := range hosts {
+		names = append(names, string(host))
+	}
+	slices.Sort(names)
+	return strings.Join(names, ", ")
 }
 
 func rawText(raw json.RawMessage) (string, error) {

@@ -43,17 +43,17 @@ func TestValidSeatTimestamp(t *testing.T) {
 
 func TestParseSeatListV2(t *testing.T) {
 	t.Run("accepts a closed v2 list", func(t *testing.T) {
-		text, err := SerializeSeatListV2(v2TestList(1, "alpha"))
+		text, err := SerializeSeatListV2(v2TestList(1, "alpha"), nil)
 		if err != nil {
 			t.Fatal(err)
 		}
-		got, err := ParseSeatListV2(string(text))
+		got, err := ParseSeatListV2(string(text), nil)
 		if err != nil || got.Seats[0].Name != "alpha" {
 			t.Fatalf("parse = %#v, %v", got, err)
 		}
 	})
 	t.Run("refuses v1", func(t *testing.T) {
-		_, err := ParseSeatListV2(`{"version":1,"seats":[]}`)
+		_, err := ParseSeatListV2(`{"version":1,"seats":[]}`, nil)
 		if err == nil || !strings.Contains(err.Error(), "version must be 2") {
 			t.Fatalf("error = %v", err)
 		}
@@ -70,7 +70,7 @@ func TestParseSeatListV2(t *testing.T) {
 		{"padded tab", v2TestListWithTab(" agents"), "must not be blank or padded"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			_, err := ParseSeatListV2(test.text)
+			_, err := ParseSeatListV2(test.text, nil)
 			if err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("error = %v, want %q", err, test.want)
 			}

@@ -109,7 +109,7 @@ func TestCommitImportedSeatListV1CreatesBackupBeforeCommit(t *testing.T) {
 
 	_, err := CommitImportedSeatListV1Locked(path, func(string) (SeatListV2, error) {
 		return SeatListV2{GenerationBase: 7, Seats: []SeatEntryV2{}}, nil
-	}, operation, filesystem)
+	}, operation, filesystem, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -140,7 +140,7 @@ func TestCommitImportedSeatListV1AcceptsMatchingBackupOnRetry(t *testing.T) {
 
 	_, err := CommitImportedSeatListV1Locked(path, func(string) (SeatListV2, error) {
 		return SeatListV2{Seats: []SeatEntryV2{}}, nil
-	}, operation, filesystem)
+	}, operation, filesystem, nil)
 	if err != nil {
 		t.Fatalf("retry with matching backup: %v", err)
 	}
@@ -174,7 +174,7 @@ func TestCommitImportedSeatListV1RejectsDifferentBackupOnRetry(t *testing.T) {
 
 	_, err := CommitImportedSeatListV1Locked(path, func(string) (SeatListV2, error) {
 		return SeatListV2{Seats: []SeatEntryV2{}}, nil
-	}, operation, filesystem)
+	}, operation, filesystem, nil)
 	if err == nil || !strings.Contains(err.Error(), "does not match seat list") {
 		t.Fatalf("retry error = %v, want mismatched backup error", err)
 	}
@@ -220,7 +220,7 @@ func TestStoreLockPath(t *testing.T) {
 func testCommitCase1(t *testing.T, operation Operation) {
 	t.Helper()
 	fs := newMemoryStoreFS()
-	_, err := CommitLocked("/state/wave-seats.json", v2TestList(0), []SeatEntryV2{v2TestSeat("alpha")}, operation, fs)
+	_, err := CommitLocked("/state/wave-seats.json", v2TestList(0), []SeatEntryV2{v2TestSeat("alpha")}, operation, fs, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -244,11 +244,11 @@ func testCommitCase1(t *testing.T, operation Operation) {
 func testCommitCase2(t *testing.T, operation Operation) {
 	t.Helper()
 	fs := newMemoryStoreFS()
-	got, err := CommitLocked("/state/wave-seats.json", v2TestList(4), []SeatEntryV2{v2TestSeat("a")}, operation, fs)
+	got, err := CommitLocked("/state/wave-seats.json", v2TestList(4), []SeatEntryV2{v2TestSeat("a")}, operation, fs, nil)
 	if err != nil || got.Revision != 5 {
 		t.Fatalf("commit = %#v, %v", got, err)
 	}
-	loaded, err := LoadSeatListLocked("/state/wave-seats.json", fs)
+	loaded, err := LoadSeatListLocked("/state/wave-seats.json", fs, nil)
 	if err != nil || loaded.Revision != 5 {
 		t.Fatalf("load = %#v, %v", loaded, err)
 	}
@@ -258,13 +258,13 @@ func testCommitCase3(t *testing.T, operation Operation) {
 	t.Helper()
 	fs := newMemoryStoreFS()
 	original := Operation{OperationID: "first", Principal: operation.Principal, Request: new("request"), Name: new("alpha")}
-	current, err := CommitLocked("/state/wave-seats.json", v2TestList(0), []SeatEntryV2{v2TestSeat("alpha")}, original, fs)
+	current, err := CommitLocked("/state/wave-seats.json", v2TestList(0), []SeatEntryV2{v2TestSeat("alpha")}, original, fs, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for i := range 260 {
 		next := Operation{OperationID: strconv.Itoa(i), Principal: operation.Principal, Request: new(strconv.Itoa(i)), Name: new("alpha")}
-		current, err = CommitLocked("/state/wave-seats.json", current, []SeatEntryV2{v2TestSeat("alpha")}, next, fs)
+		current, err = CommitLocked("/state/wave-seats.json", current, []SeatEntryV2{v2TestSeat("alpha")}, next, fs, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -273,7 +273,7 @@ func testCommitCase3(t *testing.T, operation Operation) {
 	if err != nil || len(records) != 1 {
 		t.Fatalf("journal records=%d err=%v", len(records), err)
 	}
-	result, err := ReplayLocked("/state/wave-seats.json", original, "request", fs)
+	result, err := ReplayLocked("/state/wave-seats.json", original, "request", fs, nil)
 	if err != nil || result == nil || result.Revision != 1 {
 		t.Fatalf("replay=%#v err=%v", result, err)
 	}
@@ -284,7 +284,7 @@ func testCommitCase3(t *testing.T, operation Operation) {
 
 func testLoadRecoveryCase1(t *testing.T, path string) {
 	t.Helper()
-	_, err := LoadSeatListLocked(path, newMemoryStoreFS())
+	_, err := LoadSeatListLocked(path, newMemoryStoreFS(), nil)
 	if err == nil || !strings.Contains(err.Error(), "seat list "+path+" is missing") {
 		t.Fatalf("error=%v", err)
 	}
@@ -293,17 +293,17 @@ func testLoadRecoveryCase1(t *testing.T, path string) {
 func testLoadRecoveryCase2(t *testing.T, path string, op Operation) {
 	t.Helper()
 	fs := newMemoryStoreFS()
-	base, err := CommitLocked(path, v2TestList(0), []SeatEntryV2{}, op, fs)
+	base, err := CommitLocked(path, v2TestList(0), []SeatEntryV2{}, op, fs, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	fs.failRename = true
-	_, err = CommitLocked(path, base, []SeatEntryV2{v2TestSeat("beta")}, op, fs)
+	_, err = CommitLocked(path, base, []SeatEntryV2{v2TestSeat("beta")}, op, fs, nil)
 	if err == nil || !strings.Contains(err.Error(), "crash before rename") {
 		t.Fatalf("commit error=%v", err)
 	}
 	fs.failRename = false
-	loaded, err := LoadSeatListLocked(path, fs)
+	loaded, err := LoadSeatListLocked(path, fs, nil)
 	if err != nil || loaded.Revision != 2 || loaded.Seats[0].Name != "beta" {
 		t.Fatalf("load=%#v, %v", loaded, err)
 	}
@@ -314,12 +314,12 @@ func testLoadRecoveryCase3(t *testing.T, path string, op Operation) {
 	fs := newMemoryStoreFS()
 	fs.files[path] = []byte(`{"version":1,"seats":[]}`)
 	fs.failRename = true
-	_, err := CommitLocked(path, v2TestList(0), []SeatEntryV2{v2TestSeat("beta")}, op, fs)
+	_, err := CommitLocked(path, v2TestList(0), []SeatEntryV2{v2TestSeat("beta")}, op, fs, nil)
 	if err == nil {
 		t.Fatal("commit unexpectedly succeeded")
 	}
 	fs.failRename = false
-	loaded, err := LoadSeatListLocked(path, fs)
+	loaded, err := LoadSeatListLocked(path, fs, nil)
 	if err != nil || loaded.Seats[0].Name != "beta" {
 		t.Fatalf("load=%#v, %v", loaded, err)
 	}
@@ -328,12 +328,12 @@ func testLoadRecoveryCase3(t *testing.T, path string, op Operation) {
 func testLoadRecoveryCase4(t *testing.T, path string, op Operation) {
 	t.Helper()
 	fs := newMemoryStoreFS()
-	_, err := CommitLocked(path, v2TestList(0), []SeatEntryV2{v2TestSeat("gamma")}, op, fs)
+	_, err := CommitLocked(path, v2TestList(0), []SeatEntryV2{v2TestSeat("gamma")}, op, fs, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	fs.events = nil
-	_, err = LoadSeatListLocked(path, fs)
+	_, err = LoadSeatListLocked(path, fs, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -362,7 +362,7 @@ func testJournalRecoveryCase2(t *testing.T, good string) {
 func testJournalRecoveryCase3(t *testing.T, operation Operation) {
 	t.Helper()
 	fs := newMemoryStoreFS()
-	_, err := CommitLocked("/state/wave-seats.json", v2TestList(0), []SeatEntryV2{v2TestSeat("alpha")}, operation, fs)
+	_, err := CommitLocked("/state/wave-seats.json", v2TestList(0), []SeatEntryV2{v2TestSeat("alpha")}, operation, fs, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -370,7 +370,7 @@ func testJournalRecoveryCase3(t *testing.T, operation Operation) {
 	fs.files[path] = append(fs.files[path], []byte(`{"revision":`)...)
 	original := append([]byte(nil), fs.files[path]...)
 	fs.failWrite = true
-	_, err = LoadSeatListLocked("/state/wave-seats.json", fs)
+	_, err = LoadSeatListLocked("/state/wave-seats.json", fs, nil)
 	if err == nil || !strings.Contains(err.Error(), "interrupted write") {
 		t.Fatalf("load error=%v", err)
 	}
@@ -382,14 +382,14 @@ func testJournalRecoveryCase3(t *testing.T, operation Operation) {
 func testJournalRecoveryCase4(t *testing.T, operation Operation) {
 	t.Helper()
 	fs := newMemoryStoreFS()
-	first, err := CommitLocked("/state/wave-seats.json", v2TestList(0), []SeatEntryV2{v2TestSeat("alpha")}, operation, fs)
+	first, err := CommitLocked("/state/wave-seats.json", v2TestList(0), []SeatEntryV2{v2TestSeat("alpha")}, operation, fs, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	path := JournalPath("/state/wave-seats.json")
 	fs.files[path] = append(fs.files[path], []byte(`{"revision":`)...)
 	fs.events = nil
-	recovered, err := LoadSeatListLocked("/state/wave-seats.json", fs)
+	recovered, err := LoadSeatListLocked("/state/wave-seats.json", fs, nil)
 	if err != nil || recovered.Revision != first.Revision {
 		t.Fatalf("recovered=%#v err=%v", recovered, err)
 	}
@@ -406,7 +406,7 @@ func testJournalRecoveryCase4(t *testing.T, operation Operation) {
 		t.Fatalf("torn tail was not durably repaired on load: %v", fs.events)
 	}
 	fs.events = nil
-	_, err = CommitLocked("/state/wave-seats.json", recovered, []SeatEntryV2{v2TestSeat("beta")}, operation, fs)
+	_, err = CommitLocked("/state/wave-seats.json", recovered, []SeatEntryV2{v2TestSeat("beta")}, operation, fs, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

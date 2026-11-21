@@ -22,7 +22,7 @@ func TestSeatListV1ImportParsing(t *testing.T) {
 func TestV1ImportPreservesParent(t *testing.T) {
 	legacy := `{"version":1,"seats":[{"name":"alice","cwd":"/work/alice","state":"active","updatedAt":"` + v2TestStamp + `","parent":"bob"},{"name":"bob","cwd":"/work/bob","state":"active","updatedAt":"` + v2TestStamp + `"}]}`
 	fields := ImportSeatFields{Tab: "Build", Profile: "worker", Role: "worker", Workspace: "workspace", Persona: "alice", Key: KeyRequest{Routing: map[Provider]any{}}}
-	list, err := ImportSeatListV1(legacy, ImportInputs{Seats: map[string]ImportSeatFields{"alice": fields, "bob": fields}, Policy: map[string]RolePolicy{"worker": {PolicyID: "policy"}}})
+	list, err := ImportSeatListV1(legacy, ImportInputs{Seats: map[string]ImportSeatFields{"alice": fields, "bob": fields}, Policy: map[string]RolePolicy{"worker": {PolicyID: "policy"}}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,7 +47,7 @@ func TestV2ImportMapAndExplicitLegacyMapping(t *testing.T) {
 		t.Fatal(err)
 	}
 	fields := importMap["lead"]
-	list, err := ImportSeatListV1(legacy, ImportInputs{Seats: importMap, Policy: policies})
+	list, err := ImportSeatListV1(legacy, ImportInputs{Seats: importMap, Policy: policies}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +61,7 @@ func TestV2ImportMapAndExplicitLegacyMapping(t *testing.T) {
 		{name: "unknown role", inputs: ImportInputs{Seats: map[string]ImportSeatFields{"lead": func() ImportSeatFields { value := fields; value.Role = "unknown.role"; return value }()}, Policy: policies}, want: "role unknown.role has no policy"},
 	} {
 		t.Run(invalid.name, func(t *testing.T) {
-			_, err := ImportSeatListV1(legacy, invalid.inputs)
+			_, err := ImportSeatListV1(legacy, invalid.inputs, nil)
 			if err == nil || !strings.Contains(err.Error(), invalid.want) {
 				t.Fatalf("error=%v want %q", err, invalid.want)
 			}
@@ -91,7 +91,7 @@ func TestV1ImportSkipsSeatAbsentFromMap(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	list, err := ImportSeatListV1(legacy, ImportInputs{Seats: importMap, Policy: policies})
+	list, err := ImportSeatListV1(legacy, ImportInputs{Seats: importMap, Policy: policies}, nil)
 	if err != nil {
 		t.Fatalf("absent v1 seat refused the import: %v", err)
 	}
@@ -116,7 +116,7 @@ func TestV1ImportRefusesMapEntryAbsentFromV1(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = ImportSeatListV1(legacy, ImportInputs{Seats: importMap, Policy: policies})
+	_, err = ImportSeatListV1(legacy, ImportInputs{Seats: importMap, Policy: policies}, nil)
 	if err == nil || !strings.Contains(err.Error(), "import map has unknown seat extra") {
 		t.Fatalf("error=%v, want unknown map seat refusal", err)
 	}
@@ -134,7 +134,7 @@ func TestImportMapParsesSharedProviderRouting(t *testing.T) {
 func TestV1ImportOmitsRetiredSeatWithoutMapEntry(t *testing.T) {
 	legacy := `{"version":1,"seats":[{"name":"kept","cwd":"/work/kept","state":"active","updatedAt":"` + v2TestStamp + `"},{"name":"retired","cwd":"/work/retired","state":"retired","updatedAt":"` + v2TestStamp + `"}]}`
 	fields := ImportSeatFields{Tab: "Build", Profile: "worker", Role: "worker", RoleTreeRevision: 1, Workspace: "kept", Persona: "kept", Key: KeyRequest{Routing: map[Provider]any{}}}
-	list, err := ImportSeatListV1(legacy, ImportInputs{Seats: map[string]ImportSeatFields{"kept": fields}, Policy: map[string]RolePolicy{"worker": {PolicyID: "policy"}}})
+	list, err := ImportSeatListV1(legacy, ImportInputs{Seats: map[string]ImportSeatFields{"kept": fields}, Policy: map[string]RolePolicy{"worker": {PolicyID: "policy"}}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

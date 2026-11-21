@@ -99,8 +99,9 @@ func seatTimestampFractionIsZero(value string) bool {
 	return true
 }
 
-// ParseSeatListV2 parses a closed v2 list, refusing unknown keys and duplicate names.
-func ParseSeatListV2(text string) (SeatListV2, error) {
+// ParseSeatListV2 parses a closed v2 list, refusing unknown keys, duplicate names, and any host
+// not in hosts.
+func ParseSeatListV2(text string, hosts HostSet) (SeatListV2, error) {
 	var raw json.RawMessage
 	if err := json.Unmarshal([]byte(text), &raw); err != nil {
 		return SeatListV2{}, fmt.Errorf("seat list v2: invalid JSON: %w", err)
@@ -117,7 +118,7 @@ func ParseSeatListV2(text string) (SeatListV2, error) {
 	if err != nil {
 		return SeatListV2{}, err
 	}
-	seats, err := parseV2Seats(root["seats"])
+	seats, err := parseV2Seats(root["seats"], hosts)
 	if err != nil {
 		return SeatListV2{}, err
 	}
@@ -129,7 +130,7 @@ func ParseSeatListV2(text string) (SeatListV2, error) {
 		}
 	}
 	if rawOperations, ok := root["operations"]; ok {
-		list.Operations, list.operationOrder, err = parseV2Operations(rawOperations)
+		list.Operations, list.operationOrder, err = parseV2Operations(rawOperations, hosts)
 		if err != nil {
 			return SeatListV2{}, err
 		}
@@ -137,7 +138,7 @@ func ParseSeatListV2(text string) (SeatListV2, error) {
 	return list, nil
 }
 
-func parseV2Seats(raw json.RawMessage) ([]SeatEntryV2, error) {
+func parseV2Seats(raw json.RawMessage, hosts HostSet) ([]SeatEntryV2, error) {
 	var input []json.RawMessage
 	if err := json.Unmarshal(raw, &input); err != nil || input == nil {
 		return nil, v2Fail("seats", "must be an array")
@@ -145,7 +146,7 @@ func parseV2Seats(raw json.RawMessage) ([]SeatEntryV2, error) {
 	seats := make([]SeatEntryV2, 0, len(input))
 	seen := make(map[string]struct{}, len(input))
 	for index, rawSeat := range input {
-		seat, err := parseV2Entry(rawSeat, index)
+		seat, err := parseV2Entry(rawSeat, index, hosts)
 		if err != nil {
 			return nil, err
 		}
@@ -201,7 +202,7 @@ func validateV2Parents(seats []SeatEntryV2) error {
 	return nil
 }
 
-func parseV2Operations(raw json.RawMessage) (map[string]OperationResult, []string, error) {
+func parseV2Operations(raw json.RawMessage, hosts HostSet) (map[string]OperationResult, []string, error) {
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	start, err := decoder.Token()
 	if err != nil || start != json.Delim('{') {
@@ -222,7 +223,7 @@ func parseV2Operations(raw json.RawMessage) (map[string]OperationResult, []strin
 		if err := decoder.Decode(&rawRecord); err != nil {
 			return nil, nil, v2Fail("operations", "must be an object")
 		}
-		operation, err := parseV2Operation(id, rawRecord)
+		operation, err := parseV2Operation(id, rawRecord, hosts)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -234,7 +235,7 @@ func parseV2Operations(raw json.RawMessage) (map[string]OperationResult, []strin
 	return operations, order, nil
 }
 
-func parseV2Operation(id string, raw json.RawMessage) (OperationResult, error) {
+func parseV2Operation(id string, raw json.RawMessage, hosts HostSet) (OperationResult, error) {
 	where := "operations." + id
 	row, err := v2Object(raw, where, "requestDigest", "result")
 	if err != nil {
@@ -248,19 +249,19 @@ func parseV2Operation(id string, raw json.RawMessage) (OperationResult, error) {
 	if err != nil {
 		return OperationResult{}, err
 	}
-	result, err := parseV2Mutation(resultRaw, where)
+	result, err := parseV2Mutation(resultRaw, where, hosts)
 	if err != nil {
 		return OperationResult{}, err
 	}
 	return OperationResult{RequestDigest: requestDigest, Result: result}, nil
 }
 
-func parseV2Mutation(raw map[string]json.RawMessage, where string) (SeatMutation, error) {
+func parseV2Mutation(raw map[string]json.RawMessage, where string, hosts HostSet) (SeatMutation, error) {
 	revision, err := v2Uint(raw, "revision", where+".result")
 	if err != nil {
 		return SeatMutation{}, err
 	}
-	entry, err := parseV2Entry(raw["entry"], 0)
+	entry, err := parseV2Entry(raw["entry"], 0, hosts)
 	if err != nil {
 		return SeatMutation{}, err
 	}

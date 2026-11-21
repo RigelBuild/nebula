@@ -88,10 +88,11 @@ const (
 // SeatHost identifies the machine assigned to a seat.
 type SeatHost string
 
-// AllowedSeatHosts is the set of host names a seat's host field may take. The caller sets it
-// from its own configuration before parsing. It has no default, so with no hosts configured
-// every seat that names a host is refused.
-var AllowedSeatHosts = map[SeatHost]struct{}{}
+// HostSet is the set of host names a seat's host field may take. The caller builds it from its
+// own configuration and passes it to every function that parses or loads a seat list. An empty
+// or nil set refuses every host, so a caller that configures no hosts cannot accept a seat that
+// names one.
+type HostSet map[SeatHost]struct{}
 
 // SeatEntryV2 describes a single v2 seat.
 type SeatEntryV2 struct {

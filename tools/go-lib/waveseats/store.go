@@ -196,8 +196,9 @@ func ParseJournalRecords(text string) ([]JournalRecord, error) {
 }
 
 // LoadSeatListLocked repairs the journal and loads the current v2 list. Caller holds the seat lock.
-func LoadSeatListLocked(listPath string, filesystem StoreFileSystem) (SeatListV2, error) {
-	if err := rollForward(listPath, filesystem); err != nil {
+// Every host in the list must be in hosts.
+func LoadSeatListLocked(listPath string, filesystem StoreFileSystem, hosts HostSet) (SeatListV2, error) {
+	if err := rollForward(listPath, filesystem, hosts); err != nil {
 		return SeatListV2{}, err
 	}
 	text, err := readOptional(filesystem, listPath)
@@ -207,7 +208,7 @@ func LoadSeatListLocked(listPath string, filesystem StoreFileSystem) (SeatListV2
 	if text == nil {
 		return SeatListV2{}, fmt.Errorf("seat list %s is missing", listPath)
 	}
-	list, err := ParseSeatListV2(string(text))
+	list, err := ParseSeatListV2(string(text), hosts)
 	if err == nil {
 		return list, nil
 	}
@@ -220,7 +221,7 @@ func LoadSeatListLocked(listPath string, filesystem StoreFileSystem) (SeatListV2
 	return SeatListV2{}, err
 }
 
-func rollForward(listPath string, filesystem StoreFileSystem) error {
+func rollForward(listPath string, filesystem StoreFileSystem, hosts HostSet) error {
 	journalBytes, err := readOptional(filesystem, JournalPath(listPath))
 	if err != nil || journalBytes == nil {
 		return err
@@ -244,7 +245,7 @@ func rollForward(listPath string, filesystem StoreFileSystem) error {
 	}
 	currentRevision := uint64(0)
 	if current != nil {
-		list, parseErr := ParseSeatListV2(string(current))
+		list, parseErr := ParseSeatListV2(string(current), hosts)
 		if parseErr == nil {
 			currentRevision = list.Revision
 		} else {
@@ -292,7 +293,7 @@ func writeAndSwap(path string, data []byte, filesystem StoreFileSystem) error {
 }
 
 // CommitLocked writes a journaled revision and compacts the journal to its latest record.
-func CommitLocked(listPath string, current SeatListV2, next []SeatEntryV2, operation Operation, filesystem StoreFileSystem) (SeatListV2, error) {
+func CommitLocked(listPath string, current SeatListV2, next []SeatEntryV2, operation Operation, filesystem StoreFileSystem, hosts HostSet) (SeatListV2, error) {
 	revision := current.Revision + 1
 	operations := maps.Clone(current.Operations)
 	order := slices.Clone(current.operationOrder)
@@ -318,7 +319,7 @@ func CommitLocked(listPath string, current SeatListV2, next []SeatEntryV2, opera
 		committed.Operations = operations
 		committed.operationOrder = order
 	}
-	encoded, err := SerializeSeatListV2(committed)
+	encoded, err := SerializeSeatListV2(committed, hosts)
 	if err != nil {
 		return SeatListV2{}, err
 	}
@@ -347,15 +348,15 @@ func CommitLocked(listPath string, current SeatListV2, next []SeatEntryV2, opera
 }
 
 // LoadSeatList loads and repairs a list while holding the shared seat-list lock.
-func LoadSeatList(ctx context.Context, listPath string, filesystem StoreFileSystem) (SeatListV2, error) {
+func LoadSeatList(ctx context.Context, listPath string, filesystem StoreFileSystem, hosts HostSet) (SeatListV2, error) {
 	var list SeatListV2
-	err := WithSeatListLock(ctx, listPath, func() error { var err error; list, err = LoadSeatListLocked(listPath, filesystem); return err })
+	err := WithSeatListLock(ctx, listPath, func() error { var err error; list, err = LoadSeatListLocked(listPath, filesystem, hosts); return err })
 	return list, err
 }
 
 // ReplayLocked returns a stored result or refuses a reused operation ID. Caller holds the lock.
-func ReplayLocked(listPath string, operation Operation, request string, filesystem StoreFileSystem) (*SeatMutation, error) {
-	list, err := LoadSeatListLocked(listPath, filesystem)
+func ReplayLocked(listPath string, operation Operation, request string, filesystem StoreFileSystem, hosts HostSet) (*SeatMutation, error) {
+	list, err := LoadSeatListLocked(listPath, filesystem, hosts)
 	if err != nil {
 		return nil, err
 	}
@@ -380,7 +381,7 @@ func ReplayLocked(listPath string, operation Operation, request string, filesyst
 }
 
 // CommitImportedSeatListV1Locked replaces a v1 list during its one-time import.
-func CommitImportedSeatListV1Locked(listPath string, convert func(string) (SeatListV2, error), operation Operation, filesystem StoreFileSystem) (SeatListV2, error) {
+func CommitImportedSeatListV1Locked(listPath string, convert func(string) (SeatListV2, error), operation Operation, filesystem StoreFileSystem, hosts HostSet) (SeatListV2, error) {
 	journal, err := readOptional(filesystem, JournalPath(listPath))
 	if err != nil {
 		return SeatListV2{}, err
@@ -419,7 +420,7 @@ func CommitImportedSeatListV1Locked(listPath string, convert func(string) (SeatL
 	if err := filesystem.FsyncDir(filepath.Dir(backupPath)); err != nil {
 		return SeatListV2{}, fmt.Errorf("fsync v1 backup directory: %w", err)
 	}
-	return CommitLocked(listPath, SeatListV2{Version: 2, GenerationBase: list.GenerationBase, Seats: []SeatEntryV2{}}, list.Seats, operation, filesystem)
+	return CommitLocked(listPath, SeatListV2{Version: 2, GenerationBase: list.GenerationBase, Seats: []SeatEntryV2{}}, list.Seats, operation, filesystem, hosts)
 }
 
 // DefaultOperation creates an operator operation identity.

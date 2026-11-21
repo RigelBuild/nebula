@@ -3,18 +3,15 @@ version: "2"
 linters:
   default: all
   disable:
-    # Parser format constants are intentionally numeric; tests mirror the TS suite verbatim.
     - mnd
     # The Go standard library's short local names and blank-line style are retained.
     - varnamelen
     - wsl
     - wsl_v5
-    # The parser's single-pass state machine is easier to review as a direct port.
     - cyclop
     - gocognit
     - gocyclo
     - maintidx
-    # Long tests and repeated diff snippets preserve one-to-one parity with TypeScript.
     - funlen
     - dupl
     - goconst
@@ -28,7 +25,6 @@ linters:
     - exhaustruct
   settings:
     gomoddirectives:
-      # The command builds against the sibling tools/go-lib module through a local replace.
       replace-local: true
   enable:
     - gomodguard_v2

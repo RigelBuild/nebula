@@ -11,6 +11,7 @@ import (
 )
 
 // darwinSwitchCommand runs nh-switch on the darwin host from the store path copied there.
+// name must be an ssh alias that resolves to target.
 func darwinSwitchCommand(flakeRef string, fleetHost host) command {
 	remote := fmt.Sprintf("zsh -lic 'nh-switch darwin \"%s\"'", flakeRef)
 	return command{name: sshCommand, args: []string{"-t", fleetHost.name, remote}}
@@ -25,6 +26,7 @@ func prefetchCommand(treeRef string) command {
 }
 
 // copyCommand copies one store path to the darwin host over ssh-ng; ssh config supplies the user, as for ssh.
+// name must be an ssh alias that resolves to target.
 func copyCommand(fleetHost host, storePath string) command {
 	return command{name: "nix", args: []string{"copy", "--to", "ssh-ng://" + fleetHost.target, storePath}}
 }

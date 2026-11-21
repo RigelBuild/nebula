@@ -2,6 +2,7 @@ package main
 
 import (
 	_ "embed"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -43,7 +44,7 @@ type hostConfig struct {
 // loadHosts reads the CUE inventory at path. The inventory must be supplied by the caller.
 func loadHosts(path string) ([]host, error) {
 	if path == "" {
-		return nil, fmt.Errorf("no hosts inventory; pass --hosts FILE")
+		return nil, errors.New("no hosts inventory; pass --hosts FILE")
 	}
 	ctx := cuecontext.New()
 	schema := ctx.CompileBytes(schemaCUE).LookupPath(cue.ParsePath("#Host"))

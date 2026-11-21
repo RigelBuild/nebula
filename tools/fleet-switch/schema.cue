@@ -10,8 +10,9 @@
 	if platform == "windows" {
 		rebootable: false
 		// Checkout and setup script are relative to the Windows user profile.
-		windowsCheckout: string & !=""
-		windowsSetup:    string & !=""
+		// No quote, dollar sign or backtick: each value is spliced into a PowerShell script.
+		windowsCheckout: string & =~#"^[^'"$`]+$"#
+		windowsSetup:    string & =~#"^[^'"$`]+$"#
 	}
 	user: *"root" | string
 	port: (*22 | int) & >=1 & <=65535

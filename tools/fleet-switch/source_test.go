@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -65,6 +66,18 @@ func TestTrunkRevRejectsOtherOutput(t *testing.T) {
 	}
 }
 
+func TestTrunkRevRequiresRepoURL(t *testing.T) {
+	saved := repoURL
+	repoURL = ""
+	t.Cleanup(func() { repoURL = saved })
+	calls := 0
+	deps := newDependencies(io.Discard, io.Discard)
+	deps.runner = lsRemoteRunner(t, testRev+"\trefs/heads/main\n", &calls)
+	if _, err := trunkRev(t.Context(), deps); err == nil || !strings.Contains(err.Error(), "--repo-url is required") || calls != 0 {
+		t.Fatalf("error %v, ls-remote calls %d", err, calls)
+	}
+}
+
 func TestResolveSourceLocalKeepsPath(t *testing.T) {
 	calls := 0
 	deps := newDependencies(io.Discard, io.Discard)
@@ -111,6 +124,7 @@ func TestCheckSourceLocalNeedsAllowLocal(t *testing.T) {
 		{name: "local_wsl1", src: localRepo, hosts: []host{wsl}},
 		{name: "local_other_refused", src: localRepo, hosts: []host{nixos1}, wantErr: "--allow-local"},
 		{name: "local_all_refused", src: localRepo, hosts: []host{darwin, nixos1, wsl}, wantErr: "--allow-local"},
+		{name: "local_windows_needs_allow_local", src: localRepo, hosts: []host{windows}, wantErr: "--allow-local"},
 		{name: "local_other_allowed", src: localRepo, hosts: []host{nixos1}, allow: true},
 		{name: "local_wsl1_and_other_allowed", src: localRepo, hosts: []host{wsl, nixos1}, allow: true},
 		{name: "local_darwin_refused_even_allowed", src: localRepo, hosts: []host{darwin}, allow: true, wantErr: "darwin1 cannot deploy a local checkout"},
@@ -164,7 +178,9 @@ func TestSwitchAllTrunkPinsOneRevision(t *testing.T) {
 			t.Fatalf("%s not pinned to %s, want %q:\n%s", fleetHost.name, testRev, want, out.String())
 		}
 	}
-	if strings.Contains(out.String(), "==> win1 ") {
+	// Word-bounded: darwin1 is not win1; the "==> win1 " header and "(skipped)" line both match.
+	win1Mention := regexp.MustCompile(`\bwin1\b`)
+	if strings.Contains(out.String(), "==> win1 ") || win1Mention.MatchString(out.String()) {
 		t.Fatalf("--all dry run includes win1:\n%s", out.String())
 	}
 }

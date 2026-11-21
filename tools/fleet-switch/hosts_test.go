@@ -39,6 +39,12 @@ func TestExampleHosts(t *testing.T) {
 	}
 }
 
+func TestLoadHostsRequiresInventory(t *testing.T) {
+	if _, err := loadHosts(""); err == nil || !strings.Contains(err.Error(), "no hosts inventory") {
+		t.Fatalf("error: %v", err)
+	}
+}
+
 func TestInvalidHosts(t *testing.T) {
 	for _, tc := range []struct{ name, input, want string }{
 		{"platform", `hosts: [{name: "x", target: "x", platform: "bad", flake: "x#x", rebootable: true}]`, "platform"},
@@ -56,6 +62,11 @@ func TestInvalidHosts(t *testing.T) {
 		{"windows_gaming_probe_host", `hosts: [{name: "w", target: "w", platform: "windows", rebootable: false, windowsCheckout: "c", windowsSetup: "s"}, {name: "x", target: "x", platform: "windows", rebootable: false, windowsCheckout: "c", windowsSetup: "s", gamingProbeHost: "w"}]`, "is a windows host"},
 		{"windows_rebootable", `hosts: [{name: "x", target: "x", platform: "windows", rebootable: true, windowsCheckout: "c", windowsSetup: "s"}]`, "conflicting values"},
 		{"windows_missing_checkout", `hosts: [{name: "x", target: "x", platform: "windows", rebootable: false, windowsSetup: "s"}]`, "windowsCheckout"},
+		{"windows_missing_setup", `hosts: [{name: "x", target: "x", platform: "windows", rebootable: false, windowsCheckout: "c"}]`, "windowsSetup"},
+		{"windows_checkout_quote", `hosts: [{name: "x", target: "x", platform: "windows", rebootable: false, windowsCheckout: "c'x", windowsSetup: "s"}]`, "windowsCheckout"},
+		{"windows_checkout_double_quote", `hosts: [{name: "x", target: "x", platform: "windows", rebootable: false, windowsCheckout: "c\"x", windowsSetup: "s"}]`, "windowsCheckout"},
+		{"windows_setup_dollar", `hosts: [{name: "x", target: "x", platform: "windows", rebootable: false, windowsCheckout: "c", windowsSetup: "s$x"}]`, "windowsSetup"},
+		{"windows_setup_backtick", `hosts: [{name: "x", target: "x", platform: "windows", rebootable: false, windowsCheckout: "c", windowsSetup: "s\u0060x"}]`, "windowsSetup"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "hosts.cue")

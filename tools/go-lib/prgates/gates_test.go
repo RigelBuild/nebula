@@ -122,6 +122,7 @@ func TestSpecImpactRejectsBadSpecDirs(t *testing.T) {
 		{name: "nil", dirs: nil},
 		{name: "empty entry", dirs: []string{""}},
 		{name: "no trailing slash", dirs: []string{"docs/specs"}},
+		{name: "root", dirs: []string{"/"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := SpecImpact(SpecImpactFacts{ChangedFiles: []string{"docs/specs/x.md"}, Body: "Spec-impact: none", SpecDirs: tc.dirs})

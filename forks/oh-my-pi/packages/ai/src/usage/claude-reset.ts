@@ -22,6 +22,14 @@ const WINDOW_ID = /^[a-z0-9_-]{1,80}$/;
 const FABLE_LIMIT_ID = "anthropic:7d:fable";
 const WEEKLY_LIMIT_ID = "anthropic:7d";
 
+/**
+ * A Fable launch grant clears the Fable weekly cap but not the shared weekly
+ * window. A full reset clears both and is governed like any weekly reset.
+ */
+export function isClaudeFableLaunchGrant(clears: readonly string[]): boolean {
+	return clears.includes(FABLE_LIMIT_ID) && !clears.includes(WEEKLY_LIMIT_ID);
+}
+
 const CLAUDE_RESET_WINDOW_IDS: Readonly<Record<string, string>> = {
 	five_hour: "anthropic:5h",
 	seven_day: "anthropic:7d",
@@ -361,9 +369,7 @@ function normalizeCedarList(status: CedarStatus, orgId?: string, baseUrl?: strin
 						: "unavailable";
 		if (!expired && grant.remainingCount > 0) {
 			availableCount += grant.remainingCount;
-			// A Fable launch grant clears the Fable weekly cap but not the shared weekly window.
-			const fableOnly = grant.clears.includes(FABLE_LIMIT_ID) && !grant.clears.includes(WEEKLY_LIMIT_ID);
-			if (fableOnly) availableByScope.fable += grant.remainingCount;
+			if (isClaudeFableLaunchGrant(grant.clears)) availableByScope.fable += grant.remainingCount;
 			else availableByScope.full += grant.remainingCount;
 		}
 		const credit: UsageResetCredit = {

@@ -1,5 +1,6 @@
 import {
 	type OAuthAccountSummary,
+	isClaudeFableLaunchGrant,
 	type ResetCreditAccountStatus,
 	type ResetCreditTarget,
 	resolveUsedFraction,
@@ -26,7 +27,6 @@ const JUNIPER_PROGRAM = "juniper_tide";
 const CEDAR_PROGRAM = "cedar_ember";
 const FIVE_HOUR_LIMIT_ID = "anthropic:5h";
 const FABLE_LIMIT_ID = "anthropic:7d:fable";
-const WEEKLY_LIMIT_ID = "anthropic:7d";
 const MAX_PLAUSIBLE_FIVE_HOUR_MS = 6 * 3_600_000;
 const MAX_PLAUSIBLE_WEEKLY_MS = 8 * 24 * 3_600_000;
 
@@ -223,7 +223,7 @@ function maxPlausibleRemainingMs(limitId: string, limit: UsageLimit | undefined)
  */
 export function claudeCoveredLimits(limits: readonly UsageLimit[], credit: UsageResetCreditDetail): UsageLimit[] {
 	const clears = new Set(credit.clears ?? []);
-	const only = isFableGrant(credit)
+	const only = isClaudeFableLaunchGrant(credit.clears ?? [])
 		? FABLE_LIMIT_ID
 		: credit.program === JUNIPER_PROGRAM
 			? FIVE_HOUR_LIMIT_ID
@@ -597,7 +597,7 @@ export function planClaudeResetRedemptions(input: ClaudeResetPlanInput): ClaudeR
 		if (
 			!fullest ||
 			(!imminent && fullest.used < SALVAGE_MIN_USED_FRACTION) ||
-			(isFableGrant(snapshot.credit) && fullest.used <= 0)
+			(isClaudeFableLaunchGrant(snapshot.credit.clears ?? []) && fullest.used <= 0)
 		) {
 			skip("window-mostly-free");
 			continue;
@@ -650,15 +650,6 @@ export function planClaudeResetRedemptions(input: ClaudeResetPlanInput): ClaudeR
  * model-scoped limit makes it weekly, and only a 5h-only spend is 5h.
  */
 export function claudeResetWindow(credit: UsageResetCreditDetail, limitIds: readonly string[]): ResetWindow {
-	if (isFableGrant(credit)) return "fable";
+	if (isClaudeFableLaunchGrant(credit.clears ?? [])) return "fable";
 	return limitIds.some(id => id !== FIVE_HOUR_LIMIT_ID) ? "weekly" : "5h";
-}
-
-/**
- * A Fable launch grant: clears the Fable weekly cap but not the shared weekly
- * window. A full reset clears both and is governed like any weekly reset.
- */
-function isFableGrant(credit: UsageResetCreditDetail): boolean {
-	const clears = credit.clears ?? [];
-	return clears.includes(FABLE_LIMIT_ID) && !clears.includes(WEEKLY_LIMIT_ID);
 }

@@ -97,6 +97,12 @@ export interface ProviderCard {
 		redeemableCount: number;
 		soonestExpiryMs?: number;
 		unavailableReasons: string[];
+		/**
+		 * Banked resets per scope, summed across accounts; set only when Fable
+		 * holds resets. `other` counts resets that clear no scope (e.g. Juniper
+		 * session resets), so `full + fable + other` equals `bankedCount`.
+		 */
+		availableByScope?: { full: number; fable: number; other: number };
 	};
 	/** Labels of accounts with verified Daybreak access. */
 	daybreakAccounts?: string[];
@@ -246,6 +252,14 @@ export function buildProviderCards(
 					.filter((reason): reason is string => reason !== undefined),
 			),
 		];
+		const availableByScope = resetRows.reduce(
+			(total, summary) => ({
+				full: total.full + (summary.availableByScope?.full ?? 0),
+				fable: total.fable + (summary.availableByScope?.fable ?? 0),
+			}),
+			{ full: 0, fable: 0 },
+		);
+		const scopeOther = bankedCount - availableByScope.full - availableByScope.fable;
 		const resetCredits =
 			bankedCount > 0
 				? {
@@ -253,6 +267,9 @@ export function buildProviderCards(
 						redeemableCount,
 						soonestExpiryMs: soonestResetExpiry === undefined ? undefined : soonestResetExpiry - nowMs,
 						unavailableReasons,
+						...(availableByScope.fable > 0
+							? { availableByScope: { ...availableByScope, other: scopeOther } }
+							: {}),
 					}
 				: undefined;
 		const daybreakAccounts = providerReports.flatMap((report, index) =>
@@ -795,6 +812,11 @@ export class UsageDashboardComponent implements Component {
 			let resetText = `✦ ${resets.bankedCount} reset${resets.bankedCount === 1 ? "" : "s"}`;
 			if (resets.redeemableCount !== resets.bankedCount) {
 				resetText += ` · ${resets.redeemableCount} usable`;
+			}
+			if (resets.availableByScope) {
+				const { full, fable, other } = resets.availableByScope;
+				resetText += ` · full ${full} · fable ${fable}`;
+				if (other > 0) resetText += ` · other ${other}`;
 			}
 			if (resets.soonestExpiryMs !== undefined) {
 				resetText +=

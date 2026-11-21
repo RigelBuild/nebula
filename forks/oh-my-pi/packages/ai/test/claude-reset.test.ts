@@ -1,5 +1,10 @@
 import { describe, expect, it } from "bun:test";
-import { consumeClaudeResetCredit, listClaudeResetCredits, type UsageResetCredit } from "@oh-my-pi/pi-ai";
+import {
+	consumeClaudeResetCredit,
+	isClaudeFableLaunchGrant,
+	listClaudeResetCredits,
+	type UsageResetCredit,
+} from "@oh-my-pi/pi-ai";
 import type { FetchImpl } from "@oh-my-pi/pi-ai/types";
 import type { UsageFetchContext } from "@oh-my-pi/pi-ai/usage";
 import { claudeUsageProvider } from "@oh-my-pi/pi-ai/usage/claude";
@@ -502,5 +507,20 @@ describe("Claude usage reset integration", () => {
 
 		expect(report?.resetCredits).toBeUndefined();
 		expect(report?.limits.map(limit => limit.id)).toEqual(["anthropic:5h", "anthropic:extra"]);
+	});
+});
+
+describe("isClaudeFableLaunchGrant", () => {
+	it("is true for a grant that clears only the Fable weekly cap", () => {
+		expect(isClaudeFableLaunchGrant(["anthropic:5h", "anthropic:7d:fable"])).toBe(true);
+	});
+
+	it("is false for a full reset that clears the shared weekly window too", () => {
+		expect(isClaudeFableLaunchGrant(["anthropic:5h", "anthropic:7d", "anthropic:7d:fable"])).toBe(false);
+	});
+
+	it("is false for a grant that clears no Fable cap", () => {
+		expect(isClaudeFableLaunchGrant(["anthropic:5h", "anthropic:7d"])).toBe(false);
+		expect(isClaudeFableLaunchGrant([])).toBe(false);
 	});
 });

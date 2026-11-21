@@ -298,11 +298,11 @@ func deletedDependencyReason(deleted map[int64]bool) string {
 // skipDeadWorkflow ends a queued workflow that cannot run, and picks the step
 // shape from the reason it cannot run.
 //
-// When every dependency reached a verdict (success or failure) and runs_on
-// rejects that outcome, the scheduler would skip the workflow too. That skip
-// writes the same shape as markSkipped: pending steps killed. Otherwise a
-// dependency was lost (killed, canceled, error, skipped or declined), so the
-// steps are canceled to mark them as lost work.
+// When every dependency reached a verdict (success, failure or skipped) and
+// runs_on rejects that outcome, the scheduler would skip the workflow too. That
+// skip writes the same shape as markSkipped: pending steps killed. Otherwise a
+// dependency was lost (killed, canceled, error or declined), so the steps are
+// canceled to mark them as lost work.
 func skipDeadWorkflow(storage store.Store, workflow *model.Workflow, deps map[string]model.StatusValue, now int64) bool {
 	stepState := model.StatusCanceled
 	if verdictForbids(deps) {
@@ -336,10 +336,11 @@ func skipDeadWorkflow(storage store.Store, workflow *model.Workflow, deps map[st
 }
 
 // verdictForbids reports whether every dependency reached a verdict that a
-// runs_on-gated workflow would reject. A lost dependency is not a verdict.
+// runs_on-gated workflow would reject. Skipped counts as a verdict; killed,
+// canceled, error and declined do not.
 func verdictForbids(deps map[string]model.StatusValue) bool {
 	for _, status := range deps {
-		if status != model.StatusSuccess && status != model.StatusFailure {
+		if status != model.StatusSuccess && status != model.StatusFailure && status != model.StatusSkipped {
 			return false
 		}
 	}

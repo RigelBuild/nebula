@@ -121,6 +121,29 @@ def terminal_admission(conn, admission_id):
     return json.loads(saved[0]) if saved else None
 
 
+def pointed_terminal_admission(conn, *, principal_id, session_id, request_id, digest):
+    """The terminal identity decision for one request, on *conn* (read or write transaction).
+
+    None: no pointer and a live target, so the request may be admitted as new. Otherwise the terminal
+    admission, or a raise: ``not_found`` for a retired id or an orphaned pointer (its row was pruned past
+    the horizon, so it is refused and never run again); ``admission_conflict`` for a different payload.
+    Called on the admission's own write connection, so a prune cannot commit between this decision and
+    the insert it guards."""
+    from hermes_state_mutation_retirement import RETIRED_PREFIX
+    saved = conn.execute('SELECT value FROM state_meta WHERE key=?',
+                         (identity_key(principal_id, session_id, request_id),)).fetchone()
+    if saved is None:
+        if conn.execute('SELECT 1 FROM state_meta WHERE key=?', (RETIRED_PREFIX + session_id,)).fetchone():
+            raise RuntimeStoreError('not_found')
+        return None
+    row = terminal_admission(conn, json.loads(saved[0]))
+    if row is None:
+        raise RuntimeStoreError('not_found')
+    if row['payload_digest'] != digest:
+        raise RuntimeStoreError('admission_conflict', **ADMITTED_REQUEST_CONFLICT)
+    return _row(row)
+
+
 def retry_terminal_admission(db, *, epoch, principal_id, session_id, request_id, payload, intent='queue'):
     """None means a live target; a retired miss/conflict is a definitive refusal.
 
@@ -133,21 +156,8 @@ def retry_terminal_admission(db, *, epoch, principal_id, session_id, request_id,
         payload={'input': json.loads(_json(payload)), 'intent': intent})
     with db._read_ctx() as conn:
         _epoch(conn, epoch)
-        from hermes_state_mutation_retirement import RETIRED_PREFIX
-        saved = conn.execute('SELECT value FROM state_meta WHERE key=?',
-                             (identity_key(principal_id, session_id, request_id),)).fetchone()
-        if saved is None:
-            # No pointer: a live target, unless the id is retired, where it is a definitive miss.
-            if conn.execute('SELECT 1 FROM state_meta WHERE key=?', (RETIRED_PREFIX + session_id,)).fetchone():
-                raise RuntimeStoreError('not_found')
-            return None
-        row = terminal_admission(conn, json.loads(saved[0]))
-        if row is None:
-            # The pointer outlived its pruned row past the horizon: refused, never run again.
-            raise RuntimeStoreError('not_found')
-        if row['payload_digest'] != digest:
-            raise RuntimeStoreError('admission_conflict', **ADMITTED_REQUEST_CONFLICT)
-        return _row(row)
+        return pointed_terminal_admission(conn, principal_id=principal_id, session_id=session_id,
+                                          request_id=request_id, digest=digest)
 
 
 def terminal_worker_receipt(db, *, execution_id, session_id, generation, sequence,

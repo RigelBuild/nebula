@@ -68,6 +68,7 @@ import {
 	resetPlanSettings,
 } from "../session/codex-auto-reset";
 import {
+	type ClaudeResetApproval,
 	type ClaudeResetBankingSettings,
 	cfgClaudeResets,
 	cfgCodexResets,
@@ -402,6 +403,8 @@ export interface GatewayClaudeResetCoordinator {
 	deferredUntilByKey: Map<string, number>;
 	lastAttemptAtByAccount: Map<string, number>;
 	inFlightByCredential: Map<number, Promise<boolean>>;
+	/** Approvals already spent in this process, keyed by {@link approvalSpentKey}; a spent approval never matches again. */
+	spentApprovals: Set<string>;
 }
 
 function hasUsableExhaustedClaudeWeeklyReset(report: UsageReport | null | undefined, windowId: string): boolean {
@@ -419,12 +422,51 @@ function hasUsableExhaustedClaudeWeeklyReset(report: UsageReport | null | undefi
 /** Live reset times jitter by a few seconds, and an operator types a whole minute; match within this many ms. */
 const APPROVAL_RESET_TOLERANCE_MS = 5 * 60_000;
 
+/** Stable identity of one approval: its account, the window it covers, and its ref. */
+function approvalSpentKey(approval: ClaudeResetApproval): string {
+	return `${approval.accountId}@${approval.windowResetsAt}@${approval.ref}`;
+}
+
+/**
+ * Whether an operator-typed approval entry is usable. Entries are typed by hand, so an entry that is not
+ * an object, or lacks a non-empty `accountId`, a parseable `expiresAt`/`windowResetsAt`, or a
+ * non-negative integer `creditsLeft`, can never match. It is skipped, with one warn per bad entry.
+ */
+function validApprovalEntry(entry: unknown, warned: Set<string>): entry is ClaudeResetApproval {
+	if (typeof entry === "object" && entry !== null) {
+		const accountId = "accountId" in entry ? entry.accountId : undefined;
+		const expiresAt = "expiresAt" in entry ? entry.expiresAt : undefined;
+		const windowResetsAt = "windowResetsAt" in entry ? entry.windowResetsAt : undefined;
+		const creditsLeft = "creditsLeft" in entry ? entry.creditsLeft : undefined;
+		if (
+			typeof accountId === "string" &&
+			accountId.trim() !== "" &&
+			typeof expiresAt === "string" &&
+			Number.isFinite(Date.parse(expiresAt)) &&
+			typeof windowResetsAt === "string" &&
+			Number.isFinite(Date.parse(windowResetsAt)) &&
+			typeof creditsLeft === "number" &&
+			Number.isInteger(creditsLeft) &&
+			creditsLeft >= 0
+		) {
+			return true;
+		}
+	}
+	const key = JSON.stringify(entry) ?? String(entry);
+	if (!warned.has(key)) {
+		warned.add(key);
+		logger.warn("auth-gateway Claude reset approval skipped", { reason: "malformed entry" });
+	}
+	return false;
+}
+
 export function createGatewayClaudeResetHook(args: {
 	storage: AuthStorage;
 	settings: Settings;
 	coordinator: GatewayClaudeResetCoordinator;
 }): NonNullable<Parameters<typeof startAuthGateway>[0]["onUsageLimit"]> {
 	const reportedApprovalNeeds = new Set<string>();
+	const warnedApprovalEntries = new Set<string>();
 	return async ({ provider, credentialId, modelId, signal }) => {
 		const cfg = cfgClaudeResets.get(args.settings);
 		if (provider !== "anthropic") return false;
@@ -463,11 +505,13 @@ export function createGatewayClaudeResetHook(args: {
 			const blockedLimit = report?.limits.find(limit => limit.id === blockedWindow);
 			const blockedResetsAt = blockedLimit?.window?.resetsAt;
 			let actions: ClaudeResetAction[] = [];
+			let bankedCount: number | undefined;
 			try {
 				const statuses = await args.storage.resets.list({
 					provider: "anthropic",
 					signal: AbortSignal.any([signal, AbortSignal.timeout(10_000)]),
 				});
+				bankedCount = statuses.find(row => row.credentialId === credentialId)?.availableCount;
 				const planModes = drainFirstRecovery ? { ...modes, weekly: "yes" as const } : modes;
 				const plan = planClaudeResetRedemptions({
 					nowMs: Date.now(),
@@ -495,15 +539,24 @@ export function createGatewayClaudeResetHook(args: {
 				logger.info("auth-gateway Claude reset planning failed", { credentialId, error: String(error) });
 				return false;
 			}
-			// A drain-first weekly spend needs an operator approval bound to this window's reset time.
+			// A drain-first weekly spend needs an operator approval bound to this window's reset time, to the
+			// banked count it was given for, and not yet spent. Entries are typed by hand, so each one is checked.
 			const approvals = cfgOperatorClaudeResetsApprovedRedeems.get(args.settings);
-			const matchingApproval = approvals.find(
-				approval =>
-					approval.accountId === credential.accountId &&
-					Date.parse(approval.expiresAt) > Date.now() &&
-					blockedResetsAt !== undefined &&
-					Math.abs(Date.parse(approval.windowResetsAt) - blockedResetsAt) <= APPROVAL_RESET_TOLERANCE_MS,
-			);
+			const matchingApproval =
+				credential.accountId === undefined
+					? undefined
+					: approvals.find(approval => {
+							if (!validApprovalEntry(approval, warnedApprovalEntries)) return false;
+							return (
+								approval.accountId === credential.accountId &&
+								Date.parse(approval.expiresAt) > Date.now() &&
+								blockedResetsAt !== undefined &&
+								Math.abs(Date.parse(approval.windowResetsAt) - blockedResetsAt) <=
+									APPROVAL_RESET_TOLERANCE_MS &&
+								approval.creditsLeft === bankedCount &&
+								!args.coordinator.spentApprovals.has(approvalSpentKey(approval))
+							);
+						});
 			const drainFirstWeeklySpend = drainFirstRecovery && actions.some(action => action.window === "weekly");
 			if (drainFirstWeeklySpend && !matchingApproval) {
 				const needKey = `${credential.accountId}@${blockedResetsAt}`;
@@ -560,6 +613,9 @@ export function createGatewayClaudeResetHook(args: {
 					ok: outcome.ok,
 				});
 				if (outcome.ok) {
+					if (matchingApproval && drainFirstRecovery && action.window === "weekly") {
+						args.coordinator.spentApprovals.add(approvalSpentKey(matchingApproval));
+					}
 					logger.warn("auth-gateway Claude reset redeemed", {
 						credentialId,
 						accountId: credential.accountId,
@@ -817,6 +873,7 @@ async function runServe(flags: AuthGatewayCommandArgs["flags"]): Promise<void> {
 		deferredUntilByKey: new Map(),
 		lastAttemptAtByAccount: new Map(),
 		inFlightByCredential: new Map(),
+		spentApprovals: new Set(),
 	};
 	const codexResetCoordinator: GatewayCodexResetCoordinator = {
 		attemptedKeys: new Set(),
@@ -824,6 +881,7 @@ async function runServe(flags: AuthGatewayCommandArgs["flags"]): Promise<void> {
 		lastAttemptAtByAccount: new Map(),
 		inFlightByCredential: new Map(),
 		exhaustedSinceByCredential: new Map(),
+		spentApprovals: new Set(),
 	};
 	const client = createBrokerClient(brokerConfig);
 	const initialSnapshot = await fetchBrokerSnapshot(client);

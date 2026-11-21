@@ -81,6 +81,7 @@ async function setup(enabled = true) {
 		lastAttemptAtByAccount: new Map(),
 		inFlightByCredential: new Map(),
 		exhaustedSinceByCredential: new Map(),
+		spentApprovals: new Set(),
 	};
 	const hook = createGatewayCodexResetHook({ storage, settings, coordinator, now: () => now });
 	const call = () =>

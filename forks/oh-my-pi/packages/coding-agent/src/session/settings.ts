@@ -1634,7 +1634,10 @@ export const cfgClaudeResetsSalvageHorizonHours = register({
 	},
 });
 
-/** One Matt-approved Claude reset redeem, bound to the window it covers. Single use by construction: a redeem moves `windowResetsAt`. */
+/**
+ * One Matt-approved Claude reset redeem, bound to the window it covers and to the banked count it was
+ * approved against. A redeem spends one banked credit, so `creditsLeft` stops matching by construction.
+ */
 export interface ClaudeResetApproval {
 	accountId: string;
 	approvedBy: string;
@@ -1643,6 +1646,8 @@ export interface ClaudeResetApproval {
 	expiresAt: string;
 	/** ISO natural reset time of the exhausted weekly window the approval covers. */
 	windowResetsAt: string;
+	/** Banked full-credit count the approval was given for; it matches only while the live sum equals this. */
+	creditsLeft: number;
 }
 
 const NO_CLAUDE_RESET_APPROVALS: readonly ClaudeResetApproval[] = [];

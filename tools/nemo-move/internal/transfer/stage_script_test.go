@@ -24,6 +24,7 @@ func runUnpackStream(t *testing.T, home, stage string, archive []byte, accounts 
 // The root half reads the Google source and writes only the archive. It must
 // fail, and write nothing, when an account has no credentials.
 func TestRootStreamFailsOnMissingCredentials(t *testing.T) {
+	requireStageTools(t)
 	source := t.TempDir()
 	archive, err := runRootStream(t, source, "workspace")
 	if err == nil {
@@ -37,6 +38,7 @@ func TestRootStreamFailsOnMissingCredentials(t *testing.T) {
 // A planted symlink in the user's staging parent must be refused by the user
 // half before any unpack, and nothing may land outside the home.
 func TestUnpackRefusesSymlinkedParent(t *testing.T) {
+	requireStageTools(t)
 	home := t.TempDir()
 	outside := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(home, ".local"), 0o700); err != nil {

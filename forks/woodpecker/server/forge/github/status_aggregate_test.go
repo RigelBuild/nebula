@@ -333,10 +333,20 @@ func TestStatusAggregateTerminalStatusIsNotMaskedBySkippedCodeWorkflows(t *testi
 			want:           statusSuccess,
 		},
 		{
-			name:           "successful pipeline with skipped code workflows",
+			name:           "successful pipeline with every code workflow skipped",
 			pipelineStatus: model.StatusSuccess,
-			workflows:      []*model.Workflow{{Name: "build", State: model.StatusSkipped}},
-			want:           statusSuccess,
+			workflows:      []*model.Workflow{{Name: "build", State: model.StatusSkipped, Children: []*model.Step{{Name: "build", State: model.StatusCanceled}}}},
+			want:           statusFailure,
+		},
+		{
+			name:           "successful pipeline whose code workflows were all filtered out stays green",
+			pipelineStatus: model.StatusSuccess,
+			workflows: []*model.Workflow{
+				{Name: "build", State: model.StatusSkipped},
+				{Name: "test", State: model.StatusSkipped},
+				{Name: "pr-title-issue-ref", State: model.StatusSuccess, OnMetadataEdit: true},
+			},
+			want: statusSuccess,
 		},
 		{
 			name:           "errored pipeline with all code workflows successful",
@@ -378,6 +388,179 @@ func TestStatusAggregateTerminalStatusIsNotMaskedBySkippedCodeWorkflows(t *testi
 			assert.Equal(t, tt.want, posted.GetState())
 		})
 	}
+}
+
+// TestStatusAggregateAllCodeSkippedIsNotGreen is the Woodpecker pipeline #10874
+// (RIG-7551) shape: every code workflow skipped after the reaper ended it, a
+// meta gate still passed, and the stored pipeline reads success. No code
+// workflow ran, so CI (pr) must not report green. PipelineStatus folds skipped
+// below success, so the rollup alone would say success.
+func TestStatusAggregateAllCodeSkippedIsNotGreen(t *testing.T) {
+	var posted github.RepoStatus
+	c, ctx, repo, user, pipeline := statusAggregateFixture(t, func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&posted); err != nil {
+			t.Errorf("decode posted status: %v", err)
+			return
+		}
+		w.WriteHeader(http.StatusCreated)
+		if _, err := w.Write([]byte(`{}`)); err != nil {
+			t.Errorf("write response: %v", err)
+		}
+	})
+	pipeline.Status = model.StatusSuccess
+	workflows := []*model.Workflow{
+		{Name: "build", State: model.StatusSkipped, Children: []*model.Step{{Name: "build", State: model.StatusCanceled}}},
+		{Name: "test", State: model.StatusSkipped, Children: []*model.Step{{Name: "test", State: model.StatusCanceled}}},
+		{Name: "pr-title-issue-ref", State: model.StatusSuccess, OnMetadataEdit: true},
+	}
+	err := c.StatusAggregate(ctx, user, repo, pipeline, workflows)
+	require.NoError(t, err)
+	assert.Equal(t, statusFailure, posted.GetState(),
+		"every code workflow skipped under a stored success must not report CI (pr) green")
+}
+
+// TestStatusAggregateReapedCodeWorkflowUnderSuccessIsNotGreen is the RIG-7551
+// mixed shape (Woodpecker pipeline #10874): the stored pipeline reads success
+// while the reaper has ended a code workflow with canceled steps, a lost
+// dependency. Successful siblings fold skipped below success, so the rollup
+// alone reports success. A scheduler skip writes killed steps, and a build-time
+// filtered workflow has none; both are honest skips and stay green.
+func TestStatusAggregateReapedCodeWorkflowUnderSuccessIsNotGreen(t *testing.T) {
+	tests := []struct {
+		name      string
+		workflows []*model.Workflow
+		want      string
+	}{
+		{
+			name: "reaped dependent beside a successful code workflow",
+			workflows: []*model.Workflow{
+				{Name: "build", State: model.StatusSuccess},
+				{Name: "test", State: model.StatusSkipped, Children: []*model.Step{{Name: "test", State: model.StatusCanceled}}},
+			},
+			want: statusFailure,
+		},
+		{
+			name: "reaped dependent beside a failed code workflow",
+			workflows: []*model.Workflow{
+				{Name: "build", State: model.StatusFailure},
+				{Name: "test", State: model.StatusSkipped, Children: []*model.Step{{Name: "test", State: model.StatusCanceled}}},
+			},
+			want: statusFailure,
+		},
+		{
+			name: "reaped dependent beside a killed code workflow",
+			workflows: []*model.Workflow{
+				{Name: "build", State: model.StatusKilled},
+				{Name: "test", State: model.StatusSkipped, Children: []*model.Step{{Name: "test", State: model.StatusCanceled}}},
+			},
+			want: statusFailure,
+		},
+		{
+			name: "scheduler-skipped dependent has killed steps (markSkipped shape)",
+			workflows: []*model.Workflow{
+				{Name: "build", State: model.StatusSuccess},
+				{Name: "test", State: model.StatusSkipped, Children: []*model.Step{{Name: "test", State: model.StatusKilled}}},
+			},
+			want: statusSuccess,
+		},
+		{
+			name: "build-time filtered workflow without steps",
+			workflows: []*model.Workflow{
+				{Name: "build", State: model.StatusSuccess},
+				{Name: "lint", State: model.StatusSkipped},
+			},
+			want: statusSuccess,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var posted github.RepoStatus
+			c, ctx, repo, user, pipeline := statusAggregateFixture(t, func(w http.ResponseWriter, r *http.Request) {
+				if err := json.NewDecoder(r.Body).Decode(&posted); err != nil {
+					t.Errorf("decode posted status: %v", err)
+					return
+				}
+				w.WriteHeader(http.StatusCreated)
+				if _, err := w.Write([]byte(`{}`)); err != nil {
+					t.Errorf("write response: %v", err)
+				}
+			})
+			pipeline.Status = model.StatusSuccess
+
+			err := c.StatusAggregate(ctx, user, repo, pipeline, tt.workflows)
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, posted.GetState())
+		})
+	}
+}
+
+// TestStatusAggregateUserKilledKeepsFailure pins that the reaped-workflow guard
+// only overrides a stored success. A user cancel leaves skipped workflows with
+// canceled steps too, but stores killed, so its verdict stays failure. A stored
+// canceled pipeline is not asserted here: ReportAggregateStatus rewrites it
+// before this rollup runs.
+func TestStatusAggregateUserKilledKeepsFailure(t *testing.T) {
+	tests := []struct {
+		name   string
+		status model.StatusValue
+		want   string
+	}{
+		{name: "killed by user", status: model.StatusKilled, want: statusFailure},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var posted github.RepoStatus
+			c, ctx, repo, user, pipeline := statusAggregateFixture(t, func(w http.ResponseWriter, r *http.Request) {
+				if err := json.NewDecoder(r.Body).Decode(&posted); err != nil {
+					t.Errorf("decode posted status: %v", err)
+					return
+				}
+				w.WriteHeader(http.StatusCreated)
+				if _, err := w.Write([]byte(`{}`)); err != nil {
+					t.Errorf("write response: %v", err)
+				}
+			})
+			pipeline.Status = tt.status
+			workflows := []*model.Workflow{
+				{Name: "build", State: model.StatusSuccess},
+				{Name: "test", State: model.StatusSkipped, Children: []*model.Step{{Name: "test", State: model.StatusCanceled}}},
+			}
+
+			err := c.StatusAggregate(ctx, user, repo, pipeline, workflows)
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, posted.GetState())
+		})
+	}
+}
+
+// TestStatusAggregateSomeSkippedCodeWorkflowsStaysGreen is the guard: a normal
+// pipeline where some code workflows are skipped and the rest succeed stays green.
+// The all-skipped rule must not reach it.
+func TestStatusAggregateSomeSkippedCodeWorkflowsStaysGreen(t *testing.T) {
+	var posted github.RepoStatus
+	c, ctx, repo, user, pipeline := statusAggregateFixture(t, func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&posted); err != nil {
+			t.Errorf("decode posted status: %v", err)
+			return
+		}
+		w.WriteHeader(http.StatusCreated)
+		if _, err := w.Write([]byte(`{}`)); err != nil {
+			t.Errorf("write response: %v", err)
+		}
+	})
+	pipeline.Status = model.StatusSuccess
+	workflows := []*model.Workflow{
+		{Name: "build", State: model.StatusSuccess},
+		{Name: "lint", State: model.StatusSkipped},
+		{Name: "pr-title-issue-ref", State: model.StatusSuccess, OnMetadataEdit: true},
+	}
+
+	err := c.StatusAggregate(ctx, user, repo, pipeline, workflows)
+	require.NoError(t, err)
+	assert.Equal(t, statusSuccess, posted.GetState(),
+		"a success pipeline with some code workflows skipped and others passing must stay green")
 }
 
 // TestStatusAggregateSuccessPipelineNeverPostsSuccessOverPendingCodeWorkflows is

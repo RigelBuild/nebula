@@ -158,7 +158,34 @@ func codeStatus(p *model.Pipeline, workflows []*model.Workflow) model.StatusValu
 	if len(code) == 0 {
 		return p.Status
 	}
+	// A code workflow the reaper ended with canceled steps under a stored success
+	// (RIG-7551, Woodpecker pipeline #10874): a lost dependency, so no code
+	// workflow ran to say so. A scheduler skip writes killed steps instead, and a
+	// build-time filtered workflow has no steps; both stay green.
+	if p.Status == model.StatusSuccess && anyReapedCodeWorkflow(code) {
+		log.Info().
+			Int64("pipeline_id", p.ID).
+			Int("code_workflows", len(code)).
+			Msg("CI (pr) overrides a stored success: a code workflow was reaped with canceled steps")
+		return model.StatusFailure
+	}
 	return reconcileTerminalStatus(pipeline.PipelineStatus(code), p.Status)
+}
+
+// anyReapedCodeWorkflow reports whether a code workflow was skipped by the
+// reaper: skipped, with at least one step canceled rather than left pending.
+func anyReapedCodeWorkflow(workflows []*model.Workflow) bool {
+	for _, workflow := range workflows {
+		if workflow.State != model.StatusSkipped {
+			continue
+		}
+		for _, step := range workflow.Children {
+			if step.State == model.StatusCanceled {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // metaGateStatus rolls up only the meta-gate workflows.

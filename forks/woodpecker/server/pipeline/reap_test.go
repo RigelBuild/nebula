@@ -409,6 +409,23 @@ func TestReapOrphanedWorkflows(t *testing.T) {
 			pipelineFinalized: true,
 		},
 		{
+			name:            "code dependent of a lost meta workflow gets canceled loss steps",
+			pipelineStatus:  model.StatusRunning,
+			pipelineCreated: nowUnix - 7*hour,
+			workflows: []*model.Workflow{
+				{ID: 45, State: model.StatusRunning, Started: nowUnix - hour, AgentID: 7, OnMetadataEdit: true,
+					Children: []*model.Step{{ID: 451, State: model.StatusRunning, Started: nowUnix - hour}}},
+				queuedWorkflow(46),
+			},
+			waiting:           []*model.Task{linuxTask("46", "45")},
+			missingAgents:     map[int64]bool{7: true},
+			workflowStates:    map[int64]model.StatusValue{45: model.StatusKilled, 46: model.StatusSkipped},
+			stepStates:        map[int64]model.StatusValue{451: model.StatusKilled, 461: model.StatusCanceled},
+			cancels:           []string{"46"},
+			pipelineFinal:     model.StatusKilled,
+			pipelineFinalized: true,
+		},
+		{
 			name:            "failure dependent waits while its other dependency runs",
 			pipelineStatus:  model.StatusRunning,
 			pipelineCreated: nowUnix - 7*hour,

@@ -64,6 +64,7 @@
         wave-ledger = "sha256-9TnmijwY7K3fhUngJXQRcn+eoYEKMKo5qd2YYgpHnN8=";
         wave-recall = null;
         wave-seat-holder = null;
+        windows-agent-sync = "sha256-C8hvtPPxl8CQESnj5tuYP17U1pdiE9hImbGR1smfWOM=";
         zellij-rss-watchdog = "sha256-3/tNPMYKxKjwprceoPRjRJuTNBwJSJE4LD8grnh+haI=";
       };
 

@@ -1,0 +1,19 @@
+# yaml-language-server: $schema=https://moonrepo.dev/schemas/project.json
+layer: "tool"
+language: "go"
+tags: ["go"]
+
+tasks:
+  test:
+    command: "go"
+    args: ["test", "./..."]
+    env:
+      CGO_ENABLED: "0"
+    inputs: ["**/*.go", "**/*.cue", "go.mod", "go.sum", "**/testdata/**/*"]
+  build-windows:
+    command: "go"
+    args: ["build", "-o", "/dev/null", "./..."]
+    env:
+      GOOS: "windows"
+      GOWORK: "off"
+    inputs: ["**/*.go", "**/*.cue", "go.mod", "go.sum", "**/testdata/**/*"]

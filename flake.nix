@@ -48,6 +48,7 @@
         linear-comment-poller = "sha256-usHhvjEtwEdT/hyGXFkC2nmC41/WAEWkA+Ng4TJ4FGo=";
         longhorn-drain = null;
         mem-sampler = null;
+        nemo-move = "sha256-MeTNnOa3lPHYtOYyWbKyQS/8OQmJfAx5CJzlmXnBgdE=";
         nix-switch = "sha256-0JQIwEXf561mMo/7JLiYioVk2b1vwrsLI2JoEkVg68c=";
         node-removal = null;
         omp-pool = null;

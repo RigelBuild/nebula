@@ -483,11 +483,13 @@
         let
           pkgs = import nixpkgs { inherit system; };
           basePackages = with pkgs; [ go bun moon rumdl biome cargo rustc clippy rustfmt cargo-nextest golangci-lint jujutsu nodejs_26 pnpm nats-server ];
+          # rjc's hook tests call flock and setsid (util-linux) and ps (procps). Linux only: darwin has no setsid.
+          linuxHookTools = pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux (with pkgs; [ util-linux procps ]);
           hookPackages = with pkgs; [ pre-commit prek lefthook pkl hk ];
         in
         {
           default = pkgs.mkShell {
-            packages = basePackages;
+            packages = basePackages ++ linuxHookTools;
           };
           # The jj-hooks test drives the hook runners; the default shell stays lean.
           jj-hooks = pkgs.mkShell {

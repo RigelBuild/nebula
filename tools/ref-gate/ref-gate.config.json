@@ -22,6 +22,10 @@
 	"carveOutPaths": ["tools/ref-gate/ref-gate.config.json"],
 	"carveOutPrefixes": [],
 	"allowlist": {
+		"tools/go-lib/issueowner/linear_test.go": "Test fixtures for the legacy SEA-NNN to RIG-NNN canonicalization (CanonicalRef). The SEA id is the input under test, not a private-repo reference.",
+		"tools/go-lib/issueowner/linear/queries_test.go": "Test fixtures for legacy SEA-NNN identifiers the Linear query decoder must accept. The SEA id is the input under test.",
+		"tools/go-lib/issueowner/owner_test.go": "Test fixture for the legacy SEA-1128 owner parse. The SEA id is the input under test.",
+		"tools/go-lib/issueowner/resolve_test.go": "Test fixtures for owner resolution over SEA-NNN parent chains. The SEA id is the input under test.",
 		"forks/oh-my-pi/packages/catalog/src/models.json": "oh-my-pi fixture: model ids, not a private-repo reference.",
 		"forks/oh-my-pi/packages/mnemopi/test/beam-recall-unit.test.ts": "oh-my-pi fixture: recall test text, not a private-repo reference.",
 		"forks/oh-my-pi/packages/mnemopi/test/recall-precision-regressions.test.ts": "oh-my-pi fixture: recall test text, not a private-repo reference.",

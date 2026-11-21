@@ -1420,7 +1420,9 @@ def _redact_assignments(text: str, *, mask_nonreusable: bool = False) -> str:
             if quote and (not inner or _DSN_PW_PLACEHOLDER_RE.fullmatch(inner)
                           or (inner.startswith("{{") and inner.endswith("}}"))):  # Helm/Jinja template
                 return m.group(0)
-            if not _should_redact_assignment(key, inner, check_keyword=True):
+            # ``kubectl describe``'s ``<set to the key 'k' in secret 's'>`` names a reference, not a value.
+            if not _should_redact_assignment(key, inner, check_keyword=True) \
+                    or (inner == "<set" and m.string.startswith(" to the key ", m.end())):
                 return m.group(0)
             return f"{key}{sep}{quote}{mask(inner)}{quote}"
         text = _YAML_ASSIGN_RE.sub(_redact_yaml, text)
@@ -1442,6 +1444,158 @@ def _is_userinfo_placeholder(password: str) -> bool:
     return ((password.startswith("{") and password.endswith("}"))
             or _DSN_PW_PLACEHOLDER_RE.fullmatch(password) is not None
             or password.casefold() in _USERINFO_PLACEHOLDER_WORDS)
+
+
+# --- Kubernetes objects (RIG-11725) -----------------------------------------------------------
+# Secret ``data``/``stringData`` values and env ``value``s under a secret-named ``name`` reach the
+# model through kubectl output; their keys are neutral (``connection``, ``value``), so the keyword
+# assignment passes never see them. Every scan is a single linear pass over lines or a regex
+# without nested quantifiers, so 1 MB of manifests stays well under a second.
+_K8S_SECRET_NAME_RE = re.compile(r"PASSWORD|PASSWD|SECRET|CREDENTIAL|TOKEN|(?:^|[_.\-])(?:API)?KEYS?(?:$|[_.\-])",
+                                 re.IGNORECASE)
+_K8S_SEGMENT_RE = re.compile(r'^[ \t]*(?:- )?apiVersion:|^---[ \t]*$|"apiVersion"[ \t]*:', re.MULTILINE)
+_K8S_SECRET_KIND_RE = re.compile(r'^[ \t]*(?:- )?kind:[ \t]*["\']?Secret["\']?[ \t]*$|"kind"[ \t]*:[ \t]*"Secret"',
+                                 re.MULTILINE)
+_K8S_YAML_LINE_RE = re.compile(r"^[ \t]*(?:- )?[^\s:#][^:]*:(?:[ \t]+(\S.*))?$")
+_K8S_JSON_DATA_RE = re.compile(r'"(?:data|stringData)"[ \t\r\n]*:[ \t\r\n]*\{')
+_K8S_JSON_STR_RE = re.compile(r'"(?:\\.|[^"\\])*"?')
+_K8S_JSON_ENV_RE = re.compile(
+    r'"name"\s*:\s*"([^"\\]{1,256})"\s*,\s*"value"\s*:\s*"((?:\\.|[^"\\])*)"'
+    r'|"value"\s*:\s*"((?:\\.|[^"\\])*)"\s*,\s*"name"\s*:\s*"([^"\\]{1,256})"')
+_K8S_YAML_ENV_RE = re.compile(
+    r"^([ \t]*)- name:[ \t]*[\"']?([^\s\"']+)[\"']?[ \t]*\r?\n\1  value:[ \t]*(\S[^\r\n]*?)[ \t]*$"
+    r"|^([ \t]*)- value:[ \t]*(\S[^\r\n]*?)[ \t]*\r?\n\4  name:[ \t]*[\"']?([^\s\"']+)[\"']?[ \t]*$",
+    re.MULTILINE)
+_K8S_DESCRIBE_REF_RE = re.compile(r"<set to the key |\(v1:|<none>")
+_K8S_MASK = "***"
+
+
+def _k8s_secret_name(name: str) -> bool:
+    return _K8S_SECRET_NAME_RE.search(name) is not None
+
+
+def _k8s_mask_yaml_data(seg: str) -> str:
+    """Mask every value under a ``data:``/``stringData:`` mapping in one YAML segment."""
+    lines = seg.split("\n")
+    data_indent = block_indent = -1
+    for i, line in enumerate(lines):
+        stripped = line.lstrip(" \t")
+        indent = len(line) - len(stripped)
+        if block_indent >= 0:  # inside a ``|``/``>`` block scalar of a data entry
+            if not stripped or indent > block_indent:
+                if stripped:
+                    lines[i] = line[:indent] + _K8S_MASK
+                continue
+            block_indent = -1
+        if data_indent >= 0:
+            if not stripped or stripped.startswith("#"):
+                continue
+            if indent <= data_indent:
+                data_indent = -1
+            else:
+                m = _K8S_YAML_LINE_RE.match(line.rstrip())
+                if m and m.group(1):
+                    if m.group(1)[0] in "|>":
+                        block_indent = indent
+                    elif m.group(1) != _K8S_MASK:
+                        lines[i] = line[:m.start(1)] + _K8S_MASK
+                continue
+        if stripped.rstrip() in ("data:", "stringData:"):
+            data_indent = indent
+    return "\n".join(lines)
+
+
+def _k8s_mask_json_data(seg: str) -> str:
+    """Mask string values inside ``"data": {...}`` maps; a truncated map is masked to the end."""
+    out, pos = [], 0
+    for m in _K8S_JSON_DATA_RE.finditer(seg):
+        if m.start() < pos:
+            continue
+        out.append(seg[pos:m.end()])
+        i, n, expect_value = m.end(), len(seg), False
+        while i < n:
+            c = seg[i]
+            if c == "}":
+                break
+            if c == '"':
+                s = _K8S_JSON_STR_RE.match(seg, i)
+                closed = len(s.group(0)) > 1 and s.group(0).endswith('"')
+                if expect_value:
+                    out.append('"' + _K8S_MASK + ('"' if closed else ""))
+                    expect_value = False
+                else:
+                    out.append(s.group(0))
+                i = s.end()
+                continue
+            if c == ":":
+                expect_value = True
+            elif c == ",":
+                expect_value = False
+            out.append(c)
+            i += 1
+        pos = i
+    out.append(seg[pos:])
+    return "".join(out)
+
+
+def _k8s_mask_describe_env(text: str) -> str:
+    """``kubectl describe`` lines ``NAME:  value`` inside an ``Environment:`` block."""
+    lines = text.split("\n")
+    env_indent = -1
+    for i, line in enumerate(lines):
+        stripped = line.lstrip(" \t")
+        indent = len(line) - len(stripped)
+        if env_indent >= 0:
+            if not stripped:
+                continue
+            if indent <= env_indent:
+                env_indent = -1
+            else:
+                name, sep, rest = stripped.partition(":")
+                value = rest.strip()
+                if sep and value and _k8s_secret_name(name) and value != _K8S_MASK \
+                        and not _K8S_DESCRIBE_REF_RE.match(value):
+                    lines[i] = line[:indent] + name + sep + rest.replace(value, _K8S_MASK, 1)
+                continue
+        if stripped.rstrip() == "Environment:":
+            env_indent = indent
+    return "\n".join(lines)
+
+
+def _k8s_env_sub(m: "re.Match[str]", name_group: int, value_group: int, alt_name: int, alt_value: int) -> str:
+    if m.group(name_group) is not None:
+        name, start, end = m.group(name_group), m.start(value_group), m.end(value_group)
+    else:
+        name, start, end = m.group(alt_name), m.start(alt_value), m.end(alt_value)
+    if not _k8s_secret_name(name) or m.string[start:end] == _K8S_MASK:
+        return m.group(0)
+    return m.string[m.start():start] + _K8S_MASK + m.string[end:m.end()]
+
+
+def _redact_kubernetes(text: str) -> str:
+    """Mask Kubernetes Secret data values and secret-named env values (YAML, JSON, describe)."""
+    if "Secret" in text and "ata" in text:
+        bounds = [m.start() for m in _K8S_SEGMENT_RE.finditer(text)]
+        if not bounds or bounds[0] != 0:
+            bounds.insert(0, 0)
+        bounds.append(len(text))
+        parts = []
+        for a, b in zip(bounds, bounds[1:]):
+            seg = text[a:b]
+            if _K8S_SECRET_KIND_RE.search(seg):
+                if "ata:" in seg:
+                    seg = _k8s_mask_yaml_data(seg)
+                if '"' in seg:
+                    seg = _k8s_mask_json_data(seg)
+            parts.append(seg)
+        text = "".join(parts)
+    if "value" in text and "name" in text:
+        if '"' in text:
+            text = _K8S_JSON_ENV_RE.sub(lambda m: _k8s_env_sub(m, 1, 2, 4, 3), text)
+        text = _K8S_YAML_ENV_RE.sub(lambda m: _k8s_env_sub(m, 2, 3, 6, 5), text)
+    if "Environment:" in text:
+        text = _k8s_mask_describe_env(text)
+    return text
 
 
 def _redact_userinfo_passwords(text: str) -> str:
@@ -1557,6 +1711,10 @@ def redact_sensitive_text(text: str, *, force: bool = False, code_file: bool = F
     if "." in text:
         _zhipu_sub = _mask_token_nonreusable if file_read else _mask_token
         text = _ZHIPU_API_KEY_RE.sub(lambda m: _zhipu_sub(m.group(1)), text)
+
+    # Kubernetes Secret data / secret env values run in every mode: the source is a live object,
+    # never a code fixture, and kubectl output is how the model sees them (RIG-11725).
+    text = _redact_kubernetes(text)
 
     if not code_file:
         text = _redact_assignments(text, mask_nonreusable=file_read)

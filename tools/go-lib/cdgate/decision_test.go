@@ -229,9 +229,37 @@ func TestReadPulumiStacks(t *testing.T) {
 		"infra/pulumi/services/service/Pulumi.yaml":   {Data: []byte("name: service")},
 		"infra/pulumi/platform/not-a-stack/README.md": {Data: []byte("no manifest")},
 	}
-	got := ReadPulumiStacks(fsys, "infra/pulumi", []string{"platform", "services"})
+	got, err := ReadPulumiStacks(fsys, "infra/pulumi", []string{"platform", "services"})
+	if err != nil {
+		t.Fatalf("ReadPulumiStacks() error = %v", err)
+	}
 	want := map[string]bool{"aws": true, "service": true}
 	if !maps.Equal(got, want) {
 		t.Fatalf("ReadPulumiStacks() = %v, want %v", got, want)
+	}
+}
+
+func TestReadPulumiStacksRejectsBadInput(t *testing.T) {
+	tests := []struct {
+		name  string
+		root  string
+		tiers []string
+		want  string
+	}{
+		{name: "empty root", root: "", tiers: []string{"platform"}, want: "pulumi stack root is empty"},
+		{name: "no tiers", root: "infra/pulumi", want: "pulumi stack tiers are empty"},
+		{name: "empty tier", root: "infra/pulumi", tiers: []string{"platform", ""}, want: "pulumi stack tier 1 is blank"},
+		{name: "blank tier", root: "infra/pulumi", tiers: []string{" "}, want: "pulumi stack tier 0 is blank"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := ReadPulumiStacks(fstest.MapFS{}, test.root, test.tiers)
+			if err == nil || err.Error() != test.want {
+				t.Fatalf("ReadPulumiStacks() error = %v, want %q", err, test.want)
+			}
+			if got != nil {
+				t.Fatalf("ReadPulumiStacks() = %v with error, want nil map", got)
+			}
+		})
 	}
 }

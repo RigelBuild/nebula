@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 // Woodpecker pipeline reads for the CD gate's decision input.
 package cdgate
 

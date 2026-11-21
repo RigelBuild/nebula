@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 // Package cdgate decides whether a CD target deploys or is skipped because a
 // newer pipeline already covers it.
 package cdgate

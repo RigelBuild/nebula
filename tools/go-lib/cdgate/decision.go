@@ -1,8 +1,11 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 package cdgate
 
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 	"path"
 	"slices"
@@ -140,8 +143,20 @@ func isPulumiUp(target string, pulumiStacks map[string]bool) bool {
 
 // ReadPulumiStacks discovers projects with a Pulumi.yaml in each of tiers,
 // read beneath root. The caller supplies both: the repo layout is a deployment
-// choice, so there is no default tier list or root.
-func ReadPulumiStacks(fsys fs.FS, root string, tiers []string) map[string]bool {
+// choice, so there is no default tier list or root. It returns an error when
+// root is empty, tiers is empty, or a tier is blank.
+func ReadPulumiStacks(fsys fs.FS, root string, tiers []string) (map[string]bool, error) {
+	if root == "" {
+		return nil, errors.New("pulumi stack root is empty")
+	}
+	if len(tiers) == 0 {
+		return nil, errors.New("pulumi stack tiers are empty")
+	}
+	for i, tier := range tiers {
+		if strings.TrimSpace(tier) == "" {
+			return nil, fmt.Errorf("pulumi stack tier %d is blank", i)
+		}
+	}
 	stacks := make(map[string]bool)
 	for _, tier := range tiers {
 		tierPath := path.Join(root, tier)
@@ -159,5 +174,5 @@ func ReadPulumiStacks(fsys fs.FS, root string, tiers []string) map[string]bool {
 			}
 		}
 	}
-	return stacks
+	return stacks, nil
 }

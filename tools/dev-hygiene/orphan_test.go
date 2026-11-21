@@ -23,7 +23,7 @@ func orphanFixture(t *testing.T, name string) (root, dir, argsFile string) {
 	mustWrite(t, filepath.Join(dir, "README.md"), "x\n")
 	backdate(t, dir, time.Now().Add(-100*time.Hour))
 	argsFile = filepath.Join(t.TempDir(), "jj-args")
-	bin := fakeBin(t, "jj", `echo "$*" >> '`+argsFile+`'
+	bin := fakeBin(t, "jj", `printf '%s\n' "$*" >> '`+argsFile+`'
 exit 1
 `)
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))

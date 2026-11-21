@@ -159,10 +159,10 @@ func TestBuildStepBuildsGoFromPlannedMain(t *testing.T) {
 	if !strings.Contains(wf, `main=$(jq -r .main <<<"$b")`) {
 		t.Fatal("cd.yaml: the build step does not read main from the plan")
 	}
-	if !strings.Contains(wf, `go -C "$project" build -trimpath -o "$stage/bin/$name" "$main"`) {
+	if !strings.Contains(wf, `go -C "$project" build -trimpath -o "$stage/bin/$name$exe" "$main"`) {
 		t.Fatal("cd.yaml: go build does not build the planned main package")
 	}
-	if strings.Contains(wf, `go -C "$project" build -trimpath -o "$stage/bin/$name" .`) {
+	if strings.Contains(wf, `go -C "$project" build -trimpath -o "$stage/bin/$name$exe" .`) {
 		t.Fatal("cd.yaml: go build still hardcodes the project root")
 	}
 }

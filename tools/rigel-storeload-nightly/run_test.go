@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -347,4 +348,74 @@ func cotalMessage(calls []capturedCall) string {
 		return ""
 	}
 	return call.args[3]
+}
+
+func TestConfigFromEnvironmentRequiresEachVariable(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	idFile := filepath.Join(dir, "client-id")
+	secretFile := filepath.Join(dir, "client-secret")
+	if err := os.WriteFile(idFile, []byte("client-id\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(secretFile, []byte("client-secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	complete := map[string]string{
+		"RIGEL_NIGHTLY_SOURCE":        "/source/example.git",
+		"RIGEL_NIGHTLY_CLONE":         filepath.Join(dir, "clone"),
+		"RIGEL_NIGHTLY_HOST":          "example-host",
+		"RIGEL_NIGHTLY_TASK":          "bench-latency:e2e",
+		"RIGEL_NIGHTLY_ISSUE":         "EX-1",
+		"RIGEL_NIGHTLY_MENTION":       "@example-owner",
+		"RIGEL_NIGHTLY_COTAL_CHANNEL": "example-channel",
+		"RIGEL_NIGHTLY_COTAL_DIR":     dir,
+		"LINEAR_CLIENT_ID_FILE":       idFile,
+		"LINEAR_CLIENT_SECRET_FILE":   secretFile,
+	}
+	tests := []struct {
+		name    string
+		blank   string
+		wantErr bool
+	}{
+		{name: "complete environment is accepted"},
+		{name: "missing source", blank: "RIGEL_NIGHTLY_SOURCE", wantErr: true},
+		{name: "missing clone", blank: "RIGEL_NIGHTLY_CLONE", wantErr: true},
+		{name: "missing host", blank: "RIGEL_NIGHTLY_HOST", wantErr: true},
+		{name: "missing task", blank: "RIGEL_NIGHTLY_TASK", wantErr: true},
+		{name: "missing issue", blank: "RIGEL_NIGHTLY_ISSUE", wantErr: true},
+		{name: "missing mention", blank: "RIGEL_NIGHTLY_MENTION", wantErr: true},
+		{name: "missing cotal channel", blank: "RIGEL_NIGHTLY_COTAL_CHANNEL", wantErr: true},
+		{name: "missing cotal dir", blank: "RIGEL_NIGHTLY_COTAL_DIR", wantErr: true},
+		{name: "missing client id file", blank: "LINEAR_CLIENT_ID_FILE", wantErr: true},
+		{name: "missing client secret file", blank: "LINEAR_CLIENT_SECRET_FILE", wantErr: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			env := make(map[string]string, len(complete))
+			for name, value := range complete {
+				env[name] = value
+			}
+			if tc.blank != "" {
+				env[tc.blank] = ""
+			}
+			config, err := configFromEnvironment(func(name string) string { return env[name] })
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("configFromEnvironment() = %+v, want error naming the required variables", config)
+				}
+				if !strings.Contains(err.Error(), tc.blank) || !strings.Contains(err.Error(), "required") {
+					t.Fatalf("error = %q, want the required-variable list", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("configFromEnvironment() error = %v, want nil", err)
+			}
+			if config.host != "example-host" || config.issue != "EX-1" || config.cotalChannel != "example-channel" || config.credentials.ClientID != "client-id" || config.credentials.ClientSecret != "client-secret" {
+				t.Fatalf("configFromEnvironment() = %+v, want values from the environment and credential files", config)
+			}
+		})
+	}
 }

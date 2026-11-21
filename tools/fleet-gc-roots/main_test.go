@@ -351,17 +351,36 @@ func TestRunRejectsExtraArguments(t *testing.T) {
 
 func TestRunFromEnvironmentRequiresBothPaths(t *testing.T) {
 	t.Parallel()
-	var stdout, stderr bytes.Buffer
-	code := runFromEnvironment(nil, &stdout, &stderr, func(name string) string {
-		if name == envWorkspaces {
-			return "/srv/example/workspaces"
-		}
-		return ""
-	})
-	if code != 2 {
-		t.Fatalf("run exit = %d, want 2", code)
+	tests := []struct {
+		name       string
+		env        map[string]string
+		wantStderr string
+	}{
+		{
+			name:       "missing workspaces",
+			env:        map[string]string{envOutput: "/srv/example/state/candidates.txt"},
+			wantStderr: envWorkspaces,
+		},
+		{
+			name:       "missing output",
+			env:        map[string]string{envWorkspaces: "/srv/example/workspaces"},
+			wantStderr: envOutput,
+		},
 	}
-	if stdout.Len() != 0 {
-		t.Fatalf("stdout = %q, want nothing", stdout.String())
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var stdout, stderr bytes.Buffer
+			code := runFromEnvironment(nil, &stdout, &stderr, func(name string) string { return tc.env[name] })
+			if code != 2 {
+				t.Fatalf("run exit = %d, want 2; stderr:\n%s", code, stderr.String())
+			}
+			if stdout.Len() != 0 {
+				t.Fatalf("stdout = %q, want nothing", stdout.String())
+			}
+			if !strings.Contains(stderr.String(), "fleet-gc-roots requires environment variables") || !strings.Contains(stderr.String(), "missing="+tc.wantStderr+"\n") {
+				t.Fatalf("stderr = %q, want only the missing variable %s named", stderr.String(), tc.wantStderr)
+			}
+		})
 	}
 }

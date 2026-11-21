@@ -49,7 +49,14 @@ func runFromEnvironment(args []string, stdout, stderr io.Writer, getenv func(str
 	workspaces := getenv(envWorkspaces)
 	output := getenv(envOutput)
 	if workspaces == "" || output == "" {
-		slog.New(slog.NewTextHandler(stderr, nil)).Error("fleet-gc-roots needs both paths", "workspaces_env", envWorkspaces, "output_env", envOutput)
+		var missing []string
+		if workspaces == "" {
+			missing = append(missing, envWorkspaces)
+		}
+		if output == "" {
+			missing = append(missing, envOutput)
+		}
+		slog.New(slog.NewTextHandler(stderr, nil)).Error("fleet-gc-roots requires environment variables", "missing", strings.Join(missing, ","))
 		return 2
 	}
 	return run(args, stdout, stderr, runEnv{

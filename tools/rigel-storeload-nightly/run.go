@@ -520,7 +520,7 @@ func configFromEnvironment(getenv func(string) string) (nightlyConfig, error) {
 	clientID, hasClientID := credentialfile.Read(getenv("LINEAR_CLIENT_ID_FILE"))
 	clientSecret, hasClientSecret := credentialfile.Read(getenv("LINEAR_CLIENT_SECRET_FILE"))
 	if config.source == "" || config.clone == "" || config.host == "" || config.task == "" || config.issue == "" || config.mention == "" || config.cotalChannel == "" || config.cotalDir == "" || !hasClientID || !hasClientSecret {
-		return nightlyConfig{}, errors.New("RIGEL_NIGHTLY_SOURCE, RIGEL_NIGHTLY_CLONE, RIGEL_NIGHTLY_HOST, RIGEL_NIGHTLY_TASK, RIGEL_NIGHTLY_ISSUE, RIGEL_NIGHTLY_MENTION, RIGEL_NIGHTLY_COTAL_CHANNEL, RIGEL_NIGHTLY_COTAL_DIR, and both Linear credential files are required")
+		return nightlyConfig{}, errors.New("RIGEL_NIGHTLY_SOURCE, RIGEL_NIGHTLY_CLONE, RIGEL_NIGHTLY_HOST, RIGEL_NIGHTLY_TASK, RIGEL_NIGHTLY_ISSUE, RIGEL_NIGHTLY_MENTION, RIGEL_NIGHTLY_COTAL_CHANNEL, RIGEL_NIGHTLY_COTAL_DIR, LINEAR_CLIENT_ID_FILE, and LINEAR_CLIENT_SECRET_FILE are required")
 	}
 	config.credentials = linearauth.Credentials{ClientID: clientID, ClientSecret: clientSecret}
 	return config, nil

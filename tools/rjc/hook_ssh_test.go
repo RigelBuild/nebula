@@ -1190,7 +1190,7 @@ func TestSSHHookRunnerPicksFlakeDevShell(t *testing.T) {
 }
 
 func TestSSHHookScriptUsesHostJujutsuWhenPresent(t *testing.T) {
-	script := sshHookScript()
+	script := sshHookScript(exampleDevenvNixpkgs)
 	present := "if command -v jj >/dev/null 2>&1; then\n  if PATH=\"$PATH${hook_path:+:$hook_path}\" $shell_prefix sh -c"
 	if !strings.Contains(script, present) {
 		t.Fatalf("script must run hk directly when the host has jj, got:\n%s", script)
@@ -1198,7 +1198,7 @@ func TestSSHHookScriptUsesHostJujutsuWhenPresent(t *testing.T) {
 }
 
 func TestSSHHookScriptPinsEveryNixpkgsReference(t *testing.T) {
-	script := sshHookScript()
+	script := sshHookScript(exampleDevenvNixpkgs)
 	for _, pkg := range []string{"pkl", "git", "nodejs_24", "pnpm", "bun", "jujutsu"} {
 		ref := hookshell.Nixpkgs + "#" + pkg
 		if !strings.Contains(script, ref) {
@@ -1214,7 +1214,7 @@ func TestSSHHookScriptPinsEveryNixpkgsReference(t *testing.T) {
 }
 
 func TestSSHHookScriptWrapsJujutsuOnlyWhenAbsent(t *testing.T) {
-	script := strings.ReplaceAll(sshHookScript(), `'\''`, `'`)
+	script := strings.ReplaceAll(sshHookScript(exampleDevenvNixpkgs), `'\''`, `'`)
 	absent := "else\n  if PATH=\"$PATH${hook_path:+:$hook_path}\" nix --extra-experimental-features 'nix-command flakes' shell " + hookshell.Nixpkgs + "#jujutsu -c $shell_prefix sh -c"
 	if !strings.Contains(script, absent) {
 		t.Fatalf("script must wrap hk in nix shell nixpkgs#jujutsu only when the host lacks jj, got:\n%s", script)
@@ -1321,7 +1321,7 @@ func TestSSHHookReleasesLocksWithDaemon(t *testing.T) {
 	writeFakeTool(t, filepath.Join(bin, "git"), "#!/bin/sh\ncase \"$*\" in *'worktree add'*) mkdir -p \"$6\"; touch \"$6/hk.pkl\" ;; esac\nexit 0\n")
 	writeFakeTool(t, filepath.Join(bin, "jj"), "#!/bin/sh\nexit 0\n")
 	writeFakeTool(t, filepath.Join(bin, "hk"), "#!/bin/sh\nfor lock in \"$HOME/rjc-hook/tmp/\"rjc-hook.*/.lock \"$HOME/rjc-hook/slots/s1\" \"$HOME/rjc-hook/owner/repo/w0.lock\"; do if flock -n \"$lock\" true; then echo unlocked; else echo held; fi; done > \"$HOME/locks\"\nsleep 600 &\nprintf '%s' \"$!\" > \"$HOME/pid\"\necho hook-output\nexit 23\n")
-	script := strings.Replace(sshHookScript(), `trap 'rm -rf "$d"' EXIT HUP INT TERM`, ":", 1)
+	script := strings.Replace(sshHookScript(exampleDevenvNixpkgs), `trap 'rm -rf "$d"' EXIT HUP INT TERM`, ":", 1)
 	ctx, cancel := context.WithTimeout(t.Context(), 4*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "sh", "-c", script, "rjc-hook", "base", "head", "0", "owner", "repo", "1", "hk", "hk.pkl", "30s")

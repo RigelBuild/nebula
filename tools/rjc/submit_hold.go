@@ -20,7 +20,7 @@ func validHoldReason(reason string) bool {
 }
 
 // holdThenReady posts the Hold on pr, then promotes a PR this run opened as draft only for the Hold.
-// A failed post leaves that PR draft, so nemo-merge refuses it.
+// A failed post leaves that PR draft, so the merge bot refuses it.
 func (r *repository) holdThenReady(ctx context.Context, f *forgeClient, pr int, reason string, promote bool) error {
 	if err := postHold(ctx, f, r.profile.Name, pr, reason); err != nil {
 		return holdFailure(pr, promote, err)
@@ -42,7 +42,7 @@ func (r *repository) holdThenReady(ctx context.Context, f *forgeClient, pr int, 
 }
 
 // postHold posts `Hold: <reason>` on pr unless the viewer's latest Hold already has that reason and is still in force.
-// nemo-merge (comment_clears_hold) lifts a login's Hold only at that login's all-clear or explicit lift line,
+// The merge bot (comment_clears_hold) lifts a login's Hold only at that login's all-clear or explicit lift line,
 // so other later comments leave it in force.
 func postHold(ctx context.Context, f *forgeClient, repo string, pr int, reason string) error {
 	viewer, err := f.viewer(ctx)
@@ -61,7 +61,7 @@ func postHold(ctx context.Context, f *forgeClient, repo string, pr int, reason s
 
 // holdInForce reports whether the viewer's latest Hold line has reason and no later viewer comment clears it.
 // It parses only plain comments (see plainComment): a non-plain viewer comment from the Hold on means repost,
-// because nemo-merge's Unicode-aware parsing can read it differently, and a duplicate Hold is harmless.
+// because the merge bot's Unicode-aware parsing can read it differently, and a duplicate Hold is harmless.
 func holdInForce(comments []issueComment, viewer, reason string) bool {
 	want := normalizeActive(reason)
 	for _, c := range slices.Backward(comments) {
@@ -82,7 +82,7 @@ func holdInForce(comments []issueComment, viewer, reason string) bool {
 }
 
 // plainComment reports whether body is printable ASCII, `\n` and `\t` only, with no `&` that could start an HTML entity.
-// For such text Go's ASCII regexp and line splitting agree with nemo-merge's Python.
+// For such text Go's ASCII regexp and line splitting agree with the merge bot's Python.
 func plainComment(body string) bool {
 	for i := range len(body) {
 		b := body[i]
@@ -96,9 +96,9 @@ func plainComment(body string) bool {
 var (
 	// holdLinePattern is comment_has_hold's `^\s*Hold:` with the rest of the line captured as the reason.
 	holdLinePattern = regexp.MustCompile(`(?i)^\s*Hold:(.*)$`)
-	// liftPattern is nemo-merge's LEADING_LIFT_RE.
+	// liftPattern is the merge bot's LEADING_LIFT_RE.
 	liftPattern = regexp.MustCompile(`(?i)^\s*(?:unhold|hold[\s-]+(?:lifted|cleared))\b`)
-	// allClearPattern is nemo-merge's POSITIVE_ALL_CLEAR_RE, used with review_verdict's leading `#+\s*` strip.
+	// allClearPattern is the merge bot's POSITIVE_ALL_CLEAR_RE, used with review_verdict's leading `#+\s*` strip.
 	allClearPattern = regexp.MustCompile("(?i)^all[- ]clear (?:at|for) `?[0-9a-f]{8,40}`?\\.?$")
 	headingPattern  = regexp.MustCompile(`^#+\s*`)
 	// inlineCodePattern and listMarkerPattern are comment_lifts' inline-code strip and leading-marker strip.
@@ -121,7 +121,7 @@ func normalizeActive(text string) string {
 	}, text)
 }
 
-// activeText ports nemo-merge's active_text: unescape HTML, drop fenced and quoted lines,
+// activeText ports the merge bot's active_text: unescape HTML, drop fenced and quoted lines,
 // remove strikethrough, then normalizeActive. Lines are joined with "\n".
 func activeText(body string) string {
 	var lines []string
@@ -184,7 +184,7 @@ func clearsHold(c issueComment) bool {
 // leftDraft is true when this run opened the PR as draft for the Hold and kept it draft.
 func holdFailure(pr int, leftDraft bool, cause error) error {
 	reason := fmt.Sprintf("PR %d was pushed, but the Hold comment was not posted: %v", pr, cause)
-	fix := "rerun rjc submit --hold \"<reason>\"; until a Hold posts, nemo-merge can merge the PR"
+	fix := "rerun rjc submit --hold \"<reason>\"; until a Hold posts, the merge bot can merge the PR"
 	if leftDraft {
 		reason = fmt.Sprintf("PR %d was opened as draft and left draft, because the Hold comment was not posted: %v", pr, cause)
 		fix = fmt.Sprintf("rerun rjc submit --hold \"<reason>\", then mark PR %d ready", pr)

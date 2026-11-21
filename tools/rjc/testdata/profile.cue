@@ -5,13 +5,13 @@ owners: ["example"]
 coAuthor: "Example Author <author@example.com>"
 reviewer: "example-reviewer"
 agentEmail: "agent@example.com"
-nemoEmail: "merge@example.com"
-nemoRepoDir: "merge/repos"
+mergeBotEmail: "merge@example.com"
+mergeBotRepoDir: "merge/repos"
 aliases: {
 	"example/factory-alias": "example/factory"
 }
-gateRunnerDir: "tools/example-gate"
-rootChecksDir: "tools/example-checks"
+gateRunnerDir: "tools/gate-runner"
+rootChecksDir: "tools/root-checks"
 devenvNixpkgs: "github:example/nixpkgs/0000000000000000000000000000000000000000"
 
 repos: {

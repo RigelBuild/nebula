@@ -56,7 +56,11 @@ func (r *repository) preflightLocalHooks(ctx context.Context, target string, opt
 	return r.refuseNonFastLocalHooks(ctx, line)
 }
 
-var fastHookRE = regexp.MustCompile(`(?s)^\s*amends\s+"package://github\.com/jdx/hk/releases/download/v` + regexp.QuoteMeta(hookshell.HKVersion) + `/hk@` + regexp.QuoteMeta(hookshell.HKVersion) + `#/Config\.pkl"\s*default_branch\s*=\s*"main"\s*hooks\s*\{\s*\["pre-push"\]\s*\{\s*steps\s*\{\s*\["ci"\]\s*=\s*new\s+Step\s*\{\s*check\s*=\s*"go run \./tools/gate-runner moon-ci --tier fast"\s*\}\s*\["gates"\]\s*=\s*new\s+Step\s*\{\s*check\s*=\s*"go run \./tools/gate-runner"\s*depends\s*=\s*List\("ci"\)\s*\}\s*\}\s*\}\s*\}\s*$`)
+// fastHookRE matches the only hk config allowed to run locally: the fast tier of the gate runner in gateRunnerDir.
+func fastHookRE(gateRunnerDir string) *regexp.Regexp {
+	runner := `go run \./` + regexp.QuoteMeta(gateRunnerDir)
+	return regexp.MustCompile(`(?s)^\s*amends\s+"package://github\.com/jdx/hk/releases/download/v` + regexp.QuoteMeta(hookshell.HKVersion) + `/hk@` + regexp.QuoteMeta(hookshell.HKVersion) + `#/Config\.pkl"\s*default_branch\s*=\s*"main"\s*hooks\s*\{\s*\["pre-push"\]\s*\{\s*steps\s*\{\s*\["ci"\]\s*=\s*new\s+Step\s*\{\s*check\s*=\s*"` + runner + ` moon-ci --tier fast"\s*\}\s*\["gates"\]\s*=\s*new\s+Step\s*\{\s*check\s*=\s*"` + runner + `"\s*depends\s*=\s*List\("ci"\)\s*\}\s*\}\s*\}\s*\}\s*$`)
+}
 
 func (r *repository) refuseNonFastLocalHooks(ctx context.Context, line []Change) error {
 	if envLookup(r.env, "RJC_HOOK_LOCAL") != localHooksRefuse {
@@ -101,7 +105,7 @@ func (r *repository) refuseNonFastLocalHooks(ctx context.Context, line []Change)
 				config.WriteByte('\n')
 			}
 		}
-		if !fastHookRE.MatchString(config.String()) {
+		if !fastHookRE(r.profile.GateRunnerDir).MatchString(config.String()) {
 			return r.refuseLocalHooks(fix)
 		}
 	}

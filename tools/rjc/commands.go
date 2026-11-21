@@ -140,7 +140,7 @@ func (c *cli) submitCommand() (*cobra.Command, error) {
 	cmd.Flags().StringArrayVar(&opt.issues, "issue", nil, "Issue <PREFIX>-<n> for unbookmarked work; repeat (first is primary).")
 	cmd.Flags().StringVar(&opt.ack, "ack-remote", "", "Exact sha256 of the freshly read remote authored body.")
 	cmd.Flags().StringVar(&opt.skip, "skip-checks", "", "Bypass reason: one line up to 200 characters, or main-red:<reference>, or p0:<PREFIX>-<n>.")
-	cmd.Flags().StringVar(&opt.hold, "hold", "", "Post a Hold: <reason> PR comment before submit returns, so nemo-merge sees it at once.")
+	cmd.Flags().StringVar(&opt.hold, "hold", "", "Post a Hold: <reason> PR comment before submit returns, so the merge bot sees it at once.")
 	cmd.Flags().Var(&skipFlag{pairs: pairs}, "skip-target", "Leave out one failed project:task; follow with --reason.")
 	cmd.Flags().Var(&skipFlag{pairs: pairs, reason: true}, "reason", "Reason for the preceding --skip-target.")
 	cmd.Flags().StringVar(&opt.at, "at", "", "Retarget the selected bookmark to this existing commit.")

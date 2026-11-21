@@ -14,8 +14,11 @@ import (
 // rootChecksGate names the refusal gate for a failing pre-push root-checks run.
 const rootChecksGate = "root-checks"
 
-// rootChecksFix tells the author how to clear a root-checks refusal, whichever check failed.
-const rootChecksFix = "run rjc inside the devenv shell, which pins biome, rumdl and moon; fix the reported check (`biome check --write`, `rumdl check --fix`, or add the project to tools/root-checks/project-registry.expected.json), commit, and rerun rjc submit"
+// rootChecksFix tells the author how to clear a root-checks refusal, whichever check failed. dir is the
+// profile's rootChecksDir.
+func rootChecksFix(dir string) string {
+	return "run rjc inside the devenv shell, which pins biome, rumdl and moon; fix the reported check (`biome check --write`, `rumdl check --fix`, or add the project to " + dir + "/project-registry.expected.json), commit, and rerun rjc submit"
+}
 
 // rootChecksResult is one root-checks run: its exit code and combined output.
 type rootChecksResult struct {
@@ -28,7 +31,7 @@ func (r *repository) runRootChecks(ctx context.Context, root string, names []str
 	if r.rootChecks != nil {
 		return r.rootChecks(ctx, root, names)
 	}
-	cmd := r.execCommand(ctx, "go", "run", "./tools/root-checks", "--checks", strings.Join(names, ",")) //nolint:gosec // Names come from the repository profile; argv is literal.
+	cmd := r.execCommand(ctx, "go", "run", "./"+r.profile.RootChecksDir, "--checks", strings.Join(names, ",")) //nolint:gosec // The directory and names come from the repository profile.
 	cmd.Dir = root
 	cmd.Env = r.childEnv([]string{"GATE_ROOT=" + root, "GOWORK=off"})
 	var out bytes.Buffer
@@ -107,7 +110,7 @@ func (r *repository) checkHeadRootChecks(ctx context.Context, rev string, names 
 		return err
 	}
 	if result.code != 0 {
-		return refusal("hooks", rootChecksGate, "root-checks failed in the head tree:\n"+strings.TrimRight(result.output, "\n"), rootChecksFix)
+		return refusal("hooks", rootChecksGate, "root-checks failed in the head tree:\n"+strings.TrimRight(result.output, "\n"), rootChecksFix(r.profile.RootChecksDir))
 	}
 	if _, err := fmt.Fprintf(log, "root-checks: %s passed\n", strings.Join(names, ",")); err != nil {
 		return toolFailure("hooks", err)

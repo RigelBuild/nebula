@@ -116,11 +116,12 @@ func TestProfileListsCheapRootChecks(t *testing.T) {
 }
 
 // TestRootChecksFixHintCoversEveryFailure checks that the refusal hint names the devenv shell, both fixers, and the
-// project-registry expectation file, so it fits any failing check.
+// project-registry expectation file under the profile's rootChecksDir, so it fits any failing check.
 func TestRootChecksFixHintCoversEveryFailure(t *testing.T) {
-	for _, want := range []string{"devenv shell", "biome check --write", "rumdl check --fix", "project-registry.expected.json"} {
-		if !strings.Contains(rootChecksFix, want) {
-			t.Fatalf("rootChecksFix lacks %q: %s", want, rootChecksFix)
+	fix := rootChecksFix("tools/custom-checks")
+	for _, want := range []string{"devenv shell", "biome check --write", "rumdl check --fix", "tools/custom-checks/project-registry.expected.json"} {
+		if !strings.Contains(fix, want) {
+			t.Fatalf("rootChecksFix lacks %q: %s", want, fix)
 		}
 	}
 }

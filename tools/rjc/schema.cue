@@ -11,10 +11,10 @@ package main
 	reviewer: string & !=""
 	// agentEmail is the jj user.email required in agent workspaces.
 	agentEmail: string & =~"@"
-	// nemoEmail is the jj user.email required in the merge-bot workspace.
-	nemoEmail: string & =~"@"
-	// nemoRepoDir is the merge-bot clone root, relative to $HOME.
-	nemoRepoDir: string & !=""
+	// mergeBotEmail is the jj user.email required in the merge-bot workspace.
+	mergeBotEmail: string & =~"@"
+	// mergeBotRepoDir is the merge-bot clone root, relative to $HOME.
+	mergeBotRepoDir: string & !=""
 	// aliases maps a repository name to the name rjc uses for it.
 	aliases: [string]: string
 	// gateRunnerDir is the directory of the gate-runner tool, relative to the repository root.

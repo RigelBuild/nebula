@@ -97,7 +97,7 @@ func (r *repository) recheckMainRed(ctx context.Context, p Profile, rec HookReco
 	}
 	if len(gates) > 0 {
 		binary := filepath.Join(dir, "gate-runner")
-		if _, err := workspace.command(ctx, nil, nil, "go", "build", "-o", binary, "./tools/gate-runner"); err != nil {
+		if _, err := workspace.command(ctx, nil, nil, "go", "build", "-o", binary, "./"+r.profile.GateRunnerDir); err != nil {
 			return nil, err
 		}
 		for _, gate := range gates {

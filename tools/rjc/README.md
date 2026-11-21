@@ -27,8 +27,8 @@ Top-level fields, all required:
 | `coAuthor` | `Co-authored-by` trailer added to commits and PR bodies. |
 | `reviewer` | Login requested as reviewer on tracking-fork PRs. |
 | `agentEmail` | jj `user.email` required in agent workspaces. |
-| `nemoEmail` | jj `user.email` required in the merge-bot workspace. |
-| `nemoRepoDir` | Merge-bot clone root, relative to `$HOME`. |
+| `mergeBotEmail` | jj `user.email` required in the merge-bot workspace. |
+| `mergeBotRepoDir` | Merge-bot clone root, relative to `$HOME`. |
 | `aliases` | Map from a repository name to the name rjc uses for it; may be `{}`. |
 | `gateRunnerDir` | Gate-runner tool directory, relative to the repository root. |
 | `rootChecksDir` | Root-checks tool directory, relative to the repository root. |

@@ -26,7 +26,7 @@ func requestAgentReview(ctx context.Context, repo string, pr int, snapshot Metad
 	return nil
 }
 
-// requestUpstreamSyncLabel adds upstream-sync so nemo-merge merge-commits the sync PR.
+// requestUpstreamSyncLabel adds upstream-sync so the merge bot merge-commits the sync PR.
 func requestUpstreamSyncLabel(ctx context.Context, repo string, pr int, snapshot Metadata) error {
 	if slices.Contains(snapshot.Labels, "upstream-sync") {
 		return nil

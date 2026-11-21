@@ -9,9 +9,6 @@ import (
 // Nixpkgs pins remote nixpkgs references to a revision with a compatible pre-commit virtualenv.
 const Nixpkgs = "github:NixOS/nixpkgs/b6018f87da91d19d0ab4cf979885689b469cdd41"
 
-// DevenvNixpkgs is the default devenv-nixpkgs revision used to start a devenv shell.
-const DevenvNixpkgs = "github:cachix/devenv-nixpkgs/958ba64a6f8820ccb96a433a2e28bfd5f5e91fd7"
-
 const hkVersion = "2.12.0"
 
 // HKVersion is the hk release used by the hook runner.

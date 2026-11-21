@@ -207,8 +207,8 @@ if [ "$3" = 1 ]; then tar -C "$d" -cf - exit moon.json gates.json >&3; else tar 
 `
 
 //nolint:dupword // The "then ... fi" in the shell script is syntax, not a repeated word.
-func sshHookScript() string {
-	body := sshHookBody + hookshell.Select + `hook_path=""
+func sshHookScript(devenvNixpkgs string) string {
+	body := sshHookBody + hookshell.Select(devenvNixpkgs) + `hook_path=""
 hook_dir=$(command -v "$kind" 2>/dev/null | sed 's#/[^/]*$##')
 if [ -z "$hook_dir" ]; then
   if [ "$kind" = hk ]; then

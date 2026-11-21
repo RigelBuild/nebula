@@ -179,7 +179,7 @@ func TestRealHookMatchesFastPolicy(t *testing.T) {
 			config.WriteByte('\n')
 		}
 	}
-	if !fastHookRE.MatchString(config.String()) {
+	if !fastHookRE(loadExampleConfig(t).GateRunnerDir).MatchString(config.String()) {
 		t.Fatal("repository hk.pkl does not match fast hook policy")
 	}
 }

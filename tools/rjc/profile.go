@@ -23,17 +23,17 @@ var schemaCUE []byte
 
 // Config is the decoded profile file: the deployment values and the repository table.
 type Config struct {
-	Owners        []string           `json:"owners"`
-	CoAuthor      string             `json:"coAuthor"`
-	Reviewer      string             `json:"reviewer"`
-	AgentEmail    string             `json:"agentEmail"`
-	NemoEmail     string             `json:"nemoEmail"`
-	NemoRepoDir   string             `json:"nemoRepoDir"`
-	Aliases       map[string]string  `json:"aliases"`
-	GateRunnerDir string             `json:"gateRunnerDir"`
-	RootChecksDir string             `json:"rootChecksDir"`
-	DevenvNixpkgs string             `json:"devenvNixpkgs"`
-	Repos         map[string]Profile `json:"repos"`
+	Owners          []string           `json:"owners"`
+	CoAuthor        string             `json:"coAuthor"`
+	Reviewer        string             `json:"reviewer"`
+	AgentEmail      string             `json:"agentEmail"`
+	MergeBotEmail   string             `json:"mergeBotEmail"`
+	MergeBotRepoDir string             `json:"mergeBotRepoDir"`
+	Aliases         map[string]string  `json:"aliases"`
+	GateRunnerDir   string             `json:"gateRunnerDir"`
+	RootChecksDir   string             `json:"rootChecksDir"`
+	DevenvNixpkgs   string             `json:"devenvNixpkgs"`
+	Repos           map[string]Profile `json:"repos"`
 }
 
 // errNoProfiles reports a run that named no profile file.

@@ -172,7 +172,7 @@ func (r sshHookRunner) transfer(ctx context.Context, payload, base, head, kind, 
 	}
 	limit := shQuote(strconv.FormatFloat(timeout.Seconds(), 'f', -1, 64) + "s")
 	owner, repo, _ := strings.Cut(name, "/")
-	remote := "RJC_HOOK_TICKET=" + shQuote(r.ticket) + " RJC_HOOK_SSH_SHELL=" + shQuote(envLookup(r.repo.env, "RJC_HOOK_SSH_SHELL")) + " sh -c " + shQuote(sshHookGuard) + " rjc-guard " + limit + " " + shQuote(sshHookScript()) + " rjc-hook " + shQuote(base) + " " + shQuote(head) + " " + reports + " " + shQuote(owner) + " " + shQuote(repo) + " " + strconv.Itoa(slots) + " " + shQuote(kind) + " " + shQuote(config) + " " + limit
+	remote := "RJC_HOOK_TICKET=" + shQuote(r.ticket) + " RJC_HOOK_SSH_SHELL=" + shQuote(envLookup(r.repo.env, "RJC_HOOK_SSH_SHELL")) + " sh -c " + shQuote(sshHookGuard) + " rjc-guard " + limit + " " + shQuote(sshHookScript(r.repo.profile.DevenvNixpkgs)) + " rjc-hook " + shQuote(base) + " " + shQuote(head) + " " + reports + " " + shQuote(owner) + " " + shQuote(repo) + " " + strconv.Itoa(slots) + " " + shQuote(kind) + " " + shQuote(config) + " " + limit
 	var result bytes.Buffer
 	start := time.Now()
 	runErr := r.sshFramed(ctx, remote, payload, &result, log)

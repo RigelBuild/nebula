@@ -47,6 +47,9 @@ func TestBadP0ReasonRefusedBeforeWrites(t *testing.T) {
 			f := fixtureRepo(t)
 			bookmark := f.new(t, "EX-1", "feat(rjc): urgent change", "")
 			f.commit(t, "urgent.txt")
+			// newChange put the bookmark on the empty working copy. Move it to the commit so ownership passes and
+			// the run reaches the skip-reason gate.
+			jjTest(t, f.repo, "bookmark", "move", bookmark, "--to", "@-")
 			// Put main ahead so a submit that got past validation would rebase the line.
 			jjTest(t, f.repo, "new", "main")
 			f.commit(t, "main-ahead.txt")
@@ -62,8 +65,8 @@ func TestBadP0ReasonRefusedBeforeWrites(t *testing.T) {
 			reads := f.repoReads
 			err := f.repo.submit(f.ctx, submitOptions{bookmark: bookmark, title: "feat(rjc): urgent change", bodyFile: f.bodyFile, skip: skip, skipGiven: true}, f, io.Discard)
 			var fail *failure
-			if !errors.As(err, &fail) || fail.gate != "skip-reason" {
-				t.Fatalf("submit(%q) = %v, want a skip-reason refusal", skip, err)
+			if !errors.As(err, &fail) || fail.stage != "metadata" || fail.gate != "skip-reason" {
+				t.Fatalf("submit(%q) = %v, want the early metadata skip-reason refusal", skip, err)
 			}
 			if after := repoState(t, f); after != before {
 				t.Fatalf("refusal changed repository state:\n%s\n->\n%s", before, after)
@@ -72,5 +75,28 @@ func TestBadP0ReasonRefusedBeforeWrites(t *testing.T) {
 				t.Fatalf("refusal reached a remote: pushes=%v lookups=%d repoReads=%d->%d creates=%d", f.pushes, lookups, reads, f.repoReads, f.pullCreates)
 			}
 		})
+	}
+}
+
+// TestValidP0ReasonPassesSkipReasonGate is the positive control for TestBadP0ReasonRefusedBeforeWrites: the same
+// fixture with p0:EX-1 gets past the skip-reason gate and reaches the Linear priority lookup.
+func TestValidP0ReasonPassesSkipReasonGate(t *testing.T) {
+	f := fixtureRepo(t)
+	bookmark := f.new(t, "EX-1", "feat(rjc): urgent change", "")
+	f.commit(t, "urgent.txt")
+	jjTest(t, f.repo, "bookmark", "move", bookmark, "--to", "@-")
+	lookups := 0
+	f.repo.lookupLinearPriority = func(context.Context, string) (int, string, bool, error) {
+		lookups++
+		// Not Urgent, so the run stops at the priority check after the skip-reason gate.
+		return 3, "started", true, nil
+	}
+	err := f.repo.submit(f.ctx, submitOptions{bookmark: bookmark, title: "feat(rjc): urgent change", bodyFile: f.bodyFile, skip: "p0:EX-1", skipGiven: true}, f, io.Discard)
+	var fail *failure
+	if errors.As(err, &fail) && fail.stage == "metadata" && fail.gate == "skip-reason" {
+		t.Fatalf("submit(p0:EX-1) refused at the early skip-reason gate: %v", err)
+	}
+	if lookups == 0 {
+		t.Fatalf("submit(p0:EX-1) did not reach the Linear priority lookup: %v", err)
 	}
 }

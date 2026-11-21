@@ -223,7 +223,7 @@ func TestSubmitRetargetRefusesUnsafeLocalHooksBeforeMutation(t *testing.T) {
 			jjTest(t, f.repo, "commit", "-m", "fix: unsafe hook")
 			if tc.intermediate {
 				jjTest(t, f.repo, "bookmark", "create", f.repo.codename+"/ex-2-intermediate", "-r", "@-")
-				data, err := os.ReadFile("../../hk.pkl")
+				data, err := os.ReadFile("testdata/hk.pkl")
 				if err != nil {
 					t.Fatal(err)
 				}

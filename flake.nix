@@ -127,10 +127,23 @@
         hk-hook = pkgs: [ pkgs.jujutsu ];
         # host-bao-seal's tests run a sops/age round-trip.
         host-bao-seal = pkgs: [ pkgs.sops pkgs.age ];
-        # rjc's tests create jj repositories and run jj on PATH.
-        rjc = pkgs: [ pkgs.jujutsu ];
+        # rjc's tests create jj repositories and run jj on PATH. The hook tests
+        # use flock and setsid (util-linux) and ps (procps). The TestRealVine*
+        # tests drive jj-vine; the flake exports it as a prebuilt package
+        # fetched by hash from the release manifest.
+        rjc = pkgs:
+          [ pkgs.jujutsu pkgs.util-linux pkgs.procps ]
+          ++ lib.optional ((packagesFor manifest pkgs.stdenv.hostPlatform.system) ? jj-vine)
+            (packagesFor manifest pkgs.stdenv.hostPlatform.system).jj-vine;
         # zellij-rss-watchdog's process tests start a grandchild with setsid.
         zellij-rss-watchdog = pkgs: [ pkgs.util-linux ];
+      };
+
+      # checkFlags are extra go test flags for a command's check phase. rjc's
+      # suite runs about six minutes off the sandbox and passes the 10m default
+      # go test timeout inside it.
+      checkFlags = {
+        rjc = [ "-timeout=30m" ];
       };
 
       buildCommand = pkgs: name: vendorHash:
@@ -142,6 +155,7 @@
           inherit vendorHash;
           # Several command tests run git against temporary repositories.
           nativeCheckInputs = [ pkgs.git ] ++ (checkTools.${name} or (_: [ ])) pkgs;
+          checkFlags = checkFlags.${name} or [ ];
           # golangci-lint writes its build cache under HOME, which the sandbox
           # leaves unwritable. Give the check phase a writable HOME.
           preCheck = ''

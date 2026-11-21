@@ -210,7 +210,7 @@ func preflight(ctx context.Context, cfg Config, codename string, log io.Writer) 
 	}
 	r.root = root
 	agentRoot := filepath.Join(home, "agents", "workspaces") + string(filepath.Separator)
-	nemoRoot := filepath.Join(home, cfg.NemoRepoDir) + string(filepath.Separator)
+	mergeBotRoot := filepath.Join(home, cfg.MergeBotRepoDir) + string(filepath.Separator)
 	email := cfg.AgentEmail
 	switch {
 	case strings.HasPrefix(root, agentRoot):
@@ -221,16 +221,16 @@ func preflight(ctx context.Context, cfg Config, codename string, log io.Writer) 
 		if codename == "" {
 			codename = inferred
 		}
-	case strings.HasPrefix(root, nemoRoot):
-		email = cfg.NemoEmail
+	case strings.HasPrefix(root, mergeBotRoot):
+		email = cfg.MergeBotEmail
 		if codename == "" {
 			codename = os.Getenv("RJC_CODENAME")
 		}
 		if codename == "" {
-			codename = "nemo"
+			codename = "merge-bot"
 		}
 	default:
-		return nil, refusal("preflight", "write-boundary", "clone is outside an agent workspace", "use a clone under ~/agents/workspaces/<codename>/ or "+cfg.NemoRepoDir)
+		return nil, refusal("preflight", "write-boundary", "clone is outside an agent workspace", "use a clone under ~/agents/workspaces/<codename>/ or "+cfg.MergeBotRepoDir)
 	}
 	r.codename = codename
 	configured, err := r.jj(ctx, "--at-op=@", "config", "get", "user.email")

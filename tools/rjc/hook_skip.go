@@ -368,7 +368,7 @@ func (r *repository) gateRunnerClosure(ctx context.Context, rev string) (dirs []
 	}()
 	workspace := *r
 	workspace.root = path
-	out, err := workspace.command(ctx, []string{"GOTOOLCHAIN=local", "GOFLAGS=-mod=readonly"}, nil, "go", "list", "-deps", "-f", "{{if .Module}}{{if .Module.Main}}{{.Dir}}{{end}}{{end}}", "./tools/gate-runner")
+	out, err := workspace.command(ctx, []string{"GOTOOLCHAIN=local", "GOFLAGS=-mod=readonly"}, nil, "go", "list", "-deps", "-f", "{{if .Module}}{{if .Module.Main}}{{.Dir}}{{end}}{{end}}", "./"+r.profile.GateRunnerDir)
 	if err != nil {
 		return nil, err
 	}

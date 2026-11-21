@@ -31,6 +31,7 @@
         dl-list = "sha256-+YGOcD3K7shRymY29qRJa49GfFkOc8wsdeMdmpvv44A=";
         dl-reconcile = "sha256-M9sG3Wt4un2pQ17tcrLI+K/u1K8JjXy2DXyGrGU8emk=";
         filevault-unlock = "sha256-QRkNiaX+C0MKkhJxxfEhkmTSRvw2qn0IqBTDFwKdeo8=";
+        fleet-gc-roots = null;
         fork-sync = "sha256-3CiEdm8Db78vQ8JG1KOBt5w55pmxuTs04in8RUhzwoM=";
         gh-route = "sha256-7K17JaXFsjf163g5PXCb5ng2gYdotnZ2IDKk8KFjNj0=";
         hk-hook = null;
@@ -42,6 +43,8 @@
         rbuild-workspace-prune = null;
         reddit-fetch = null;
         ref-gate = "sha256-WVoZkg5kdUYlATXDDxAA/yozThBwyYSKHwLoUsuIBfg=";
+        rigel-backup-sync = "sha256-7K17JaXFsjf163g5PXCb5ng2gYdotnZ2IDKk8KFjNj0=";
+        rigel-storeload-nightly = "sha256-usHhvjEtwEdT/hyGXFkC2nmC41/WAEWkA+Ng4TJ4FGo=";
         rjc-gates-image = "sha256-WJ+DzF3TydFNjIOq2MAQxEDI62G8xJcjTCAyMZtwgP0=";
         ssh-orphan-reap = null;
         wave-dreamer = "sha256-7K17JaXFsjf163g5PXCb5ng2gYdotnZ2IDKk8KFjNj0=";

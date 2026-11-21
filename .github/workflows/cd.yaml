@@ -162,7 +162,7 @@ jobs:
           for project in $PROJECTS; do
             id=$(basename "$project")
             # A project whose planned binaries all name other systems is not tested on this leg.
-            # A project with no planned binaries is not gated here, so it keeps its test.
+            # A project with no planned binaries keeps its test on every leg except windows-amd64, which only runs projects that name it.
             on_leg=$(jq -r --arg p "$project" --arg s "$SYSTEM" '
               [.binaries[] | select(.project == $p)] as $bins
               | if ($bins | length) == 0 then (if $s != "windows-amd64" then "yes" else "no" end)

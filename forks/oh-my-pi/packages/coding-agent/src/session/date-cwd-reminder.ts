@@ -142,17 +142,7 @@ function injectReminder(message: UserMessage, reminder: string): UserMessage {
 		typeof message.content === "string"
 			? `${reminder}\n\n${message.content}`
 			: [{ type: "text", text: reminder }, ...message.content];
-	const injected: UserMessage = { ...message, content };
-	reminderTurns.add(injected);
-	return injected;
-}
-
-/** User turns a {@link DateCwdReminderInjector} injected a reminder into. */
-const reminderTurns = new WeakSet<UserMessage>();
-
-/** Whether `message` is a user turn whose text the injector prefixed with its harness reminder. */
-export function isDateCwdReminderTurn(message: UserMessage): boolean {
-	return reminderTurns.has(message);
+	return { ...message, content };
 }
 
 /** Developer turns the injector inserted; every other output message maps to an input one. */

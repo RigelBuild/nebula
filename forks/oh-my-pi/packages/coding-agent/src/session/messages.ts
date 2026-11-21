@@ -59,7 +59,6 @@ import { COLLAB_PROMPT_MESSAGE_TYPE } from "@oh-my-pi/pi-wire";
 import type { IrcMessage } from "@oh-my-pi/pi-tui/tools/irc";
 import { advisoryMessage, currentAdvisories } from "../irc/advisory";
 import { escapeHarnessTags } from "./harness-tags";
-import { isDateCwdReminderTurn } from "./date-cwd-reminder";
 import userInterjectionTemplate from "../prompts/steering/user-interjection.md" with { type: "text" };
 import { cleanTinyMessage, formatTitleConversationContext, type TitleConversationTurn } from "../tiny/message-preproc";
 import interruptedThinkingTemplate from "../prompts/system/interrupted-thinking.md" with { type: "text" };
@@ -757,18 +756,21 @@ function wrapSteeringUserMessage(message: SteeringUserMessage): UserMessage {
 					timestamp: message.timestamp,
 				};
 	copyPerCallContextMessage(userMessage, message);
+	// Typed text is escaped. An agent-attributed steer (a parent's IRC message) already holds the
+	// envelope the harness built, so it goes out as written.
+	const typed = message.attribution !== "agent" && (message.role !== "user" || message.synthetic !== true);
 	if (typeof message.content === "string") {
 		if (message.content.length === 0) return message.role === "user" ? message : userMessage;
 		return markSteeringWrapper({
 			...userMessage,
-			content: renderSteeringEnvelope(escapeHarnessTags(message.content)),
+			content: renderSteeringEnvelope(typed ? escapeHarnessTags(message.content) : message.content),
 		});
 	}
 
 	const text = getArrayContentText(message.content);
 	if (text.length === 0) return message.role === "user" ? message : userMessage;
 	const content: (TextContent | ImageContent)[] = [
-		{ type: "text", text: renderSteeringEnvelope(escapeHarnessTags(text)) },
+		{ type: "text", text: renderSteeringEnvelope(typed ? escapeHarnessTags(text) : text) },
 	];
 	content.push(...getArrayContentImages(message.content));
 	return markSteeringWrapper({ ...userMessage, content });
@@ -1185,10 +1187,12 @@ function convertOne(m: AgentMessage, interrupted = false): Message[] {
 			// authored by that agent: never tool output, never developer or system authority.
 			const ircIncoming = m.customType === "irc:incoming";
 			if (ircIncoming || isUserInvokedSkillPrompt(m)) {
+				// Escape only the user's typed skill args; irc:incoming content is harness-rendered.
+				const content = customMessageContentToLlmContent(m.content);
 				return [
 					{
 						role: "user",
-						content: customMessageContentToLlmContent(m.content),
+						content: ircIncoming ? content : escapeUserContent(content),
 						attribution: ircIncoming ? "agent" : "user",
 						timestamp: m.timestamp,
 					},
@@ -1219,7 +1223,7 @@ function convertOne(m: AgentMessage, interrupted = false): Message[] {
 			if (!converted) return [];
 			if (converted.role !== "user") return [converted];
 			const typed = m.synthetic !== true && m.attribution !== "agent";
-			if (!typed || steeringWrappers.has(m) || isDateCwdReminderTurn(m)) return [converted];
+			if (!typed || steeringWrappers.has(m)) return [converted];
 			return [{ ...converted, content: escapeUserContent(converted.content) }];
 		}
 		case "branchSummary":

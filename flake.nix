@@ -150,10 +150,10 @@
       };
 
       # checkFlags are extra go test flags for a command's check phase. rjc's
-      # suite takes about 15 minutes in the sandbox, over the 10m default go
-      # test timeout.
+      # suite takes about 32 minutes on a Linux host (measured 1931s), over the
+      # 10m default go test timeout, so it gets a 50m budget.
       checkFlags = {
-        rjc = [ "-timeout=30m" ];
+        rjc = [ "-timeout=50m" ];
       };
 
       buildCommand = pkgs: name: vendorHash:

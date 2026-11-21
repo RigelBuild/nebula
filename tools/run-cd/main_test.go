@@ -3,12 +3,15 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -245,5 +248,98 @@ func TestRunCDRetriesGateSetupAfterRepoLookupFailure(t *testing.T) {
 	}
 	if lookups != 2 {
 		t.Fatalf("repo lookups after cached success = %d, want 2", lookups)
+	}
+}
+
+// TestRunInClusterURLReachesPipelineAPIOnKubernetes runs a publish step on a
+// Kubernetes host with no WOODPECKER_API_URL, so --in-cluster-url is the only
+// Woodpecker address. Both call sites must use it: newestReleaseFence reads the
+// manual list, and the gate's setup in newRun fetches the own pipeline. With an
+// empty URL the fence fails at once, or the gate blocks on ErrInvalidAPIContext
+// before its pipeline fetch. Either way run exits 1 and the deploy never runs.
+func TestRunInClusterURLReachesPipelineAPIOnKubernetes(t *testing.T) {
+	const sha = "0123456789abcdef0123456789abcdef01234567"
+	manual, err := json.Marshal([]map[string]any{manualRelease(12, "d12", sha)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var mu sync.Mutex
+	var seen []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		key := r.URL.Path
+		if r.URL.RawQuery != "" {
+			key += "?" + r.URL.RawQuery
+		}
+		mu.Lock()
+		seen = append(seen, key)
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		var body []byte
+		switch key {
+		case "/api/repos/lookup/owner/repo":
+			body = []byte(`{"id":7}`)
+		case "/api/repos/7/pipelines?branch=main&event=manual&page=1&perPage=50":
+			body = manual
+		case "/api/repos/7/pipelines?branch=main&event=push%2Cmanual&page=1&perPage=50":
+			body = []byte(`[]`)
+		case "/api/repos/7/pipelines/12":
+			body = []byte(`{"number":12,"commit":"` + sha + `","branch":"main","event":"manual","workflows":[{"name":"pulumi-up-aws","state":"running"}]}`)
+		default:
+			t.Errorf("unexpected request %q", key)
+			http.NotFound(w, r)
+			return
+		}
+		if _, err := w.Write(body); err != nil {
+			t.Errorf("write %s: %v", key, err)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	// runMain passes os.Getenv, so the test sets the environment with t.Setenv
+	// and reads it the same way. WOODPECKER_API_URL is cleared so the in-cluster
+	// URL is the only source, and CI_REPO_ID is cleared so the repo lookup runs.
+	t.Setenv("KUBERNETES_SERVICE_HOST", "10.0.0.1")
+	t.Setenv("WOODPECKER_API_URL", "")
+	t.Setenv("CI_REPO_ID", "")
+	t.Setenv("WOODPECKER_CD_TOKEN", "tok")
+	t.Setenv("CI_REPO", "owner/repo")
+	t.Setenv("CI_PIPELINE_NUMBER", "12")
+	t.Setenv("CI_PIPELINE_PARENT", "0")
+	t.Setenv("CI_COMMIT_SHA", sha)
+	t.Setenv(cdgate.DispatchIDVariable, "d12")
+
+	gitDir := t.TempDir()
+	gitScript := "#!/bin/sh\ncase \"$1\" in\nrev-parse) printf 'false\\n' ;;\nrev-list) printf '%s\\n' " + sha + " ;;\nesac\n"
+	if err := os.WriteFile(filepath.Join(gitDir, "git"), []byte(gitScript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", gitDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	workingDir := t.TempDir()
+	writePulumiStack(t, workingDir, "aws")
+	t.Chdir(workingDir)
+
+	marker := filepath.Join(t.TempDir(), "deployed")
+	var stderr bytes.Buffer
+	code := run(t.Context(),
+		[]string{"aws:up", "--members", "pulumi-up-aws", "--in-cluster-url", srv.URL, "--pulumi-root", "stacks", "--pulumi-tiers", "platform", "--", "touch", marker},
+		os.Getenv, &stderr)
+	if code != 0 {
+		t.Fatalf("run = %d, want 0 with the API reached only through --in-cluster-url; stderr=%q", code, stderr.String())
+	}
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatalf("the deploy did not run: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	// The manual-list read is newestReleaseFence's. The own-pipeline fetch
+	// comes only from the gate's setup in newRun.
+	for _, want := range []string{
+		"/api/repos/7/pipelines?branch=main&event=manual&page=1&perPage=50",
+		"/api/repos/7/pipelines/12",
+	} {
+		if !slices.Contains(seen, want) {
+			t.Fatalf("the server never saw %q; requests = %v", want, seen)
+		}
 	}
 }

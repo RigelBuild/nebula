@@ -52,10 +52,9 @@ tasks:
       - 'tsconfig*.json'
     options:
       runInCI: true
-  # The zellij package is excluded: its holder-darwin smoke fails on Linux. Owner: RIG-11519.
   test:
     command: 'pnpm'
-    args: ['--filter', '!@cotal-ai/zellij', '-r', '--if-present', 'test']
+    args: ['-r', '--if-present', 'test']
     deps:
       - 'build'
     inputs:

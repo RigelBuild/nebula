@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { rmSync } from "node:fs";
+import { existsSync, rmSync } from "node:fs";
 import type { LaunchSpec } from "@cotal-ai/core";
 import { HolderRuntime } from "./src/holder.js";
 
@@ -16,12 +16,13 @@ let checks = 0;
 type ExecCall = { file: string; args: string[]; cwd?: string; timeout?: number };
 type FixtureOptions = {
   readonly waveHostError?: Error;
-  readonly unreadablePid?: number;
+  readonly unreadablePids?: number[];
 };
 
 function fixture(options: FixtureOptions = {}) {
   // pid -> start token as wave-host process-identity prints it.
   const tokens = new Map<number, string>([[101, "1700000000000011"], [202, "1700000000000022"]]);
+  const unreadable = new Set<number>(options.unreadablePids);
   const calls: ExecCall[] = [];
   const kills: Array<{ pid: number; signal: string }> = [];
   const launcherDirs: string[] = [];
@@ -31,6 +32,8 @@ function fixture(options: FixtureOptions = {}) {
     platform: "darwin",
     holderCommand: () => holder,
     waveHostCommand: () => waveHost,
+    // Any /proc read on darwin must fail loudly, so the darwin path proves it never reads /proc.
+    fs: { readFileSync: () => { throw new Error("darwin path read /proc"); } },
     execFileSync: (file: string, args: string[], execOptions: { cwd?: string; timeout?: number }) => {
       if (file === holder && args[0] === "start" && execOptions.cwd !== undefined) launcherDirs.push(execOptions.cwd);
       calls.push({
@@ -42,7 +45,7 @@ function fixture(options: FixtureOptions = {}) {
       if (file === holder && args[0] === "start") return "101 202\n";
       if (file === waveHost && args[0] === "process-identity") {
         const pid = Number(args[args.indexOf("--pid") + 1]);
-        if (pid === options.unreadablePid) throw Object.assign(new Error("denied"), { status: 1 });
+        if (unreadable.has(pid)) throw Object.assign(new Error("denied"), { status: 1 });
         const token = tokens.get(pid);
         if (token === undefined) throw Object.assign(new Error("absent"), { status: 3 });
         return `${token}\n`;
@@ -60,7 +63,7 @@ function fixture(options: FixtureOptions = {}) {
   const cleanup = () => {
     for (const dir of launcherDirs) rmSync(dir, { recursive: true, force: true });
   };
-  return { runtime, tokens, calls, kills, sleeps, cleanup, spawn: () => runtime.spawn(seatName, launchSpec, process.cwd()) };
+  return { runtime, tokens, unreadable, calls, kills, sleeps, cleanup, spawn: () => runtime.spawn(seatName, launchSpec, process.cwd()) };
 }
 
 async function check(name: string, run: () => void | Promise<void>): Promise<void> {
@@ -107,12 +110,28 @@ await check("darwin starttime mismatch counts as a dead identity", () => {
   }
 });
 
+// Rule: start refuses an unreadable identity; status never reports a seat gone on a failed read.
 await check("darwin unreadable identity is never reported gone", () => {
-  const f = fixture({ unreadablePid: 202 });
+  const f = fixture();
   try {
     const handle = f.spawn();
+    f.unreadable.add(202);
     f.tokens.delete(101);
     assert.equal(handle.status(), "running");
+  } finally {
+    f.cleanup();
+  }
+});
+
+await check("darwin spawn refuses when an agent identity is unreadable at start", () => {
+  const f = fixture({ unreadablePids: [202] });
+  try {
+    assert.throws(() => f.spawn(), /could not read live process identities/);
+    const stop = f.calls.at(-1);
+    assert.deepEqual({ file: stop?.file, args: stop?.args }, { file: waveHost, args: ["seat-stop", "--name", seatName] });
+    const launcherDir = f.calls[0]?.cwd;
+    assert.ok(launcherDir);
+    assert.equal(existsSync(launcherDir), false);
   } finally {
     f.cleanup();
   }
@@ -219,7 +238,7 @@ await check("darwin spawn refuses before holder start when wave-host is unavaila
     },
   });
   assert.throws(() => runtime.spawn(seatName, launchSpec, process.cwd()), (error: unknown) =>
-    error instanceof Error && error.name === "SpawnRefused" && /wave-host/.test(error.message),
+    error instanceof Error && error.name === "SpawnRefused" && /WAVE_HOST_COMMAND/.test(error.message),
   );
   assert.deepEqual(calls, [], "holder start must not run when wave-host is unresolved");
 });

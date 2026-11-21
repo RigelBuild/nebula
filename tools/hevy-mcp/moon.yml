@@ -1,7 +1,7 @@
 # yaml-language-server: $schema=https://moonrepo.dev/schemas/project.json
 #
 # hevy-mcp: the upstream npm package (upstream.json) installed from package-lock.json.
-# cd.yaml's hevy-runtime job publishes the installed tree; nix/release.nix fetches it by hash.
+# cd.yaml's hevy-runtime job publishes the installed tree as a Release asset.
 layer: "tool"
 language: "javascript"
 tags: ["npm"]

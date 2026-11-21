@@ -64,9 +64,13 @@ jobs:
           # The hevy-mcp runtime follows the same rule for tools/hevy-mcp and its hevy-mcp-runtime-* asset.
           hevy=false
           previous=$(jq -r '.previousTag // empty' "$RUNNER_TEMP/plan.json")
-          if jq -e '.projects | index("tools/hevy-mcp")' "$RUNNER_TEMP/plan.json" > /dev/null || [ -z "$previous" ] ||
-            [ "$(gh release view "$previous" --json assets --jq '[.assets[].name | select(startswith("hevy-mcp-runtime-"))] | length')" = 0 ]; then
+          if jq -e '.projects | index("tools/hevy-mcp")' "$RUNNER_TEMP/plan.json" > /dev/null; then
             hevy=true
+          elif [ -z "$previous" ]; then
+            hevy=true
+          else
+            hevy_assets=$(gh release view "$previous" --json assets --jq '[.assets[].name | select(startswith("hevy-mcp-runtime-"))] | length')
+            if [ "$hevy_assets" = 0 ]; then hevy=true; fi
           fi
           echo "hevy-runtime=$hevy" >> "$GITHUB_OUTPUT"
           # The release tag is fixed here so the images job and the release job share it.

@@ -237,11 +237,6 @@
             cp ${./tools/rumdl-base-config/base.toml} "$out/rumdl/base.toml"
           '';
         };
-
-      # hevy-mcp is fetched from the runtime tarball a nebula Release carries; nothing compiles on hosts.
-      hevyMcpFor = system: {
-        hevy-mcp = import ./tools/hevy-mcp/nix/release.nix { pkgs = import nixpkgs { inherit system; }; };
-      };
     in
     {
       # Later attrs win. Source builds come first, then docs-bundle and
@@ -253,7 +248,6 @@
         // docsBundleFor system
         // nix2containerFor system
         // rumdlBaseConfigFor system
-        // hevyMcpFor system
         // packagesFor manifest system
       );
 

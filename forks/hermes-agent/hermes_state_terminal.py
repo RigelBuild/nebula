@@ -134,12 +134,14 @@ def retry_terminal_admission(db, *, epoch, principal_id, session_id, request_id,
     with db._read_ctx() as conn:
         _epoch(conn, epoch)
         from hermes_state_mutation_retirement import RETIRED_PREFIX
-        if not conn.execute('SELECT 1 FROM state_meta WHERE key=?', (RETIRED_PREFIX + session_id,)).fetchone():
-            return None
         saved = conn.execute('SELECT value FROM state_meta WHERE key=?',
                              (identity_key(principal_id, session_id, request_id),)).fetchone()
         if saved is None:
-            raise RuntimeStoreError('not_found')
+            # A pruned terminal row of a live session leaves its identity tombstone, so no tombstone on
+            # an unretired session is a live target (None). On a retired id it is a definitive miss.
+            if conn.execute('SELECT 1 FROM state_meta WHERE key=?', (RETIRED_PREFIX + session_id,)).fetchone():
+                raise RuntimeStoreError('not_found')
+            return None
         row = terminal_admission(conn, json.loads(saved[0]))
         if row['payload_digest'] != digest:
             raise RuntimeStoreError('admission_conflict', **ADMITTED_REQUEST_CONFLICT)

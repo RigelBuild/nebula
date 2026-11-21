@@ -51,4 +51,10 @@ describe("loadConfig", () => {
 			loadConfig({ WAVE_SEATS_FILE: "/etc/example/wave-seats.json" }),
 		).toThrow("RUNTIME_DIRECTORY is required");
 	});
+
+	test("rejects an empty RUNTIME_DIRECTORY", () => {
+		expect(() => loadConfig({ ...REQUIRED, RUNTIME_DIRECTORY: "" })).toThrow(
+			"RUNTIME_DIRECTORY is required",
+		);
+	});
 });

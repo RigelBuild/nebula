@@ -74,6 +74,7 @@ func mintWithClientRequest(ctx context.Context, appID, repo string, pemBytes []b
 	if client == nil {
 		return "", oops.In("github-app-token").Code("missing_http_client").Errorf("http client is required")
 	}
+	client = withoutRedirects(client)
 	key, err := parsePrivateKey(pemBytes)
 	if err != nil {
 		return "", oops.In("github-app-token").Tags("authentication").Wrapf(err, "parse app private key")
@@ -170,6 +171,15 @@ func setGitHubHeaders(request *http.Request, appJWT string) {
 	request.Header.Set("Authorization", "Bearer "+appJWT)
 	request.Header.Set("Accept", "application/vnd.github+json")
 	request.Header.Set("X-Github-Api-Version", "2022-11-28")
+}
+
+// withoutRedirects returns a shallow copy of client that never follows a
+// redirect, so the App JWT is never sent to a redirect target. The caller's
+// client is left unchanged.
+func withoutRedirects(client *http.Client) *http.Client {
+	copied := *client
+	copied.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	return &copied
 }
 
 func lookupError(status int, repo string, body []byte) error {

@@ -91,7 +91,7 @@ func NewIssueAPI(ctx context.Context, httpClient *http.Client, endpoint string, 
 		}
 		authorization = apiKey
 	}
-	return &IssueClient{httpClient: httpClient, endpoint: endpoint, authorization: authorization}, nil
+	return &IssueClient{httpClient: withoutRedirects(httpClient), endpoint: endpoint, authorization: authorization}, nil
 }
 
 // NewIssueAPIWithToken creates a GraphQL client using a bearer access token.
@@ -103,10 +103,19 @@ func NewIssueAPIWithToken(httpClient *http.Client, endpoint, accessToken string)
 		endpoint = linearGraphQLEndpoint
 	}
 	return &IssueClient{
-		httpClient:    httpClient,
+		httpClient:    withoutRedirects(httpClient),
 		endpoint:      endpoint,
 		authorization: "Bearer " + accessToken,
 	}
+}
+
+// withoutRedirects returns a shallow copy of client that never follows a
+// redirect, so the credential is never sent to a redirect target. The
+// caller's client is left unchanged.
+func withoutRedirects(client *http.Client) *http.Client {
+	copied := *client
+	copied.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	return &copied
 }
 
 // ReadAPIKey reads a nonempty key file first, then LINEAR_API_KEY.

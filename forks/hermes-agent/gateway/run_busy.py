@@ -101,6 +101,23 @@ def _same_chat_key_slots(
     return None
 
 
+# Bare-word approval replies → (verb, args) for the synthesized slash command. English words
+# (and the thumbs) always match; ``approval.inputs.*`` adds the active language's synonyms.
+_PLAINTEXT_APPROVAL_EXTRA_WORDS: dict[str, tuple] = {"👍": ("approve", ""), "👎": ("deny", "")}
+_PLAINTEXT_APPROVAL_INPUT_KEYS: tuple[tuple[str, tuple], ...] = (
+    ("approve", ("approve", "")), ("deny", ("deny", "")),
+    ("always", ("approve", "always")), ("session", ("approve", "session")))
+
+
+def plaintext_approval_words() -> dict[str, tuple]:
+    """Word → (verb, args) for the active language: the English list ∪ ``t("approval.inputs.<k>")``."""
+    words: dict[str, tuple] = dict(_PLAINTEXT_APPROVAL_EXTRA_WORDS)
+    for input_key, verb_args in _PLAINTEXT_APPROVAL_INPUT_KEYS:
+        for word in approval_input_words(input_key):
+            words.setdefault(word, verb_args)
+    return words
+
+
 class GatewayBusySessionMixin:
     """Busy-session queueing, slot claims, slash dispatch tables, destructive-slash confirmation."""
 
@@ -643,21 +660,6 @@ class GatewayBusySessionMixin:
             message = t("gateway.busy.drain_rejected", action=self._status_action_gerund())
         await self._send_busy_reply(event, adapter, message)
 
-    # Bare-word approval replies → (verb, args) for the synthesized slash command. English words
-    # (and the thumbs) always match; ``approval.inputs.*`` adds the active language's synonyms.
-    _PLAINTEXT_APPROVAL_EXTRA_WORDS: dict[str, tuple] = {"👍": ("approve", ""), "👎": ("deny", "")}
-    _PLAINTEXT_APPROVAL_INPUT_KEYS: tuple[tuple[str, tuple], ...] = (
-        ("approve", ("approve", "")), ("deny", ("deny", "")),
-        ("always", ("approve", "always")), ("session", ("approve", "session")))
-
-    def _plaintext_approval_words(self) -> dict[str, tuple]:
-        """Word → (verb, args) for the active language: the English list ∪ ``t("approval.inputs.<k>")``."""
-        words: dict[str, tuple] = dict(self._PLAINTEXT_APPROVAL_EXTRA_WORDS)
-        for input_key, verb_args in self._PLAINTEXT_APPROVAL_INPUT_KEYS:
-            for word in approval_input_words(input_key):
-                words.setdefault(word, verb_args)
-        return words
-
     async def _route_plaintext_approval_while_busy(self, event: MessageEvent, session_key: str) -> bool:
         """Route a bare "yes"/"no" to the approval handlers while a dangerous-command approval blocks.
 
@@ -680,9 +682,19 @@ class GatewayBusySessionMixin:
             # they resolve the waiting thread, resume typing, AND return a localized confirmation string.
             # The busy-handler path does not auto-send that return, so we deliver it ourselves (mirroring
             # the draining-case send above).
-            if event.allow_gateway_control and has_blocking_approval(session_key):
+            if not event.allow_gateway_control:
+                return False
+            # An adapter with its own text-approval gate answers every typed approval on its platform; the
+            # oldest-request fallback below must never resolve one it refused.
+            _owner = self._delivery_adapter_for(event.source)
+            if getattr(type(_owner), "consume_text_approval", None) is not None:
+                _src = event.source
+                return bool(_owner.consume_text_approval(
+                    getattr(_src, "user_id", None), getattr(_src, "thread_id", None) or getattr(_src, "chat_id", None),
+                    event.text or ""))
+            if has_blocking_approval(session_key):
                 _raw_text = (event.text or "").strip().lower()
-                _match = self._plaintext_approval_words().get(_raw_text)
+                _match = plaintext_approval_words().get(_raw_text)
                 if _match is not None:
                     _verb, _normalized_args = _match
                     _approval_handler = (

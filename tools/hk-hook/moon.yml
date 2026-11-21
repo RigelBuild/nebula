@@ -1,0 +1,22 @@
+# yaml-language-server: $schema=https://moonrepo.dev/schemas/project.json
+#
+# hk-hook: installs the pre-push hook so it enters the devenv shell before running hk.
+# The test pushes from a shell without hk or moon on PATH.
+layer: 'tool'
+language: 'go'
+tags: ['go']
+
+tasks:
+  test:
+    command: 'go'
+    args: ['test', './...']
+    env:
+      CGO_ENABLED: '0'
+    inputs: ['**/*.go', 'go.mod', 'go.sum', '**/testdata/**/*']
+    options:
+      cache: false
+  nilaway:
+    command: 'nilaway'
+    args: ['-include-pkgs=github.com/RigelBuild/nebula/tools/hk-hook', '-test=false', './...']
+    options:
+      mergeArgs: 'replace'

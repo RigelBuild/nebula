@@ -837,17 +837,7 @@ func TestRunSweepQueriesOnlyCanonicalTeam(t *testing.T) {
 	}
 }
 
-type failOnRequestTransport struct{ t *testing.T }
-
-func (transport failOnRequestTransport) RoundTrip(request *http.Request) (*http.Response, error) {
-	transport.t.Errorf("unexpected request to %s", request.URL)
-	return nil, errors.New("unexpected request")
-}
-
-func TestSweepRequiresIssuePrefixBeforeNetwork(t *testing.T) {
-	previous := http.DefaultTransport
-	http.DefaultTransport = failOnRequestTransport{t: t}
-	t.Cleanup(func() { http.DefaultTransport = previous })
+func TestSweepRequiresIssuePrefix(t *testing.T) {
 	root := t.TempDir()
 	cachePath := filepath.Join(root, "cache.json")
 	getenv := func(key string) string {

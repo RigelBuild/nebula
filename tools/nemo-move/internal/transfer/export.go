@@ -91,7 +91,7 @@ func ExportToSpool(ctx context.Context, opts Options, target, sshPath, binary, s
 	if err := CheckSourceHome(ctx, opts, target, sshPath, remote); err != nil {
 		return err
 	}
-	if _, stageErr := runRemote(ctx, target, sshPath, remote, "/usr/bin/sudo -n /bin/sh -c "+ShellQuote(stageCredentialsScript(opts))); stageErr != nil {
+	if _, stageErr := runRemote(ctx, target, sshPath, remote, "/usr/bin/sudo -n "+stageShell(opts)); stageErr != nil {
 		stageState, err := runRemote(ctx, target, sshPath, remote, stagePresenceCommand(opts))
 		if err != nil {
 			return fmt.Errorf("check credential staging state: %w", err)
@@ -133,36 +133,59 @@ func ExportToSpool(ctx context.Context, opts Options, target, sshPath, binary, s
 	})
 }
 
-func stageCredentialsScript(opts Options) string {
-	return `set -eu
-base=` + ShellQuote(opts.stageRoot()) + `
-owner=` + ShellQuote(opts.MacUser+":staff") + `
+// stageCredentialsScript stages Google credentials as root. It takes the
+// source home, the staging path, the owner, the Google source, then the
+// account names as positional arguments, never as shell text. It refuses
+// symlinked directories before any copy. It builds the tree in a mktemp
+// directory and renames it into place. Every path it removes is a mktemp
+// directory this run created, and the staging it replaces is moved into one.
+const stageCredentialsScript = `set -eu
+home=$1
+base=$2
+owner=$3
+source=$4
+shift 4
 parent=${base%/*}
-temp="$parent/.nemo-move-staging.$$"
+for dir in "$home" "$home/.local" "$home/.local/state" "$parent"; do
+  if [ -L "$dir" ]; then echo "refusing symlinked directory $dir" >&2; exit 1; fi
+done
+if [ -L "$base" ]; then echo "refusing symlinked staging $base" >&2; exit 1; fi
 /bin/mkdir -p "$parent"
-/bin/rm -rf "$temp"
-/bin/mkdir -p "$temp"
+temp=$(/usr/bin/mktemp -d "$parent/.nemo-move-staging.XXXXXX")
+old=$(/usr/bin/mktemp -d "$parent/.nemo-move-old.XXXXXX")
+trap '/bin/rm -rf "$temp"; /bin/rmdir "$old" 2>/dev/null || true' EXIT
 /bin/chmod 700 "$temp"
-for account in ` + accountList(opts) + `; do
-  source=` + ShellQuote(opts.Layout.Google.Source) + `/"$account"/credentials
-  /bin/test -d "$source"
+for account in "$@"; do
+  /bin/test -d "$source/$account/credentials"
   /bin/mkdir -p "$temp/$account"
-  /bin/cp -R "$source" "$temp/$account/"
+  /bin/cp -R "$source/$account/credentials" "$temp/$account/"
   /usr/sbin/chown -R "$owner" "$temp/$account/credentials"
   /usr/bin/find "$temp/$account/credentials" -type d -exec /bin/chmod 700 {} \;
   /usr/bin/find "$temp/$account/credentials" -type f -exec /bin/chmod 600 {} \;
 done
 /usr/sbin/chown -R "$owner" "$temp"
 /bin/chmod 700 "$temp"
-/bin/rm -rf "$base.old"
-if [ -e "$base" ]; then /bin/mv "$base" "$base.old"; fi
-/bin/mv "$temp" "$base"
-/bin/rm -rf "$base.old"
-/usr/bin/touch "$base"`
+if [ -e "$base" ]; then /bin/mv "$base" "$old/previous"; fi
+if ! /bin/mv "$temp" "$base"; then
+  if [ -e "$old/previous" ]; then /bin/mv "$old/previous" "$base"; fi
+  exit 1
+fi
+trap - EXIT
+/bin/rm -rf "$old"
+/usr/bin/touch "$base"
+`
+
+// stageShell runs stageCredentialsScript under sh. Its inventory values are
+// positional arguments: the source home, the staging path, the owner, the
+// Google source, then the account names. Each is quoted here, and none is
+// spliced into the script text.
+func stageShell(opts Options) string {
+	args := append([]string{opts.SourceHome, opts.stageRoot(), opts.MacUser + ":staff", opts.Layout.Google.Source}, opts.Layout.Google.Accounts...)
+	return "/bin/sh -c " + ShellQuote(stageCredentialsScript) + " sh " + shellJoin(args)
 }
 
 func stageCredentialsCommand(opts Options) string {
-	return "sudo /bin/sh -c " + ShellQuote(stageCredentialsScript(opts))
+	return "sudo " + stageShell(opts)
 }
 
 func stagePresenceCommand(opts Options) string {
@@ -175,8 +198,11 @@ func stageFreshnessCommand(opts Options) string {
 	return "/bin/sh -c " + ShellQuote(script)
 }
 
-// accountList is the staging loop's word list. The layout schema admits only
-// names of letters, digits, dot, underscore and hyphen, so no quoting is needed.
-func accountList(opts Options) string {
-	return strings.Join(opts.Layout.Google.Accounts, " ")
+// shellJoin quotes each word for a POSIX shell and joins them with spaces.
+func shellJoin(words []string) string {
+	quoted := make([]string, len(words))
+	for i, word := range words {
+		quoted[i] = ShellQuote(word)
+	}
+	return strings.Join(quoted, " ")
 }

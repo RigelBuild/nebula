@@ -28,9 +28,15 @@ func TestOptionsValidateSourceHome(t *testing.T) {
 	}
 }
 
-func TestStageCredentialsScriptOwner(t *testing.T) {
-	script := stageCredentialsScript(Options{SourceHome: "/src/home/example", MacUser: "example-user"})
-	if want := "owner='example-user:staff'"; !strings.Contains(script, want) {
-		t.Fatalf("script lacks %q:\n%s", want, script)
+func TestStageShellPassesValuesAsArguments(t *testing.T) {
+	cmd := stageShell(Options{SourceHome: "/src/home/example", MacUser: "example-user", Layout: testLayout})
+	if strings.Contains(stageCredentialsScript, "example-user") {
+		t.Fatal("staging script text contains an inventory value")
+	}
+	if want := "'example-user:staff'"; !strings.Contains(cmd, want) {
+		t.Fatalf("staging command lacks owner argument %q:\n%s", want, cmd)
+	}
+	if !strings.Contains(cmd, " sh ") {
+		t.Fatalf("staging command does not pass the script as sh -c argument:\n%s", cmd)
 	}
 }

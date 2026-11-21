@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -200,7 +201,7 @@ func (l Layout) Validate() error {
 		return errors.New("google has no accounts")
 	}
 	for _, account := range l.Google.Accounts {
-		if err := checkName(account); err != nil {
+		if err := checkAccount(account); err != nil {
 			return fmt.Errorf("google account: %w", err)
 		}
 	}
@@ -236,9 +237,20 @@ func checkRelative(name string) error {
 	return nil
 }
 
+// accountPattern is the CUE account pattern in schema.cue. Go enforces it too,
+// so no shell ever sees a name the schema would refuse.
+var accountPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
+
 func checkName(name string) error {
 	if name == "" || name == "." || name == ".." || strings.Contains(name, "/") {
 		return fmt.Errorf("%q is not a plain file name", name)
+	}
+	return nil
+}
+
+func checkAccount(name string) error {
+	if !accountPattern.MatchString(name) {
+		return fmt.Errorf("%q is not a valid account name", name)
 	}
 	return nil
 }

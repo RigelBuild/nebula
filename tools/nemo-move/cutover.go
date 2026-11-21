@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec" //nolint:depguard // Resolves the SSH executable.
 
+	"github.com/RigelBuild/nebula/tools/nemo-move/internal/layout"
 	"github.com/RigelBuild/nebula/tools/nemo-move/internal/transfer"
 )
 
@@ -315,11 +316,28 @@ func (p *productionCutover) verify(ctx context.Context) error {
 	_, err = p.ctl.execIn(ctx, bytes.NewReader(p.manifest), "nemo-move", "verify-stream", layoutJSON)
 	return err
 }
+
+// cleanupStagingScript removes the Mac staging tree after a committed cutover.
+// Its arguments are the source home, then the staging path. It refuses a
+// symlinked home, state parent, or staging path before it removes anything,
+// and it never follows a symlink into another tree.
+const cleanupStagingScript = `set -eu
+home=$1
+base=$2
+for dir in "$home" "$home/.local" "$home/.local/state"; do
+  if [ -L "$dir" ]; then echo "refusing symlinked directory $dir" >&2; exit 1; fi
+done
+if [ -L "$base" ]; then echo "refusing symlinked staging $base" >&2; exit 1; fi
+/bin/rm -rf "$base"
+`
+
 func (p *productionCutover) cleanup(ctx context.Context, target string) error {
 	ssh, err := resolveSSHPath("", exec.LookPath)
 	if err != nil {
 		return err
 	}
-	_, err = sshRunner(ctx, ssh, "-o", "BatchMode=yes", target, "/bin/rm -rf "+transfer.ShellQuote(p.source.SourceHome+"/.local/state/nemo-move-staging"))
+	staging := p.source.SourceHome + "/" + layout.StagingDir
+	command := "/bin/sh -c " + transfer.ShellQuote(cleanupStagingScript) + " sh " + transfer.ShellQuote(p.source.SourceHome) + " " + transfer.ShellQuote(staging)
+	_, err = sshRunner(ctx, ssh, "-o", "BatchMode=yes", target, command)
 	return err
 }

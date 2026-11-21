@@ -75,6 +75,24 @@ func TestFromJSONRejectsUnknownField(t *testing.T) {
 	}
 }
 
+func TestFromJSONRejectsBadAccountName(t *testing.T) {
+	base, err := Parse([]byte(validLayout))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, account := range []string{"work space", "x;rm -rf ~", "$(id)", "a'b", "-leading", "a/b", "..", ""} {
+		lay := base
+		lay.Google.Accounts = []string{account}
+		text, err := lay.JSON()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := FromJSON(text); err == nil {
+			t.Fatalf("FromJSON accepted account %q", account)
+		}
+	}
+}
+
 func TestLoadMissingFileFails(t *testing.T) {
 	if _, err := Load("does-not-exist.cue"); err == nil {
 		t.Fatal("Load accepted a missing file")

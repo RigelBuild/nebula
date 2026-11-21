@@ -36,7 +36,7 @@ type Options struct {
 }
 
 // Get restores one record from an escrow-protected restic snapshot.
-func Get(ctx context.Context, options Options) error {
+func Get(ctx context.Context, options Options) (resultErr error) {
 	repo, escrowPath, identityPath := options.Repo, options.Escrow, options.Identity
 	snapshot, record, output := options.Snapshot, options.Record, options.Output
 	if err := validateGetInputs(repo, escrowPath, identityPath, snapshot, record, output); err != nil {
@@ -50,7 +50,7 @@ func Get(ctx context.Context, options Options) error {
 	if err != nil {
 		return err
 	}
-	defer removeSecret(passwordPath)
+	defer func() { resultErr = errors.Join(resultErr, removeSecret(passwordPath)) }()
 	if err := os.MkdirAll(output, 0o700); err != nil {
 		return fmt.Errorf("create output directory: %w", err)
 	}
@@ -156,7 +156,7 @@ func restoreRecord(ctx context.Context, repo, passwordPath, snapshot, record, ou
 	if err != nil {
 		return err
 	}
-	defer removeSecret(includePath)
+	defer func() { resultErr = errors.Join(resultErr, removeSecret(includePath)) }()
 	target, err := os.MkdirTemp(output, ".transcript-archive-restore-*")
 	if err != nil {
 		return fmt.Errorf("create restore directory: %w", err)
@@ -181,7 +181,7 @@ func restoreRecord(ctx context.Context, repo, passwordPath, snapshot, record, ou
 		if err != nil {
 			return err
 		}
-		defer removeSecret(blobList)
+		defer func() { resultErr = errors.Join(resultErr, removeSecret(blobList)) }()
 		if _, err := runRestic(ctx, repo, passwordPath, "restore", "--no-lock", snapshot, "--target", target, "--include-file", blobList); err != nil {
 			return fmt.Errorf("restore referenced transcript blobs: %w", err)
 		}
@@ -339,8 +339,9 @@ func uniqueStrings(values []string) []string {
 	return unique
 }
 
-func removeSecret(path string) {
+func removeSecret(path string) error {
 	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return
+		return fmt.Errorf("remove secret file: %w", err)
 	}
+	return nil
 }

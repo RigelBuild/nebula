@@ -150,7 +150,7 @@ func stageHome(t *testing.T, home string) {
 func runExport(t *testing.T, home, bin string) (bytes.Buffer, bytes.Buffer, error) {
 	t.Helper()
 	var out, stderr bytes.Buffer
-	err := transfer.Export(t.Context(), transfer.Options{SourceHome: "/Users/example", MacUser: "example", Layout: exampleLayout(t)}, "example@192.0.2.10", "/ssh", bin, exportRemote{inventoryRemote: inventoryRemote{home: home}, noSudo: true}, &out, &stderr)
+	err := transfer.Export(t.Context(), transfer.Options{SourceHome: "/src/home/example", MacUser: "example", Layout: exampleLayout(t)}, "example@192.0.2.10", "/ssh", bin, exportRemote{inventoryRemote: inventoryRemote{home: home}, noSudo: true}, &out, &stderr)
 	return out, stderr, err
 }
 
@@ -196,7 +196,7 @@ func TestExportRestagesWhenSudoAvailable(t *testing.T) {
 	stageHome(t, home)
 	setQuiet(t, home, time.Now())
 	var out, stderr bytes.Buffer
-	err := transfer.Export(t.Context(), transfer.Options{SourceHome: "/Users/example", MacUser: "example", Layout: exampleLayout(t)}, "example@192.0.2.10", "/ssh", bin, exportRemote{inventoryRemote: inventoryRemote{home: home}}, &out, &stderr)
+	err := transfer.Export(t.Context(), transfer.Options{SourceHome: "/src/home/example", MacUser: "example", Layout: exampleLayout(t)}, "example@192.0.2.10", "/ssh", bin, exportRemote{inventoryRemote: inventoryRemote{home: home}}, &out, &stderr)
 	if err != nil || out.Len() == 0 {
 		t.Fatalf("restaged export: error %v, output %d, stderr %q", err, out.Len(), stderr.String())
 	}
@@ -211,7 +211,7 @@ func TestExportMissingQuietRefuses(t *testing.T) {
 	}
 }
 
-const exampleHome = "/Users/example"
+const exampleHome = "/src/home/example"
 
 // inventoryRemote serves a local home as the Mac. remoteHome is the $HOME it
 // reports; empty means exampleHome.
@@ -266,7 +266,7 @@ func TestCheckSourceHome(t *testing.T) {
 		wantErr    bool
 	}{
 		{name: "match", remoteHome: exampleHome},
-		{name: "mismatch", remoteHome: "/Users/other", wantErr: true},
+		{name: "mismatch", remoteHome: "/src/home/other", wantErr: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			err := transfer.CheckSourceHome(t.Context(), opts, "example@192.0.2.10", "/ssh", inventoryRemote{remoteHome: tc.remoteHome})
@@ -282,7 +282,7 @@ func TestExportRefusesMismatchedRemoteHome(t *testing.T) {
 	stageHome(t, home)
 	setQuiet(t, home, time.Now().Add(-time.Hour))
 	var out, stderr bytes.Buffer
-	remote := exportRemote{inventoryRemote: inventoryRemote{home: home, remoteHome: "/Users/other"}}
+	remote := exportRemote{inventoryRemote: inventoryRemote{home: home, remoteHome: "/src/home/other"}}
 	err := transfer.Export(t.Context(), transfer.Options{SourceHome: exampleHome, MacUser: "example", Layout: exampleLayout(t)}, "example@192.0.2.10", "/ssh", bin, remote, &out, &stderr)
 	if err == nil || !strings.Contains(err.Error(), "does not match source home") || out.Len() != 0 {
 		t.Fatalf("mismatched home: error %v, output %d", err, out.Len())

@@ -13,7 +13,7 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-func useTestSealer() func() {
+func useTestJournalLocker() func() {
 	old := journalSystemOps
 	journalSystemOps = journalOps{
 		get: func(uintptr) (uint32, error) { return appendFlag, nil },
@@ -94,7 +94,7 @@ func TestReplaceJournalsNoDefaultsAfterInitialization(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			t.Cleanup(useTestSealer())
+			t.Cleanup(useTestJournalLocker())
 			if err := ReplaceJournals(root, Manifest{}, testLayout.Journals.Names); err != nil {
 				t.Fatal(err)
 			}

@@ -14,7 +14,7 @@ func TestRewriteFileAllowlist(t *testing.T) {
 	for _, tc := range []struct{ name, path, input, want string }{
 		{"repo text", "opt/data/nemo/repos/repo/file", testSourceHome + "/file", testSourceHome + "/file"},
 		{"repo binary", "opt/data/nemo/repos/repo/.git/objects/pack", "\x00" + testSourceHome + "/file", "\x00" + testSourceHome + "/file"},
-		{"config", "opt/data/config.yaml", testSourceHome + "/.hermes/file", "/opt/data/file"},
+		{"config", "opt/data/config.yaml", testSourceHome + "/.example-agent/file", "/opt/data/file"},
 		{"boundary", "opt/data/.env", testSourceHome + "X/file", testSourceHome + "X/file"},
 		{"script", "opt/data/scripts/run", testSourceHome + "/file", "/opt/data/file"},
 		{"cron", "opt/data/cron/job", testSourceHome + "/file", "/opt/data/file"},
@@ -22,7 +22,7 @@ func TestRewriteFileAllowlist(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			sum := sha256.Sum256([]byte(tc.input))
 			entry := ManifestEntry{Path: tc.path, Size: int64(len(tc.input)), SHA256: hex.EncodeToString(sum[:])}
-			f, expected, err := rewriteFile(bytes.NewBufferString(tc.input), entry, rewriteFilePath(tc.path), t.TempDir(), testSourceHome)
+			f, expected, err := rewriteFile(bytes.NewBufferString(tc.input), entry, rewriteFilePath(tc.path), t.TempDir(), testSourceHome, testLayout)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -37,6 +37,25 @@ func TestRewriteFileAllowlist(t *testing.T) {
 			sum = sha256.Sum256(got)
 			if expected.Size != int64(len(got)) || expected.SHA256 != hex.EncodeToString(sum[:]) {
 				t.Fatalf("incorrect destination digest: %+v", expected)
+			}
+		})
+	}
+}
+
+func TestRewriteTextUsesLayoutCopyRows(t *testing.T) {
+	for _, tc := range []struct{ name, input, want string }{
+		{"copy row", testSourceHome + "/.example-agent/x", "/opt/data/x"},
+		{"copy row boundary", testSourceHome + "/.example-agent", "/opt/data"},
+		{"home fallback", testSourceHome + "/nemo/x", "/opt/data/nemo/x"},
+		{"boundary", testSourceHome + ".example-agentX/x", testSourceHome + ".example-agentX/x"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var out bytes.Buffer
+			if err := rewriteTextWithBoundaries(bytes.NewBufferString(tc.input), &out, testSourceHome, testLayout); err != nil {
+				t.Fatal(err)
+			}
+			if out.String() != tc.want {
+				t.Fatalf("got %q want %q", out.String(), tc.want)
 			}
 		})
 	}

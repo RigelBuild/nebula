@@ -202,7 +202,15 @@ func verifyAsRuntimeUser(ctx context.Context, root string, manifest Manifest, la
 	if err := verifyGoogleTokens(root, lay); err != nil {
 		return err
 	}
-	return verifyJujutsuRepositories(ctx, filepath.Join(root, "opt/data/nemo/repos"), run)
+	for _, row := range lay.Rows {
+		if row.Kind != layout.Copy {
+			continue
+		}
+		if err := verifyJujutsuRepositories(ctx, filepath.Join(root, filepath.FromSlash(strings.TrimPrefix(row.Dest, "/"))), run); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func verifyGoogleTokens(root string, lay layout.Layout) error {

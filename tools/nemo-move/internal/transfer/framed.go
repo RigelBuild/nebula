@@ -15,6 +15,8 @@ import (
 	"strings"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/RigelBuild/nebula/tools/nemo-move/internal/layout"
 )
 
 func writeFramedArchive(source io.Reader, output io.Writer) (result error) {
@@ -177,7 +179,7 @@ func verifyEntry(reader *tar.Reader, writer *tar.Writer, header *tar.Header, ent
 	return nil
 }
 
-func rewriteLink(target, sourceHome string) (string, error) {
+func rewriteLink(target, sourceHome string, lay layout.Layout) (string, error) {
 	if !strings.HasPrefix(target, "/") {
 		return target, nil
 	}
@@ -185,9 +187,9 @@ func rewriteLink(target, sourceHome string) (string, error) {
 	if target == "/opt/data" || strings.HasPrefix(target, "/opt/data/") {
 		return target, nil
 	}
-	for _, prefix := range []string{sourceHome + "/.hermes", sourceHome} {
-		if target == prefix || strings.HasPrefix(target, prefix+"/") {
-			return "/opt/data" + strings.TrimPrefix(target, prefix), nil
+	for _, prefix := range homePrefixes(sourceHome, lay) {
+		if target == prefix.source || strings.HasPrefix(target, prefix.source+"/") {
+			return prefix.dest + strings.TrimPrefix(target, prefix.source), nil
 		}
 	}
 	return "", fmt.Errorf("absolute symlink points outside home: %s", target)

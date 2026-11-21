@@ -731,6 +731,20 @@ function getArrayContentImages(content: (TextContent | ImageContent)[]): ImageCo
 	return images ?? [];
 }
 
+/** Escape harness tags in text parts only; images and other parts pass through. */
+function escapeUserContent(content: UserMessage["content"]): UserMessage["content"] {
+	if (typeof content === "string") return escapeHarnessTags(content);
+	return content.map(part => (part.type === "text" ? { ...part, text: escapeHarnessTags(part.text) } : part));
+}
+
+/** Steering wrappers built here: their text holds the real `<system-notice>` envelope, so the plain-user escape skips them. */
+const steeringWrappers = new WeakSet<UserMessage>();
+
+function markSteeringWrapper(message: UserMessage): UserMessage {
+	steeringWrappers.add(message);
+	return message;
+}
+
 function wrapSteeringUserMessage(message: SteeringUserMessage): UserMessage {
 	const userMessage: UserMessage =
 		message.role === "user"
@@ -742,16 +756,24 @@ function wrapSteeringUserMessage(message: SteeringUserMessage): UserMessage {
 					timestamp: message.timestamp,
 				};
 	copyPerCallContextMessage(userMessage, message);
+	// Typed text is escaped. An agent-attributed steer (a parent's IRC message) already holds the
+	// envelope the harness built, so it goes out as written.
+	const typed = message.attribution !== "agent" && (message.role !== "user" || message.synthetic !== true);
 	if (typeof message.content === "string") {
 		if (message.content.length === 0) return message.role === "user" ? message : userMessage;
-		return { ...userMessage, content: renderSteeringEnvelope(message.content) };
+		return markSteeringWrapper({
+			...userMessage,
+			content: renderSteeringEnvelope(typed ? escapeHarnessTags(message.content) : message.content),
+		});
 	}
 
 	const text = getArrayContentText(message.content);
 	if (text.length === 0) return message.role === "user" ? message : userMessage;
-	const content: (TextContent | ImageContent)[] = [{ type: "text", text: renderSteeringEnvelope(text) }];
+	const content: (TextContent | ImageContent)[] = [
+		{ type: "text", text: renderSteeringEnvelope(typed ? escapeHarnessTags(text) : text) },
+	];
 	content.push(...getArrayContentImages(message.content));
-	return { ...userMessage, content };
+	return markSteeringWrapper({ ...userMessage, content });
 }
 
 // One wrapper per steering message. Per-request transforms key on identity (the
@@ -1165,10 +1187,12 @@ function convertOne(m: AgentMessage, interrupted = false): Message[] {
 			// authored by that agent: never tool output, never developer or system authority.
 			const ircIncoming = m.customType === "irc:incoming";
 			if (ircIncoming || isUserInvokedSkillPrompt(m)) {
+				// Escape the whole user-invoked skill prompt (body and typed args share one text part); irc:incoming content is harness-rendered.
+				const content = customMessageContentToLlmContent(m.content);
 				return [
 					{
 						role: "user",
-						content: customMessageContentToLlmContent(m.content),
+						content: ircIncoming ? content : escapeUserContent(content),
 						attribution: ircIncoming ? "agent" : "user",
 						timestamp: m.timestamp,
 					},
@@ -1194,9 +1218,16 @@ function convertOne(m: AgentMessage, interrupted = false): Message[] {
 			const converted = convertMessageToLlm(canonicalizeXdToolCallNames(source));
 			return converted ? [converted] : [];
 		}
+		case "user": {
+			const converted = convertMessageToLlm(m);
+			if (!converted) return [];
+			if (converted.role !== "user") return [converted];
+			const typed = m.synthetic !== true && m.attribution !== "agent";
+			if (!typed || steeringWrappers.has(m)) return [converted];
+			return [{ ...converted, content: escapeUserContent(converted.content) }];
+		}
 		case "branchSummary":
 		case "compactionSummary":
-		case "user":
 		case "developer": {
 			// Core roles share one transformer with agent-core —
 			// duplicating them here is how snapcompact frames once

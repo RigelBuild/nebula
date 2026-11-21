@@ -4,50 +4,70 @@ A Secret's ``data``/``stringData`` values and an env ``value`` under a secret-na
 reach the model through kubectl output. Their keys are neutral (``connection``, ``value``), so
 the keyword assignment passes in agent.redact never see them.
 
-Each pass collects ``(start, end)`` spans and the text is rebuilt once. Every pass is linear in
-the text: one tokenizer pass for JSON, one pass over lines for YAML and ``kubectl describe``, and
-regexes whose repeated parts cannot overlap.
+Each pass collects ``(start, end, replacement)`` spans and the text is rebuilt once. A ``None``
+replacement takes the caller's mask. Every pass is linear in the text: one tokenizer pass for
+JSON (its nesting capped at ``_MAX_DEPTH``), one pass over lines for YAML and ``kubectl
+describe``, and regexes whose repeated parts cannot overlap.
 
 kubectl sorts keys, so ``data`` comes before ``kind``, and output cut off by ``head -c`` ends
-inside it. An object's verdict is made when it closes, or at the end of the text: ``kind:
-Secret`` masks; any other kind keeps; no kind masks when the object has a Kubernetes
-``apiVersion`` or sits in a ``SecretList``. That fails closed on a cut-off Secret and keeps a
-ConfigMap and plain JSON visible.
+inside it. An object is decided when it closes, or at the end of the text:
+
+* ``kind: Secret`` masks; any other complete kind keeps.
+* No kind (or a kind cut off mid-word) masks when the text ends inside the object and it has a
+  Kubernetes ``apiVersion``. A complete object with no kind keeps its own values.
+* A list item with no kind hands its values to the list, which masks them when its kind is
+  ``SecretList``, or when its kind is still unknown at the end of the text.
 """
 
 import json
 import re
 
-MASK = "***"
-
 _SECRET_NAME_RE = re.compile(
     r"PASSWORD|PASSWD|PWD|SECRET|CREDENTIAL|TOKEN"
     r"|(?:^|[_.\-])(?:PASS|AUTH|(?:API|PRIVATE[_.\-]?)?KEYS?)(?:$|[_.\-])",
     re.IGNORECASE)
-# A name that holds metadata about a credential, not the credential itself.
-_NOT_SECRET_SUFFIX_RE = re.compile(r"[_.\-](?:TTL|PATH|FILE|DIR|URL|NAME|ID)$", re.IGNORECASE)
+# A name allowlist for settings about a credential, not the credential itself: limits, counts,
+# switches and locations. ``*_SECRET_ID`` is not on it, as a Vault AppRole secret_id is live.
+_NOT_SECRET_NAME_RE = re.compile(
+    r"(?:^|[_.\-])(?:MAX|MIN)[_.\-]|TOKENIZER"
+    r"|[_.\-](?:TTL|PATH|FILE|DIR|URL|NAME|ENABLED|DISABLED|MODE|TYPE|LENGTH|DAYS|HOURS|SECONDS"
+    r"|TIMEOUT|COUNT|SIZE|LIMIT|PARALLELISM|TOKENS)$",
+    re.IGNORECASE)
 _API_VERSION_RE = re.compile(r"(?:[a-z0-9.\-]+/)?v\d+(?:(?:alpha|beta)\d+)?")
 _LAST_APPLIED = "kubectl.kubernetes.io/last-applied-configuration"
 
 
-def secret_name(name: str) -> bool:
+def _secret_name(name: str) -> bool:
     name = name.strip().strip("\"'")
-    return _SECRET_NAME_RE.search(name) is not None and _NOT_SECRET_SUFFIX_RE.search(name) is None
+    return _SECRET_NAME_RE.search(name) is not None and _NOT_SECRET_NAME_RE.search(name) is None
 
 
-def _apply(text: str, spans: list) -> str:
+def _apply(text: str, spans: list, mask: str) -> str:
     if not spans:
         return text
-    spans.sort()
+    spans.sort(key=lambda s: (s[0], s[1]))
     out, pos = [], 0
     for start, end, repl in spans:
         if start < pos:
             continue
         out.append(text[pos:start])
-        out.append(repl)
+        out.append(mask if repl is None else repl)
         pos = end
     out.append(text[pos:])
     return "".join(out)
+
+
+def _redact_last_applied(encoded: str, mask: str):
+    """The annotation holds the object as escaped JSON: redact it and re-escape it. None when
+    nothing changed; the mask when the value cannot be read (cut off), so it fails closed."""
+    try:
+        inner = json.loads(encoded)
+    except ValueError:
+        return mask
+    if not isinstance(inner, str):
+        return None
+    redacted = redact_kubernetes(inner, mask)
+    return None if redacted == inner else json.dumps(redacted, ensure_ascii=False)
 
 
 # --- JSON --------------------------------------------------------------------------------------
@@ -55,15 +75,22 @@ def _apply(text: str, spans: list) -> str:
 # string parity of the object below it. A string cut off by a newline or the end of the text is
 # read as an unterminated string and masks to its end.
 _JSON_TOKEN_RE = re.compile(r'"(?:[^"\\\n]|\\[^\n])*"?|[{}\[\]:,\n]')
+# Deeper nesting is read as the end of the text. Kubernetes objects are far shallower.
+_MAX_DEPTH = 512
+# The text before a top-level env entry on its line: nothing, or one word followed by blanks or
+# ``=``/``:`` (jsonpath ``web\t[{...}]``, ``env=[{...}]``). Code (``const opts = [``) or an
+# indented literal in a call or list is not kubectl output.
+_ENV_PREFIX_RE = re.compile(r"(?:[\w.\-/]+(?:[ \t]+|[=:][ \t]*))?")
 
 
-def _string_content(tok: str):
-    """(content start, content end) of a string token, relative to the token. The token regex
-    consumes every escape, so a token that ends in a quote is closed."""
-    return 1, len(tok) - 1 if len(tok) > 1 and tok.endswith('"') else len(tok)
+def _closed(tok: str) -> bool:
+    # The token regex consumes every escape, so a token that ends in a quote is closed.
+    return len(tok) > 1 and tok.endswith('"')
 
 
 def _decode(tok: str) -> str:
+    if "\\" not in tok:
+        return tok[1:-1] if _closed(tok) else tok[1:]
     try:
         return json.loads(tok)
     except ValueError:
@@ -71,125 +98,104 @@ def _decode(tok: str) -> str:
 
 
 class _Frame:
-    __slots__ = (
-        "api",
-        "data",
-        "data_children",
-        "env_ctx",
-        "is_obj",
-        "key",
-        "kind",
-        "name",
-        "parent",
-        "value",
-    )
+    __slots__ = ("api", "data", "data_owner", "deferred", "env_ctx", "is_obj", "key", "kind",
+                 "name", "parent", "value")
 
-    def __init__(self, is_obj, parent, key, env_ctx):
+    def __init__(self, is_obj, parent, key, env_ctx, data_owner):
         self.is_obj = is_obj
-        self.parent = parent      # parent _Frame or None
-        self.key = key            # the key this container is the value of
-        self.env_ctx = env_ctx    # an object here may be an env entry
+        self.parent = parent          # parent _Frame or None
+        self.key = key                # the key this container is the value of
+        self.env_ctx = env_ctx        # an object here may be an env entry
+        self.data_owner = data_owner  # the object whose data map holds this container
         self.kind = self.api = self.name = self.value = None
-        self.data = []            # spans of string values in data/stringData
-        self.data_children = []   # value spans when this container is a data map
+        self.data = []                # spans of string values in this object's data maps
+        self.deferred = []            # data spans of list items with no kind
 
 
-def _json_spans(text: str) -> list:
-    spans = []
-    stack = []
-    key = None             # last key token seen in the current object
-    expect_key = True
-    # True while the current line holds only JSON tokens and whitespace. A top-level object after
-    # other text (``const opts = [{...}]``) is source code, not kubectl output.
-    line_json = True
-    prev_end = 0
+def _list_owner(frame):
+    arr = frame.parent
+    if arr is not None and not arr.is_obj and arr.parent is not None and arr.parent.is_obj:
+        return arr.parent
+    return None
 
-    def owner_kind(frame):
-        # The object that owns the array this object sits in, e.g. a SecretList.
-        arr = frame.parent
-        if arr is not None and not arr.is_obj and arr.parent is not None:
-            return arr.parent.kind
-        return None
 
-    def close(frame):
-        """Decide a container when it closes or when the text ends inside it."""
-        parent = frame.parent
-        if frame.is_obj:
-            if frame.data and (frame.kind == "Secret" or (
-                    frame.kind is None and (frame.api or owner_kind(frame) == "SecretList"))):
+def _json_spans(text: str, mask: str) -> list:
+    spans, stack = [], []
+    key = None          # the last key read in the current object
+    expect_key = False
+    seg_start = 0       # start of the line, or end of the last top-level value on it
+
+    def close(frame, eof):
+        if not frame.is_obj:
+            return
+        if frame.data:
+            if frame.kind == "Secret" or (frame.kind is None and eof and frame.api):
                 spans.extend(frame.data)
-            if frame.env_ctx and frame.name is not None and frame.value is not None \
-                    and secret_name(frame.name):
-                spans.append(frame.value)
-            # A data map's values belong to the object that holds the map.
-            if parent is not None and parent.is_obj and frame.key in ("data", "stringData"):
-                parent.data.extend(frame.data_children)
+            elif frame.kind is None:
+                owner = _list_owner(frame)
+                if owner is not None:
+                    owner.deferred.extend(frame.data)
+        if frame.deferred and (frame.kind == "SecretList" or (frame.kind is None and eof)):
+            spans.extend(frame.deferred)
+        # A name cut off before it is read fails closed.
+        if frame.env_ctx and frame.value is not None and (
+                (frame.name is None and eof) or (frame.name is not None and _secret_name(frame.name))):
+            spans.append(frame.value)
 
     for m in _JSON_TOKEN_RE.finditer(text):
         tok = m.group()
         c = tok[0]
-        if line_json and not text[prev_end:m.start()].isspace() and m.start() > prev_end:
-            line_json = False
-        prev_end = m.end()
         if c == "\n":
-            line_json = True
+            seg_start = m.end()
             continue
         top = stack[-1] if stack else None
         if c == "{" or c == "[":
+            if len(stack) >= _MAX_DEPTH:
+                break
             if top is None:
-                env_ctx = line_json
-            elif top.is_obj:
-                env_ctx = key == "env"
-            else:  # an element of an array
-                env_ctx = top.env_ctx
-            frame = _Frame(c == "{", top, key if top is not None and top.is_obj else None, env_ctx)
-            stack.append(frame)
-            expect_key = frame.is_obj
+                env_ctx = _ENV_PREFIX_RE.fullmatch(text, seg_start, m.start()) is not None
+                owner = None
+            else:
+                env_ctx = key == "env" if top.is_obj else top.env_ctx
+                owner = top if top.is_obj and key in ("data", "stringData") else top.data_owner
+            stack.append(_Frame(c == "{", top, key if top is not None and top.is_obj else None,
+                                env_ctx, owner))
+            expect_key = c == "{"
             key = None
         elif c == "}" or c == "]":
             if stack:
-                frame = stack.pop()
-                close(frame)
-            top = stack[-1] if stack else None
+                close(stack.pop(), False)
+                if not stack:
+                    seg_start = m.end()
             expect_key = False
         elif c == ":":
             expect_key = False
         elif c == ",":
             expect_key = top is not None and top.is_obj
-        elif c == '"':
-            if top is not None and top.is_obj and expect_key:
+        elif top is not None:  # a string
+            if top.is_obj and expect_key:
                 key = _decode(tok)
-            elif top is not None and top.is_obj:
-                a, b = _string_content(tok)
-                start, end = m.start() + a, m.start() + b
+                continue
+            start, end = m.start() + 1, m.end() - (1 if _closed(tok) else 0)
+            if top.is_obj:
                 if key == "kind":
-                    top.kind = _decode(tok)
+                    if _closed(tok):  # a kind cut off mid-word stays unknown
+                        top.kind = _decode(tok)
                 elif key == "apiVersion":
-                    if _API_VERSION_RE.fullmatch(_decode(tok)):
-                        top.api = True
+                    top.api = _API_VERSION_RE.fullmatch(_decode(tok)) is not None
                 elif key == "name":
                     top.name = _decode(tok)
                 elif key == "value":
-                    top.value = (start, end, MASK)
+                    top.value = (start, end, None)
                 elif key == _LAST_APPLIED:
-                    spans.extend(_last_applied_span(tok, m.start(), start, end))
-                if top.parent is not None and top.key in ("data", "stringData") and top.parent.is_obj:
-                    top.data_children.append((start, end, MASK))
+                    repl = _redact_last_applied(tok, mask)
+                    if repl is not None:
+                        spans.append((m.start(), m.end(), repl))
+            if top.data_owner is not None:
+                top.data_owner.data.append((start, end, None))
     while stack:  # cut-off text: decide every open object now
-        close(stack.pop())
+        close(stack.pop(), True)
     return spans
-
-
-def _last_applied_span(tok: str, offset: int, start: int, end: int) -> list:
-    """The annotation holds the object as escaped JSON: redact it and re-escape it."""
-    try:
-        inner = json.loads(tok)
-    except ValueError:
-        return [(start, end, MASK)]  # cut off: its content cannot be read, so fail closed
-    redacted = redact_kubernetes(inner)
-    if redacted == inner:
-        return []
-    return [(offset, offset + len(tok), json.dumps(redacted, ensure_ascii=False))]
 
 
 # --- YAML --------------------------------------------------------------------------------------
@@ -203,14 +209,23 @@ def _plain_scalar(s: str) -> str:
     return s.strip("\"'")
 
 
-class _Map:
-    __slots__ = ("api", "col", "data", "kind", "name", "parent_kind", "value")
+def _strip_props(rest: str) -> str:
+    """The value after any ``&anchor`` and ``!tag`` properties."""
+    rest = rest.strip()
+    while rest[:1] in ("&", "!"):
+        rest = rest.partition(" ")[2].strip()
+    return rest
 
-    def __init__(self, col, parent_kind):
+
+class _Map:
+    __slots__ = ("api", "col", "data", "deferred", "kind", "name", "parent", "value")
+
+    def __init__(self, col, parent):
         self.col = col
+        self.parent = parent
         self.kind = self.api = self.name = self.value = None
         self.data = []
-        self.parent_kind = parent_kind
+        self.deferred = []
 
 
 def _value_span(line_off: int, body: str, vstart: int):
@@ -220,13 +235,13 @@ def _value_span(line_off: int, body: str, vstart: int):
         q = value[0]
         close = value.find(q, 1)
         end = vstart + (close if close > 0 else len(value))
-        return line_off + vstart + 1, line_off + end
+        return line_off + vstart + 1, line_off + end, None
     cut = value.find(" #")
     end = vstart + (cut if cut >= 0 else len(value.rstrip()))
-    return line_off + vstart, line_off + end
+    return line_off + vstart, line_off + end, None
 
 
-def _yaml_spans(text: str) -> list:
+def _yaml_spans(text: str, mask: str) -> list:
     spans = []
     lines = text.split("\n")
     offs, pos = [], 0
@@ -235,6 +250,7 @@ def _yaml_spans(text: str) -> list:
         pos += len(line) + 1
     bodies = [ln.removesuffix("\r") for ln in lines]
     indents = [len(b) - len(b.lstrip(" \t")) for b in bodies]
+    cut_last = not text.endswith("\n")
 
     def deeper_block(i, col):
         """Spans of every line after ``i`` indented past ``col`` (blank lines included)."""
@@ -244,16 +260,22 @@ def _yaml_spans(text: str) -> list:
             if b.strip():
                 if indents[j] <= col:
                     break
-                out.append((offs[j] + indents[j], offs[j] + len(b), MASK))
+                out.append((offs[j] + indents[j], offs[j] + len(b), None))
             j += 1
         return out, j
 
     stack = []
 
-    def close(mp):
-        if mp.data and (mp.kind == "Secret" or (mp.kind is None and (mp.api or mp.parent_kind == "SecretList"))):
-            spans.extend(mp.data)
-        if mp.name is not None and mp.value is not None and secret_name(mp.name):
+    def close(mp, eof):
+        # YAML has no closing bracket, so a map with an apiVersion and no kind masks either way.
+        if mp.data:
+            if mp.kind == "Secret" or (mp.kind is None and mp.api):
+                spans.extend(mp.data)
+            elif mp.kind is None and mp.parent is not None:
+                mp.parent.deferred.extend(mp.data)
+        if mp.deferred and (mp.kind == "SecretList" or (mp.kind is None and eof and mp.api)):
+            spans.extend(mp.deferred)
+        if mp.name is not None and mp.value is not None and _secret_name(mp.name):
             spans.extend(mp.value)
 
     i, n = 0, len(bodies)
@@ -265,7 +287,7 @@ def _yaml_spans(text: str) -> list:
             continue
         if _DOC_SEP_RE.fullmatch(body):
             while stack:
-                close(stack.pop())
+                close(stack.pop(), False)
             i += 1
             continue
         ind = indents[i]
@@ -276,43 +298,44 @@ def _yaml_spans(text: str) -> list:
         dash = m.group(1)
         col = ind + (len(dash) if dash else 0)
         while stack and (stack[-1].col > col or (dash and stack[-1].col >= col)):
-            close(stack.pop())
+            close(stack.pop(), False)
         if not stack or stack[-1].col != col:
-            parent_kind = stack[-1].kind if stack else None
-            stack.append(_Map(col, parent_kind))
+            stack.append(_Map(col, stack[-1] if stack else None))
         mp = stack[-1]
         key = m.group(2).strip("\"'")
         vstart = m.end()
         rest = body[vstart:]
-        scalar = _plain_scalar(rest)
         nxt = i + 1
         if key == "kind":
-            mp.kind = scalar
-            # Items of a SecretList are its children.
+            if not (cut_last and i == n - 1):  # a kind cut off mid-word stays unknown
+                mp.kind = _plain_scalar(rest)
         elif key == "apiVersion":
-            mp.api = _API_VERSION_RE.fullmatch(scalar) is not None
+            mp.api = _API_VERSION_RE.fullmatch(_plain_scalar(rest)) is not None
         elif key == "name":
-            mp.name = scalar
+            mp.name = _plain_scalar(rest)
         elif key == "value":
-            if not rest.strip() or rest.lstrip()[:1] in "|>":
-                block, nxt = deeper_block(i, col)
-                mp.value = block
-            else:
-                s, e = _value_span(offs[i], body, vstart)
-                block, nxt = deeper_block(i, col)
-                mp.value = [(s, e, MASK)] + block
+            block, nxt = deeper_block(i, col)
+            if rest.strip() and rest.lstrip()[:1] not in "|>":
+                block.insert(0, _value_span(offs[i], body, vstart))
+            mp.value = block
         elif key in ("data", "stringData"):
-            if rest.lstrip().startswith("{"):
-                for fm in _FLOW_VALUE_RE.finditer(body, vstart + rest.index("{")):
+            value = _strip_props(rest)
+            if value.startswith("{"):
+                for fm in _FLOW_VALUE_RE.finditer(body, body.index("{", vstart)):
                     if fm.group(2).strip():
                         s = offs[i] + fm.start(2)
-                        mp.data.append((s, s + len(fm.group(2).rstrip()), MASK))
-            elif not rest.strip() or rest.strip().startswith("#"):
+                        mp.data.append((s, s + len(fm.group(2).rstrip()), None))
+            elif not value or value.startswith("#"):
                 nxt = _yaml_data_block(bodies, indents, offs, i, col, mp.data)
+        elif key == _LAST_APPLIED and rest.lstrip().startswith('"'):
+            value = rest.strip()
+            repl = _redact_last_applied(value, mask)
+            if repl is not None:
+                s = offs[i] + vstart + (len(rest) - len(rest.lstrip()))
+                spans.append((s, s + len(value), repl))
         i = nxt
-    # (a key line with no case above is a plain key; its map stays on the stack)
     while stack:
-        close(stack.pop())
+        close(stack.pop(), True)
     return spans
 
 
@@ -335,24 +358,25 @@ def _yaml_data_block(bodies, indents, offs, i, col, out) -> int:
             if m and not m.group(1):
                 rest = b[m.end():]
                 if rest.strip() and rest.lstrip()[:1] not in "|>":
-                    s, e = _value_span(offs[j], b, m.end())
-                    out.append((s, e, MASK))
+                    out.append(_value_span(offs[j], b, m.end()))
             else:
-                out.append((offs[j] + ind, offs[j] + len(b), MASK))
+                out.append((offs[j] + ind, offs[j] + len(b), None))
         else:  # a block scalar line or the value of a key on the next line
-            out.append((offs[j] + ind, offs[j] + len(b), MASK))
+            out.append((offs[j] + ind, offs[j] + len(b), None))
         j += 1
     return j
 
 
 # --- Helm flow env, Go maps and kubectl describe -----------------------------------------------
+_FLOW_SCALAR = r"""("(?:[^"\\\n]|\\.)*"|'(?:[^'\n]|'')*'|[^,}\]\n]*)"""
 _FLOW_ENV_RE = re.compile(
-    r"\{[ \t]*name:[ \t]*([\"']?)([\w.\-]+)\1[ \t]*,[ \t]*value:[ \t]*([^,}\]\n]*)"
-    r"|\{[ \t]*value:[ \t]*([^,}\]\n]*),[ \t]*name:[ \t]*([\"']?)([\w.\-]+)\5")
+    r"\{[ \t]*name:[ \t]*([\"']?)([\w.\-]+)\1[ \t]*,[ \t]*value:[ \t]*" + _FLOW_SCALAR
+    + r"|\{[ \t]*value:[ \t]*" + _FLOW_SCALAR + r",[ \t]*name:[ \t]*([\"']?)([\w.\-]+)\5")
 _GO_MAP_RE = re.compile(r"map\[([^\[\]\n]*)\]")
 _GO_NAME_RE = re.compile(r"(?:^| )name:(\S+)")
 _GO_VALUE_RE = re.compile(r"(?:^| )value:")
 _GO_NEXT_KEY_RE = re.compile(r" [A-Za-z]+:")
+_DESCRIBE_NAME_RE = re.compile(r"([A-Za-z_][\w.\-]*):(?:[ \t]+|$)")
 _DESCRIBE_REF_RE = re.compile(r"<set to the key |<none>|.*\(v1:")
 
 
@@ -365,59 +389,67 @@ def _flow_spans(text: str) -> list:
             else:
                 name, g = m.group(6), 4
             value = m.group(g).rstrip()
-            if value and secret_name(name):
+            if value and _secret_name(name):
                 s = m.start(g)
                 if value[0] in "\"'" and value.endswith(value[0]) and len(value) > 1:
-                    spans.append((s + 1, s + len(value) - 1, MASK))
+                    spans.append((s + 1, s + len(value) - 1, None))
                 else:
-                    spans.append((s, s + len(value), MASK))
+                    spans.append((s, s + len(value), None))
     if "map[" in text:
         for m in _GO_MAP_RE.finditer(text):
             inner = m.group(1)
             nm = _GO_NAME_RE.search(inner)
             vm = _GO_VALUE_RE.search(inner)
-            if not nm or not vm or not secret_name(nm.group(1)):
+            if not nm or not vm or not _secret_name(nm.group(1)):
                 continue
             vs = vm.end()
             nk = _GO_NEXT_KEY_RE.search(inner, vs)
             ve = nk.start() if nk else len(inner)
             if ve > vs:
-                spans.append((m.start(1) + vs, m.start(1) + ve, MASK))
+                spans.append((m.start(1) + vs, m.start(1) + ve, None))
     return spans
 
 
 def _describe_spans(text: str) -> list:
-    spans, pos, env_indent = [], 0, -1
+    """``NAME:  value`` lines inside an ``Environment:`` block. A value that runs over several
+    lines (a PEM key, a multi-line string) masks every following line up to the next
+    ``NAME:`` line or the end of the block."""
+    spans, pos, env_indent, in_value = [], 0, -1, False
     for line in text.split("\n"):
         body = line.removesuffix("\r")
         stripped = body.lstrip(" \t")
-        indent = len(body) - len(stripped)
+        lead = len(body) - len(stripped)
+        indent = len(body[:lead].expandtabs(8))
         if env_indent >= 0 and stripped:
             if indent <= env_indent:
-                env_indent = -1
+                env_indent, in_value = -1, False
             else:
-                name, sep, rest = stripped.partition(":")
-                value = rest.strip()
-                if sep and value and " " not in name and secret_name(name) \
-                        and not _DESCRIBE_REF_RE.match(value):
-                    s = pos + indent + len(name) + 1 + (len(rest) - len(rest.lstrip()))
-                    spans.append((s, s + len(value), MASK))
+                m = _DESCRIBE_NAME_RE.match(stripped)
+                if m is None:
+                    if in_value:
+                        spans.append((pos + lead, pos + len(body), None))
+                else:
+                    value = stripped[m.end():].rstrip()
+                    in_value = bool(value) and _secret_name(m.group(1)) \
+                        and not _DESCRIBE_REF_RE.match(value)
+                    if in_value:
+                        s = pos + lead + m.end()
+                        spans.append((s, s + len(value), None))
         if stripped.rstrip() == "Environment:":
-            env_indent = indent
+            env_indent, in_value = indent, False
         pos += len(line) + 1
     return spans
 
 
-def redact_kubernetes(text: str) -> str:
-    """Mask Kubernetes Secret data values and secret-named env values."""
+def redact_kubernetes(text: str, mask: str = "***") -> str:
+    """Mask Kubernetes Secret data values and secret-named env values with ``mask``."""
     spans = []
-    if '"' in text and ('"data"' in text or '"stringData"' in text or '"value"' in text
-                        or _LAST_APPLIED in text):
-        spans += _json_spans(text)
-    if "ata:" in text or "value:" in text:
-        spans += _yaml_spans(text)
+    if '"' in text and ":" in text:
+        spans += _json_spans(text, mask)
+    if "ata:" in text or "value:" in text or _LAST_APPLIED in text:
+        spans += _yaml_spans(text, mask)
     if "value:" in text:
         spans += _flow_spans(text)
     if "Environment:" in text:
         spans += _describe_spans(text)
-    return _apply(text, spans)
+    return _apply(text, spans, mask)

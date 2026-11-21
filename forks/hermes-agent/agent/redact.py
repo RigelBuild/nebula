@@ -1561,9 +1561,11 @@ def redact_sensitive_text(text: str, *, force: bool = False, code_file: bool = F
         _zhipu_sub = _mask_token_nonreusable if file_read else _mask_token
         text = _ZHIPU_API_KEY_RE.sub(lambda m: _zhipu_sub(m.group(1)), text)
 
+    # PEM blocks first: a multi-line key under a secret env name must be masked as a whole block.
+    text = _redact_private_key_blocks(text)
     # Kubernetes Secret data / secret env values run in every mode: the source is a live object,
     # never a code fixture, and kubectl output is how the model sees them (RIG-11725).
-    text = redact_kubernetes(text)
+    text = redact_kubernetes(text, _mask_token_nonreusable("") if file_read else "***")
 
     if not code_file:
         text = _redact_assignments(text, mask_nonreusable=file_read)
@@ -1571,7 +1573,6 @@ def redact_sensitive_text(text: str, *, force: bool = False, code_file: bool = F
     # Flags and connection-string keys carry a credential in command text, so they are not
     # gated on code_file: the shape (``--password=`` / ``;AccountKey=``) is unambiguous, and
     # the surfaces that leaked them (approval cards, chat status) run this pass anyway.
-    text = _redact_private_key_blocks(text)
     text = _redact_cli_secrets(text, _mask_token_nonreusable if file_read else None)
 
     if force and "=" in text:

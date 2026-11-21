@@ -388,6 +388,36 @@ describe("claude usage-block healing", () => {
 		expect(await storage.keys.get("anthropic", "global-heal", { modelId: "claude-fable-5-1" })).toBe("access-1");
 	});
 
+	it("does not heal a manual block through repeated healthy live reports", async () => {
+		const { storage, probeCount, blocks, clearedScopes } = makeHarness(
+			claudeReport([sharedLimit("5h", "5h", 0), sharedLimit("7d", "7d", 0), tierLimit("fable", 0)]),
+			"manual",
+		);
+		storages.push(storage);
+		await storage.credentials.reload();
+		// Two passes: a single pass could miss a heal that needs the usage-cache window to lapse.
+		await storage.health.model("anthropic", { modelId: "claude-fable-5-1", reserveFraction: 0.1 });
+		await storage.health.model("anthropic", { modelId: "claude-fable-5-1", reserveFraction: 0.1 });
+		expect(clearedScopes).not.toContain("manual");
+		expect(blocks.has("1:manual")).toBe(true);
+		expect(probeCount()).toBe(0);
+		expect(await storage.keys.get("anthropic", "manual-heal", { modelId: "claude-fable-5-1" })).toBe("access-2");
+	});
+
+	it("control: the same healthy setup clears an unprotected account-wide block", async () => {
+		// Proves the manual test can fail: an unprotected block on the same account is healed.
+		const { storage, blocks, clearedScopes } = makeHarness(
+			claudeReport([sharedLimit("5h", "5h", 0), sharedLimit("7d", "7d", 0), tierLimit("fable", 0)]),
+			"",
+		);
+		storages.push(storage);
+		await storage.credentials.reload();
+		await storage.health.model("anthropic", { modelId: "claude-fable-5-1", reserveFraction: 0.1 });
+		await storage.health.model("anthropic", { modelId: "claude-fable-5-1", reserveFraction: 0.1 });
+		expect(clearedScopes).toContain("");
+		expect(blocks.has("1:")).toBe(false);
+	});
+
 	for (const scope of ["auth", "account-policy"]) {
 		it(`does not heal an independent ${scope} block`, async () => {
 			const { storage, probeCount, blocks } = makeHarness(

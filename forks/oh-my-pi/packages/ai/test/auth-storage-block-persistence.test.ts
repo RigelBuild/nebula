@@ -513,12 +513,12 @@ describe("AuthStorage credential block persistence", () => {
 		firstReopen.close();
 		expect(readCredentialBlockRows(dbPath)).toEqual(expectedRows);
 		expect(readLegacyCodexSharedBlock(dbPath, codexRow.id)?.blocked_until_ms).toBe(chatExpiryMs);
-		expect(readAuthSchemaVersion(dbPath)).toBe(8);
+		expect(readAuthSchemaVersion(dbPath)).toBe(9);
 
 		const secondReopen = await SqliteAuthCredentialStore.open(dbPath);
 		secondReopen.close();
 		expect(readCredentialBlockRows(dbPath)).toEqual(expectedRows);
-		expect(readAuthSchemaVersion(dbPath)).toBe(8);
+		expect(readAuthSchemaVersion(dbPath)).toBe(9);
 	});
 
 	it("mirrors a legacy Codex shared insert into meter rows while hiding shared from current APIs", async () => {
@@ -833,7 +833,7 @@ describe("AuthStorage credential block persistence", () => {
 			const expiresAtMs = Date.now() + 3_600_000;
 			expect(migratedStore.tryAcquireCredentialRefreshLease(1, "test-owner", expiresAtMs)).toBe(true);
 			expect(migratedStore.getCredentialRefreshLeaseExpiresAt(1)).toBe(expiresAtMs);
-			expect(readAuthSchemaVersion(dbPath)).toBe(8);
+			expect(readAuthSchemaVersion(dbPath)).toBe(9);
 		} finally {
 			migratedStore.close();
 		}
@@ -884,10 +884,84 @@ describe("AuthStorage credential block persistence", () => {
 			const rows = migratedStore.listAuthCredentials(PROVIDER);
 			expect(rows).toHaveLength(1);
 			expect(rows[0]!.credential).toMatchObject({ type: "oauth", access: "legacy-access" });
-			expect(readAuthSchemaVersion(dbPath)).toBe(8);
+			expect(readAuthSchemaVersion(dbPath)).toBe(9);
 			expect(tableExists(dbPath, "auth_credential_blocks")).toBe(true);
 		} finally {
 			migratedStore.close();
+		}
+	});
+
+	it("keeps a manual block out of plain selection until its deadline", async () => {
+		const store = await SqliteAuthCredentialStore.open(dbPath);
+		await store.saveOAuth(PROVIDER, oauthCredential("1"));
+		await store.saveOAuth(PROVIDER, oauthCredential("2"));
+		const rows = store.listAuthCredentials(PROVIDER);
+		const storage = new AuthStorage(store);
+		await storage.credentials.reload();
+		try {
+			const row = rows[0];
+			if (!row) throw new Error("expected credential row");
+			storage.blocks.upsert({
+				credentialId: row.id,
+				providerKey: PROVIDER_KEY,
+				blockScope: "manual",
+				blockedUntilMs: FUTURE_BLOCK_MS,
+			});
+			// A plain request names no scope, so only protected scopes can keep row 1 out.
+			expect(await storage.keys.get(PROVIDER, "plain-manual")).toBe("access-2");
+		} finally {
+			storage.close();
+		}
+	});
+
+	it("lifts a manual block at blockedUntilMs on the real clock", async () => {
+		const store = await SqliteAuthCredentialStore.open(dbPath);
+		await store.saveOAuth(PROVIDER, oauthCredential("1"));
+		await store.saveOAuth(PROVIDER, oauthCredential("2"));
+		const [row] = store.listAuthCredentials(PROVIDER);
+		if (!row) throw new Error("expected credential row");
+		const storage = new AuthStorage(store);
+		await storage.credentials.reload();
+		const blockedUntilMs = Date.now() + 10 * 60_000;
+		const realNow = Date.now;
+		try {
+			storage.blocks.upsert({
+				credentialId: row.id,
+				providerKey: PROVIDER_KEY,
+				blockScope: "manual",
+				blockedUntilMs,
+			});
+			// Before the deadline the only account stays out of plain selection; at the deadline it is back.
+			Date.now = () => blockedUntilMs - 1;
+			expect(await storage.keys.get(PROVIDER, "manual-before")).toBe("access-2");
+			Date.now = () => blockedUntilMs;
+			expect(await storage.keys.get(PROVIDER, "manual-at")).toBe("access-1");
+		} finally {
+			Date.now = realNow;
+			storage.close();
+		}
+	});
+
+	it("control: a non-protected scope is not kept by a plain request", async () => {
+		// Proves the manual selection test can fail: a scope the request does not name is not checked.
+		const store = await SqliteAuthCredentialStore.open(dbPath);
+		await store.saveOAuth(PROVIDER, oauthCredential("1"));
+		await store.saveOAuth(PROVIDER, oauthCredential("2"));
+		const rows = store.listAuthCredentials(PROVIDER);
+		const storage = new AuthStorage(store);
+		await storage.credentials.reload();
+		try {
+			const row = rows[0];
+			if (!row) throw new Error("expected credential row");
+			storage.blocks.upsert({
+				credentialId: row.id,
+				providerKey: PROVIDER_KEY,
+				blockScope: "tier:fable",
+				blockedUntilMs: FUTURE_BLOCK_MS,
+			});
+			expect(await storage.keys.get(PROVIDER, "plain-tier")).toBe("access-1");
+		} finally {
+			storage.close();
 		}
 	});
 });

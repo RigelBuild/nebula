@@ -39,6 +39,7 @@ import type {
 } from "./types";
 import {
 	AUTH_BROKER_CAPABILITIES_HEADER,
+	AUTH_BROKER_CAPABILITY_BLOCK_ATTRIBUTION,
 	AUTH_BROKER_CAPABILITY_CODEX_METER_BLOCK_SCOPES,
 	DEFAULT_AUTH_BROKER_BIND,
 	DEFAULT_REFRESH_INTERVAL_MS,
@@ -181,6 +182,14 @@ function supportsCodexMeterBlockScopes(req: Request): boolean {
 		capabilities
 			?.split(",")
 			.some(capability => capability.trim() === AUTH_BROKER_CAPABILITY_CODEX_METER_BLOCK_SCOPES) ?? false
+	);
+}
+
+function supportsBlockAttribution(req: Request): boolean {
+	const capabilities = req.headers.get(AUTH_BROKER_CAPABILITIES_HEADER);
+	return (
+		capabilities?.split(",").some(capability => capability.trim() === AUTH_BROKER_CAPABILITY_BLOCK_ATTRIBUTION) ??
+		false
 	);
 }
 
@@ -433,6 +442,7 @@ function buildCredentialBlockGroups(
 	blocks: readonly StoredCredentialBlock[],
 	serverNowMs: number,
 	clientSupportsCodexMeterBlockScopes: boolean,
+	clientSupportsBlockAttribution: boolean,
 ): Map<number, CredentialBlockSnapshot[]> {
 	const byCredentialId = new Map<number, CredentialBlockSnapshot[]>();
 	for (const block of blocks) {
@@ -442,6 +452,8 @@ function buildCredentialBlockGroups(
 			blockScope: block.blockScope,
 			blockedUntilMs: block.blockedUntilMs,
 			updatedAtMs: block.updatedAtMs,
+			...(clientSupportsBlockAttribution && block.reason !== undefined ? { reason: block.reason } : {}),
+			...(clientSupportsBlockAttribution && block.by !== undefined ? { by: block.by } : {}),
 		};
 		const existing = byCredentialId.get(block.credentialId);
 		if (existing) {
@@ -506,8 +518,7 @@ class SnapshotSource {
 		}
 	}
 
-	/** Wire snapshot for one client flavour, projected at the current server time. */
-	build(clientSupportsCodexMeterBlockScopes: boolean): SnapshotResponse {
+	build(clientSupportsCodexMeterBlockScopes: boolean, clientSupportsBlockAttribution: boolean): SnapshotResponse {
 		const rows = this.#currentRows();
 		const serverNowMs = Date.now();
 		const { wire, nextSweepAt } = resolveRefresherSchedule(this.#refresher, serverNowMs);
@@ -515,6 +526,7 @@ class SnapshotSource {
 			this.#storage.blocks.list(rows.credentials.map(entry => entry.id)),
 			serverNowMs,
 			clientSupportsCodexMeterBlockScopes,
+			clientSupportsBlockAttribution,
 		);
 		const credentials: SnapshotEntry[] = rows.credentials.map(entry => {
 			const blocks = blocksByCredentialId.get(entry.id);
@@ -548,12 +560,13 @@ async function serveSnapshot(
 ): Promise<Response> {
 	await source.reload();
 	const clientSupportsCodexMeterBlockScopes = supportsCodexMeterBlockScopes(req);
+	const clientSupportsBlockAttribution = supportsBlockAttribution(req);
 	let currentGeneration = source.generation;
 	const clientGeneration = parseGenerationTag(req.headers.get("if-none-match"));
 	const waitMs = parseWaitMs(url);
 
 	if (clientGeneration === undefined || currentGeneration !== clientGeneration || waitMs <= 0) {
-		const body = source.build(clientSupportsCodexMeterBlockScopes);
+		const body = source.build(clientSupportsCodexMeterBlockScopes, clientSupportsBlockAttribution);
 		logger.info("auth-broker snapshot served", {
 			peer,
 			credentials: body.credentials.length,
@@ -573,7 +586,7 @@ async function serveSnapshot(
 	await source.reload();
 	currentGeneration = source.generation;
 	if (currentGeneration !== clientGeneration) {
-		const body = source.build(clientSupportsCodexMeterBlockScopes);
+		const body = source.build(clientSupportsCodexMeterBlockScopes, clientSupportsBlockAttribution);
 		logger.info("auth-broker snapshot long-poll changed", {
 			peer,
 			credentials: body.credentials.length,
@@ -614,6 +627,7 @@ function sseEvent(event: string, body: unknown): Uint8Array {
 interface SnapshotStreamSubscriber {
 	readonly peer: string;
 	readonly codexMeterBlockScopes: boolean;
+	readonly blockAttribution: boolean;
 	/** Fingerprint of the last entry frame sent per credential id. */
 	readonly sent: Map<number, string>;
 	lastGeneration: number;
@@ -768,12 +782,15 @@ class SnapshotStreamHub {
 	}
 
 	#fanOut(): void {
-		const frames = new Map<boolean, SnapshotStreamFrame>();
+		const frames = new Map<string, SnapshotStreamFrame>();
 		for (const subscriber of Array.from(this.#subscribers)) {
-			let frame = frames.get(subscriber.codexMeterBlockScopes);
+			const flavour = `${subscriber.codexMeterBlockScopes}:${subscriber.blockAttribution}`;
+			let frame = frames.get(flavour);
 			if (!frame) {
-				frame = new SnapshotStreamFrame(this.#source.build(subscriber.codexMeterBlockScopes));
-				frames.set(subscriber.codexMeterBlockScopes, frame);
+				frame = new SnapshotStreamFrame(
+					this.#source.build(subscriber.codexMeterBlockScopes, subscriber.blockAttribution),
+				);
+				frames.set(flavour, frame);
 			}
 			deliverStreamFrame(subscriber, frame);
 		}
@@ -828,6 +845,7 @@ function serveSnapshotStream(
 	const subscriber: SnapshotStreamSubscriber = {
 		peer,
 		codexMeterBlockScopes: supportsCodexMeterBlockScopes(req),
+		blockAttribution: supportsBlockAttribution(req),
 		sent: new Map(),
 		lastGeneration: -1,
 		write,
@@ -837,7 +855,7 @@ function serveSnapshotStream(
 		async start(c) {
 			controller = c;
 			await source.reload();
-			const initial = source.build(subscriber.codexMeterBlockScopes);
+			const initial = source.build(subscriber.codexMeterBlockScopes, subscriber.blockAttribution);
 			subscriber.lastGeneration = initial.generation;
 			for (const entry of initial.credentials) subscriber.sent.set(entry.id, fingerprintEntry(entry));
 			const initialEvent: SnapshotStreamSnapshotEvent = { kind: "snapshot", ...initial };
@@ -1150,20 +1168,27 @@ export function startAuthBroker(opts: AuthBrokerServerOptions): AuthBrokerServer
 						providerKey: parsed.data.providerKey,
 						blockScope: parsed.data.blockScope,
 						blockedUntilMs: parsed.data.blockedUntilMs,
+						...(parsed.data.reason !== undefined ? { reason: parsed.data.reason } : {}),
+						...(parsed.data.by !== undefined ? { by: parsed.data.by } : {}),
 					};
-					if (!opts.storage.credentials.snapshot().credentials.some(entry => entry.id === id)) {
+					const entry = opts.storage.credentials.snapshot().credentials.find(candidate => candidate.id === id);
+					if (!entry) {
 						logger.info("auth-broker credential block miss", { id, peer });
 						return json(404, { error: `No credential with id=${id}` });
 					}
 					try {
 						opts.storage.blocks.upsert(block);
 						const response: CredentialBlockResponse = { ok: true };
+						// Attribution fields only: never the credential material.
 						logger.info("auth-broker credential block upserted", {
 							id,
+							accountId: entry.credential.type === "oauth" ? entry.credential.accountId : undefined,
 							peer,
 							providerKey: block.providerKey,
 							blockScope: block.blockScope,
 							blockedUntilMs: block.blockedUntilMs,
+							by: block.by,
+							reason: block.reason,
 						});
 						return json(200, response);
 					} catch (error) {
@@ -1178,13 +1203,21 @@ export function startAuthBroker(opts: AuthBrokerServerOptions): AuthBrokerServer
 					const id = Number.parseInt(blockDeleteMatch[1], 10);
 					const parsed = await parseBody(req, credentialBlockDeleteRequestSchema);
 					if (!parsed.ok) return parsed.response;
-					if (!opts.storage.credentials.snapshot().credentials.some(entry => entry.id === id)) {
+					const entry = opts.storage.credentials.snapshot().credentials.find(candidate => candidate.id === id);
+					if (!entry) {
 						return json(404, { error: `No credential with id=${id}` });
 					}
 					try {
 						opts.storage.blocks.delete(id, parsed.data.providerKey, parsed.data.blockScope);
 						const response: CredentialBlocksDeleteResponse = { ok: true };
-						logger.info("auth-broker credential block deleted", { id, peer, ...parsed.data });
+						logger.info("auth-broker credential block deleted", {
+							id,
+							accountId: entry.credential.type === "oauth" ? entry.credential.accountId : undefined,
+							peer,
+							providerKey: parsed.data.providerKey,
+							blockScope: parsed.data.blockScope,
+							by: parsed.data.by,
+						});
 						return json(200, response);
 					} catch (error) {
 						const message = error instanceof Error ? error.message : String(error);

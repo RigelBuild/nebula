@@ -36,6 +36,7 @@ import { raceSignal } from "../auth/abort";
 import { type AuthBrokerClient, AuthBrokerError, AuthBrokerStreamUnsupportedError } from "./client";
 import { compareCredentialBlockSnapshots } from "./protocol";
 import {
+	type CredentialBlockRequest,
 	type CredentialBlockSnapshot,
 	MAX_OBSERVED_LIMIT_OBSERVATIONS,
 	MAX_OBSERVED_OUTCOMES,
@@ -158,6 +159,19 @@ function toCredentialBlockSnapshot(block: StoredCredentialBlock): CredentialBloc
 		blockScope: block.blockScope,
 		blockedUntilMs: block.blockedUntilMs,
 		...(block.updatedAtMs !== undefined ? { updatedAtMs: block.updatedAtMs } : {}),
+		...(block.reason !== undefined ? { reason: block.reason } : {}),
+		...(block.by !== undefined ? { by: block.by } : {}),
+	};
+}
+
+/** POST body: the request fields only. `updatedAtMs` is server-owned and never sent. */
+function toCredentialBlockRequest(block: StoredCredentialBlock): CredentialBlockRequest {
+	return {
+		providerKey: block.providerKey,
+		blockScope: block.blockScope,
+		blockedUntilMs: block.blockedUntilMs,
+		...(block.reason !== undefined ? { reason: block.reason } : {}),
+		...(block.by !== undefined ? { by: block.by } : {}),
 	};
 }
 
@@ -855,6 +869,8 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 					blockScope: block.blockScope,
 					blockedUntilMs: block.blockedUntilMs,
 					updatedAtMs: block.updatedAtMs,
+					...(block.reason !== undefined ? { reason: block.reason } : {}),
+					...(block.by !== undefined ? { by: block.by } : {}),
 				});
 			}
 		}
@@ -875,7 +891,7 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		const pending = this.#pendingCredentialBlocks.get(key);
 		if (!pending || pending.blockedUntilMs < body.blockedUntilMs) this.#pendingCredentialBlocks.set(key, body);
 		void this.#client
-			.upsertCredentialBlock(block.credentialId, body)
+			.upsertCredentialBlock(block.credentialId, toCredentialBlockRequest(block))
 			.then(() => {
 				this.#maybeRefreshSnapshot("credential block");
 			})

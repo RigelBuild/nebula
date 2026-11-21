@@ -123,6 +123,10 @@ export interface StoredCredentialBlock {
 	blockedUntilMs: number;
 	/** Last row update timestamp in epoch milliseconds, when provided by the backing store. */
 	updatedAtMs?: number;
+	/** Operator reason for a manual block, at most 200 characters. Absent for automatic blocks. */
+	reason?: string;
+	/** Caller label that placed or cleared a manual block, at most 64 characters. */
+	by?: string;
 }
 
 /**

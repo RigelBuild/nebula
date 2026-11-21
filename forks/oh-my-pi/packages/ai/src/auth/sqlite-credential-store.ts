@@ -98,6 +98,8 @@ type CredentialBlockRow = {
 	block_scope: string;
 	blocked_until_ms: number;
 	updated_at: number;
+	reason: string | null;
+	by: string | null;
 };
 
 type SerializedCredentialRecord = {
@@ -126,7 +128,7 @@ function storesSerializedCredential(row: CredentialStateRow, serialized: Seriali
 	);
 }
 
-const AUTH_SCHEMA_VERSION = 8;
+const AUTH_SCHEMA_VERSION = 9;
 const SQLITE_NOW_EPOCH = "CAST(strftime('%s','now') AS INTEGER)";
 const LEGACY_CODEX_BLOCK_PROVIDER_KEY = "openai-codex:oauth";
 const LEGACY_CODEX_BLOCK_SCOPE = "shared";
@@ -540,7 +542,7 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 		// One statement for any number of ids: `json_each` keeps the caller's id
 		// order (`ids.key`) and the per-credential provider/scope order.
 		this.#listCredentialBlocksStmt = this.#db.prepare(
-			`SELECT b.credential_id, b.provider_key, b.block_scope, b.blocked_until_ms, b.updated_at
+			`SELECT b.credential_id, b.provider_key, b.block_scope, b.blocked_until_ms, b.updated_at, b.reason, b.by
 			FROM json_each(?) AS ids
 			JOIN auth_credential_blocks AS b ON b.credential_id = ids.value
 			WHERE b.blocked_until_ms > ?
@@ -548,11 +550,13 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 			ORDER BY ids.key ASC, b.provider_key ASC, b.block_scope ASC`,
 		);
 		this.#upsertCredentialBlockStmt = this.#db.prepare(
-			`INSERT INTO auth_credential_blocks (credential_id, provider_key, block_scope, blocked_until_ms, updated_at)
-			VALUES (?, ?, ?, ?, ${SQLITE_NOW_EPOCH})
+			`INSERT INTO auth_credential_blocks (credential_id, provider_key, block_scope, blocked_until_ms, updated_at, reason, by)
+			VALUES (?, ?, ?, ?, ${SQLITE_NOW_EPOCH}, ?, ?)
 			ON CONFLICT(credential_id, provider_key, block_scope) DO UPDATE SET
 				blocked_until_ms = MAX(blocked_until_ms, excluded.blocked_until_ms),
-				updated_at = excluded.updated_at`,
+				updated_at = excluded.updated_at,
+				reason = COALESCE(excluded.reason, reason),
+				by = COALESCE(excluded.by, by)`,
 		);
 		this.#deleteCredentialBlocksStmt = this.#db.prepare("DELETE FROM auth_credential_blocks WHERE credential_id = ?");
 		this.#deleteCredentialBlockStmt = this.#db.prepare(
@@ -859,6 +863,8 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 				block_scope TEXT NOT NULL DEFAULT '',
 				blocked_until_ms INTEGER NOT NULL,
 				updated_at INTEGER NOT NULL,
+				reason TEXT,
+				by TEXT,
 				PRIMARY KEY (credential_id, provider_key, block_scope)
 			);
 			CREATE INDEX IF NOT EXISTS idx_auth_credential_blocks_expires ON auth_credential_blocks(blocked_until_ms);
@@ -1093,6 +1099,9 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 		if (fromVersion < 8) {
 			this.#migrateAuthSchemaV7ToV8();
 		}
+		if (fromVersion < 9) {
+			this.#migrateAuthSchemaV8ToV9();
+		}
 	}
 
 	#migrateAuthSchemaV0ToV1(): void {
@@ -1302,6 +1311,17 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 			this.#writeAuthSchemaVersion(8);
 		});
 		migrate.immediate();
+	}
+
+	/** Manual block attribution: nullable columns, existing rows keep NULL. */
+	#migrateAuthSchemaV8ToV9(): void {
+		const migrate = this.#db.transaction(() => {
+			const columns = this.#db.query("PRAGMA table_info(auth_credential_blocks)").all() as Array<{ name: string }>;
+			const names = new Set(columns.map(column => column.name));
+			if (!names.has("reason")) this.#db.run("ALTER TABLE auth_credential_blocks ADD COLUMN reason TEXT");
+			if (!names.has("by")) this.#db.run("ALTER TABLE auth_credential_blocks ADD COLUMN by TEXT");
+		});
+		migrate();
 	}
 
 	#backfillCredentialIdentityKeys(): void {
@@ -1734,6 +1754,8 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 					block.providerKey,
 					blockScope,
 					block.blockedUntilMs,
+					block.reason ?? null,
+					block.by ?? null,
 				);
 			}
 		});
@@ -1810,6 +1832,8 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 			blockScope: row.block_scope,
 			blockedUntilMs: row.blocked_until_ms,
 			updatedAtMs: row.updated_at * 1000,
+			...(row.reason !== null ? { reason: row.reason } : {}),
+			...(row.by !== null ? { by: row.by } : {}),
 		}));
 	}
 

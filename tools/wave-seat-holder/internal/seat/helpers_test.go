@@ -47,6 +47,8 @@ type fakeOptions struct {
 	setOptionFails string
 	// paneDeadDisplayErr makes the #{pane_dead} display exit 1 with this stderr.
 	paneDeadDisplayErr string
+	// stalePanePID is tmux 3.4: pane_pid keeps the dead launcher's PID and has no children file.
+	stalePanePID bool
 	// deadPane is a launcher that dies before the agent is found.
 	deadPane *deadPane
 	// diesAfterAgent is a launcher that dies after the agent is found, before remain-on-exit is cleared.
@@ -155,6 +157,10 @@ func fakeFiles(fake *fakeHolder, options fakeOptions, live map[string]bool, chil
 			return append([]string(nil), options.socketNames...), nil
 		},
 		ReadText: func(string) (string, error) {
+			// tmux 3.4: a dead launcher's /proc children file is gone, so the read fails.
+			if fake.dead && options.stalePanePID {
+				return "", fs.ErrNotExist
+			}
 			child := (*children)[0]
 			if len(*children) > 1 {
 				child = (*children)[0]
@@ -259,7 +265,7 @@ func (f *fakeHolder) displayReply(options fakeOptions, args []string) CommandRes
 		}
 		return CommandResult{Stdout: "|\n"}
 	default:
-		if f.dead {
+		if f.dead && !options.stalePanePID {
 			return CommandResult{Stdout: "\n"}
 		}
 		pid := options.panePID

@@ -38,6 +38,12 @@ func Keep(ctx context.Context, spawn Spawn, tmux, socketPath string) error {
 	return setRemainOnExit(ctx, spawn, tmux, socketPath, "on")
 }
 
+// IsDead reports whether tmux says the seat pane has exited. It reads #{pane_dead} alone, so it is
+// correct even when #{pane_pid} still names the dead launcher.
+func IsDead(ctx context.Context, spawn Spawn, tmux, socketPath string) (bool, error) {
+	return paneDead(ctx, spawn, tmux, socketPath)
+}
+
 // Clear turns remain-on-exit off so a healthy agent's exit still closes the session.
 // A pane that died first is returned as an error carrying the dead-pane report,
 // not treated as healthy. It returns nil when the pane is alive.

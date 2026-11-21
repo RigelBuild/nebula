@@ -55,7 +55,7 @@ func TestGHSourceUsesExactBookmarkMatchesAcrossRepos(t *testing.T) {
 
 func TestGHSourceIssuePRsFiltersBookmarksAndTrailers(t *testing.T) {
 	runner := &fakeGH{responses: map[string]string{
-		"api --paginate --slurp repos/owner/repo/pulls?state=all&per_page=100": `[[{"number":10,"title":"Ex-42 note","body":"Refs EX-42","head":{"ref":"agents/ex-42-work"}},{"number":11,"title":"Unrelated","body":"Refs EX-420","head":{"ref":"agents/ex-420-work"}}],[{"number":12,"title":"No marker","body":"Refs EX-42","head":{"ref":"agents/other"}}]]`,
+		"api --paginate --slurp repos/owner/repo/pulls?state=all&per_page=100": `[[{"number":10,"title":"Ex-42 note","body":"Refs EX-42","head":{"ref":"agents/ex-42-work"}},{"number":11,"title":"Unrelated","body":"Refs EX-420","head":{"ref":"agents/ex-420-work"}},{"number":13,"title":"Other prefix","body":"Refs OTHER-42","head":{"ref":"agents/other-42-work"}}],[{"number":12,"title":"No marker","body":"Refs EX-42","head":{"ref":"agents/other"}}]]`,
 	}}
 	source := NewGHSource(runner, []string{"owner/repo"}, "EX", nil)
 	prs, err := source.IssuePRs(t.Context(), "EX-42")
@@ -177,7 +177,6 @@ func TestGHSourceFirstPushCIPassUsesFirstCommitEarliestRun(t *testing.T) {
 		})
 	}
 }
-
 func TestGHSourceRevertedMatchesOriginalMergeSHA(t *testing.T) {
 	mergedAt := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
 	runner := &fakeGH{responses: map[string]string{
@@ -249,6 +248,59 @@ func TestGHSourcePRsForBookmarkRejectsInvalidValuesWithoutLeaking(t *testing.T) 
 			t.Fatalf("PRsForBookmark() = %v, %v, calls = %v; want invalid-bookmark rejection", refs, err, runner.calls)
 		}
 	}
+}
+
+func TestOutcomesIgnoresIssueRowsOutsidePrefix(t *testing.T) {
+	inPrefix, outside := "EX-1", "OTHER-1"
+	rows := []Row{
+		{Issue: &inPrefix, Kind: "message", RowKey: "in"},
+		{Issue: &outside, Kind: "message", RowKey: "out"},
+	}
+	source := &issueRecordingSource{}
+	outcomes, err := Outcomes(t.Context(), rows, PriceTable{}, source, "EX")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(outcomes) != 1 || outcomes[0].Issue.ID != inPrefix {
+		t.Fatalf("Outcomes() = %+v, want exactly one outcome for %s", outcomes, inPrefix)
+	}
+	if want := []string{inPrefix}; !reflect.DeepEqual(source.issueIDs, want) {
+		t.Fatalf("IssuePRs() called for %v, want %v; an out-of-prefix key must not reach the source", source.issueIDs, want)
+	}
+}
+
+// issueRecordingSource records every IssuePRs id and reports no pull requests.
+type issueRecordingSource struct {
+	issueIDs []string
+}
+
+func (source *issueRecordingSource) PR(context.Context, string) (PRState, error) {
+	return PRState{}, nil
+}
+
+func (*issueRecordingSource) PRsForBookmark(context.Context, string) ([]string, error) {
+	return []string{}, nil
+}
+
+func (source *issueRecordingSource) IssuePRs(_ context.Context, id string) ([]string, error) {
+	source.issueIDs = append(source.issueIDs, id)
+	return []string{}, nil
+}
+
+func (*issueRecordingSource) FirstPushCIPass(context.Context, string) (*bool, error) {
+	return nil, errNoCIRuns
+}
+
+func (*issueRecordingSource) Reverted(context.Context, string, string, time.Time) (bool, error) {
+	return false, nil
+}
+
+func (*issueRecordingSource) ReviewPR(context.Context, string) (string, error) {
+	return "", nil
+}
+
+func (*issueRecordingSource) Issue(_ context.Context, id string) (IssueState, error) {
+	return IssueState{ID: id}, nil
 }
 
 func TestOutcomesCachesBookmarkPullRequestsAcrossIssueAndReviewRows(t *testing.T) {

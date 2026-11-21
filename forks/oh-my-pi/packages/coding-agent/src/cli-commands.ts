@@ -415,10 +415,25 @@ function leadingSubcommandIndex(argv: string[]): number {
 	return -1;
 }
 
+/**
+ * Launch-global flags a non-launch subcommand declares itself. A leading copy
+ * is kept, not stripped, so the subcommand's own parser reads it.
+ */
+const SUBCOMMAND_OWN_GLOBAL_FLAGS: Readonly<Partial<Record<string, readonly string[]>>> = {
+	config: ["--config"],
+	models: ["--config"],
+	"dry-balance": ["--config"],
+};
+
+/** The flag name of `arg`, without an inline `=value`. */
+function flagName(arg: string): string {
+	const eq = arg.indexOf("=");
+	return arg.startsWith("--") && eq !== -1 ? arg.slice(0, eq) : arg;
+}
+
 /** Whether `arg` names a flag from the launch surface (bare or `--flag=value`). */
 function isLaunchGlobalFlag(arg: string): boolean {
-	const eq = arg.indexOf("=");
-	const name = arg.startsWith("--") && eq !== -1 ? arg.slice(0, eq) : arg;
+	const name = flagName(arg);
 	return (
 		STRING_VALUE_FLAGS.has(name) ||
 		OPTIONAL_VALUE_FLAGS.has(name) ||
@@ -433,17 +448,24 @@ function isLaunchGlobalFlag(arg: string): boolean {
  * belong to the launch surface and mean nothing to a subcommand like `update`,
  * whose strict parser would otherwise reject them with a cryptic
  * `node:util.parseArgs` error (#8891). Tokens the launch tables don't recognize
- * are kept, so a subcommand's own leading flags still reach it.
+ * are kept, so a subcommand's own leading flags still reach it. Flags listed in
+ * `SUBCOMMAND_OWN_GLOBAL_FLAGS` for this subcommand are kept with their value.
  */
-function stripLaunchGlobalFlags(leading: readonly string[]): string[] {
+function stripLaunchGlobalFlags(sub: string, leading: readonly string[]): string[] {
+	const own = SUBCOMMAND_OWN_GLOBAL_FLAGS[sub] ?? [];
 	const kept: string[] = [];
 	for (let index = 0; index < leading.length; index += 1) {
 		const arg = leading[index];
-		if (isLaunchGlobalFlag(arg)) {
-			if (flagConsumesValue(arg, leading[index + 1])) index += 1;
+		if (!isLaunchGlobalFlag(arg)) {
+			kept.push(arg);
 			continue;
 		}
-		kept.push(arg);
+		const consumesNext = flagConsumesValue(arg, leading[index + 1]);
+		if (own.includes(flagName(arg))) {
+			kept.push(arg);
+			if (consumesNext) kept.push(leading[index + 1]);
+		}
+		if (consumesNext) index += 1;
 	}
 	return kept;
 }
@@ -476,7 +498,7 @@ export function resolveCliArgv(argv: string[]): ResolvedCliArgv {
 		const sub = argv[subIndex];
 		const leading = argv.slice(0, subIndex);
 		const trailing = argv.slice(subIndex + 1);
-		const forwardedLeading = LAUNCH_FLAG_COMMANDS[sub] === true ? leading : stripLaunchGlobalFlags(leading);
+		const forwardedLeading = LAUNCH_FLAG_COMMANDS[sub] === true ? leading : stripLaunchGlobalFlags(sub, leading);
 		return { argv: [sub, ...forwardedLeading, ...trailing] };
 	}
 	return { argv: ["launch", ...argv] };

@@ -92,3 +92,33 @@ describe("resolveCliArgv strips launch-global flags before non-launch subcommand
 		expect(resolveCliArgv(["--cwd", "/x", "acp"])).toEqual({ argv: ["acp", "--cwd", "/x"] });
 	});
 });
+
+describe("resolveCliArgv keeps --config for subcommands that declare it", () => {
+	test("`--config <file> config list` keeps the overlay with config", () => {
+		expect(resolveCliArgv(["--config", "/x.yml", "config", "list"])).toEqual({
+			argv: ["config", "--config", "/x.yml", "list"],
+		});
+	});
+
+	test("`--config=<file> config list` keeps the inline overlay with config", () => {
+		expect(resolveCliArgv(["--config=/x.yml", "config", "list"])).toEqual({
+			argv: ["config", "--config=/x.yml", "list"],
+		});
+	});
+
+	test("`--config <file> models` keeps the overlay with models", () => {
+		expect(resolveCliArgv(["--config", "/x.yml", "models"])).toEqual({
+			argv: ["models", "--config", "/x.yml"],
+		});
+	});
+
+	test("`--config <file> dry-balance` keeps the overlay with dry-balance", () => {
+		expect(resolveCliArgv(["--config", "/x.yml", "dry-balance"])).toEqual({
+			argv: ["dry-balance", "--config", "/x.yml"],
+		});
+	});
+
+	test("`--config <file> update` still strips the overlay", () => {
+		expect(resolveCliArgv(["--config", "/x.yml", "update"])).toEqual({ argv: ["update"] });
+	});
+});

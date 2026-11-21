@@ -30,6 +30,8 @@ export interface ConfigCommandArgs {
 		json?: boolean;
 		/** `list` shows only the keys this layer sets, with the values as written. */
 		scope?: ConfigScope;
+		/** Extra `config.yml` overlays to apply for this run, as `--config` does for the launch surface. */
+		config?: string[];
 	};
 }
 // =============================================================================
@@ -170,7 +172,7 @@ export async function runConfigCommand(cmd: ConfigCommandArgs): Promise<void> {
 		console.error(chalk.red("--scope applies to `config list` only"));
 		process.exit(1);
 	}
-	await Settings.init();
+	await Settings.init({ configFiles: cmd.flags.config });
 
 	switch (cmd.action) {
 		case "list":

@@ -182,10 +182,63 @@ function createBrokerClient(brokerConfig: AuthBrokerClientConfig): AuthBrokerCli
 	return new AuthBrokerClient({ url: brokerConfig.url, token: brokerConfig.token });
 }
 
-async function fetchBrokerSnapshot(client: AuthBrokerClient): Promise<SnapshotResponse> {
-	const result = await client.fetchSnapshot();
-	if (result.status !== 200) throw new Error("Auth broker returned no initial snapshot");
-	return result.snapshot;
+/** Initial snapshot retry: the gateway and broker share a pod and race the broker's bind. */
+const SNAPSHOT_RETRY_DEADLINE_MS = 30_000;
+const SNAPSHOT_RETRY_INITIAL_DELAY_MS = 250;
+const SNAPSHOT_RETRY_MAX_DELAY_MS = 4_000;
+const SNAPSHOT_CAUSE_MAX_DEPTH = 8;
+const BROKER_NOT_LISTENING_CODES: Record<string, true> = {
+	ECONNREFUSED: true,
+	ECONNRESET: true,
+};
+const REALTIME_CLOCK = { now: () => Date.now(), sleep: (ms: number) => Bun.sleep(ms) };
+
+/** True when the socket error, or one of its `cause`s, says nothing is listening yet (refused or reset). */
+function isBrokerNotListening(error: unknown): boolean {
+	let current: unknown = error;
+	for (let depth = 0; depth < SNAPSHOT_CAUSE_MAX_DEPTH && typeof current === "object" && current !== null; depth++) {
+		if (
+			"code" in current &&
+			typeof current.code === "string" &&
+			Object.hasOwn(BROKER_NOT_LISTENING_CODES, current.code)
+		) {
+			return true;
+		}
+		if (!("cause" in current)) return false;
+		current = current.cause;
+	}
+	return false;
+}
+
+/**
+ * Initial snapshot fetch. Retries connection refused or reset with capped
+ * exponential backoff until the deadline, then throws the last error. Any
+ * other error, including a non-200 broker response, fails at once.
+ * `clock` is injectable so tests run without real waits.
+ */
+export async function fetchBrokerSnapshot(
+	client: AuthBrokerClient,
+	clock: { now(): number; sleep(ms: number): Promise<void> } = REALTIME_CLOCK,
+): Promise<SnapshotResponse> {
+	const deadline = clock.now() + SNAPSHOT_RETRY_DEADLINE_MS;
+	let delayMs = SNAPSHOT_RETRY_INITIAL_DELAY_MS;
+	for (;;) {
+		try {
+			const result = await client.fetchSnapshot();
+			if (result.status !== 200) throw new Error("Auth broker returned no initial snapshot");
+			return result.snapshot;
+		} catch (error) {
+			const remainingMs = deadline - clock.now();
+			if (remainingMs <= 0 || !isBrokerNotListening(error)) throw error;
+			const waitMs = Math.min(delayMs, remainingMs);
+			logger.warn("auth-gateway broker not listening; retrying initial snapshot", {
+				waitMs,
+				error: error instanceof Error ? error.message : String(error),
+			});
+			await clock.sleep(waitMs);
+			delayMs = Math.min(delayMs * 2, SNAPSHOT_RETRY_MAX_DELAY_MS);
+		}
+	}
 }
 
 /**

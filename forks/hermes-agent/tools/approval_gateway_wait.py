@@ -25,7 +25,7 @@ logger = logging.getLogger("tools.approval")
 class _ApprovalEntry:
     """One pending dangerous-command approval inside a gateway session."""
     __slots__ = ("acknowledged", "authority", "cancelled", "card_deny_only", "data", "event", "expired", "observers",
-                 "reason", "result", "settle", "settle_choice", "undelivered")
+                 "reason", "result", "settle", "settle_choice", "undelivered", "shown")
 
     def __init__(self, data: dict):
         self.event = threading.Event()
@@ -54,6 +54,8 @@ class _ApprovalEntry:
         # Why no surface ever showed the prompt (every delivery path failed, e.g. ``send_path_degraded``).
         # Set only when the card and its text fallback both failed; a withdrawal then names it.
         self.undelivered: str | None = None
+        # A reconnect repost showed the card: the prompt reached Matt, so no later delivery failure may mark it.
+        self.shown = False
 
 
 def _same_answerers(leader: dict, follower: dict) -> bool:

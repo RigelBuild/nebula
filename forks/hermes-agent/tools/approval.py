@@ -245,10 +245,11 @@ def resolve_gateway_approval_card(session_key: str, choice: str, request_id: Opt
 
 def mark_gateway_approval_undelivered(session_key: str, request_id: str, reason: str) -> bool:
     """Record that no surface showed pending approval *request_id* (its card and text fallback both failed).
-    A later /stop then withdraws it as never shown, not as a refusal. False when it is no longer pending."""
+    A later /stop then withdraws it as never shown, not as a refusal. False when it is no longer pending, or a
+    reconnect repost already showed it (then it was shown, not undelivered)."""
     with _lock:
         entry = next((e for e in _gateway_queues.get(session_key, []) if e.data.get("request_id") == request_id), None)
-        if entry is None:
+        if entry is None or entry.shown:
             return False
         entry.undelivered = reason
     return True
@@ -256,12 +257,14 @@ def mark_gateway_approval_undelivered(session_key: str, request_id: str, reason:
 
 def clear_gateway_approval_undelivered(session_key: str, request_id: str) -> bool:
     """Record that a reconnect repost showed pending approval *request_id* after all, so it is no longer undelivered.
-    A later /stop then names the withdrawal, not a failed delivery. False when it is no longer pending."""
+    A later /stop then names the withdrawal, not a failed delivery. Also marks it shown, so a late fallback
+    failure cannot mark it again. False when it is no longer pending."""
     with _lock:
         entry = next((e for e in _gateway_queues.get(session_key, []) if e.data.get("request_id") == request_id), None)
         if entry is None:
             return False
         entry.undelivered = None
+        entry.shown = True
     return True
 
 

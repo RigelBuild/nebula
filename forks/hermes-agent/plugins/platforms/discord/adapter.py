@@ -5987,12 +5987,9 @@ class DiscordAdapter(DiscordAuthorizationMixin, DiscordMediaMixin, DiscordThread
         task.add_done_callback(self._background_tasks.discard)
         task.add_done_callback(_consume_background_task_result)
         text_failure = await self._send_exec_approval_text_fallback(prompt)
-        current = self._exec_approval_views.get(view.request_id, view)
-        if (text_failure is not None and getattr(current, "undelivered", False)
-                and result.error != _CARD_CONFIRM_TIMEOUT_ERROR):
-            # Card and text fallback both failed: no surface shows the prompt, so a /stop must say so. The request's
-            # registered view decides, not this card's: a failed repost registers a replacement, and a repost that
-            # showed the card registers one that is not undelivered. This card's flag is stale once either exists.
+        if text_failure is not None and result.error != _CARD_CONFIRM_TIMEOUT_ERROR:
+            # Card and text fallback both failed: no surface shows the prompt, so a /stop must say so. A reconnect
+            # repost that already showed the card wins: its request is not marked, even if this fallback fails later.
             from tools.approval import mark_gateway_approval_undelivered
             mark_gateway_approval_undelivered(prompt.session_key, view.request_id, f"{result.error}, then {text_failure}")
         return SendResult(success=False, error=result.error, raw_response={"approval_text_fallback_posted": True})
@@ -6044,12 +6041,18 @@ class DiscordAdapter(DiscordAuthorizationMixin, DiscordMediaMixin, DiscordThread
             if request_id not in pending:
                 continue
             view.stop()
+            loop_view = view
             for attempt, delay in enumerate(self._EXEC_APPROVAL_REPOST_BACKOFF):
                 await asyncio.sleep(delay)
                 if request_id not in {a.get("request_id") for a in list_gateway_approval_authority(prompt.session_key)}:
                     break
+                # A later reconnect repost registered its own live view: this loop no longer owns the request.
+                # A finished or dropped view is not an owner, so an unrelated card's registration cannot stop a repost.
+                current = self._exec_approval_views.get(request_id)
+                if current is not None and current is not loop_view and not current.is_finished():
+                    break
                 replacement = self._new_exec_approval_view(prompt)
-                replacement.undelivered = True
+                loop_view = replacement
                 replacement.undelivered_withdrawal = getattr(view, "undelivered_withdrawal", None)
                 try:
                     result = await asyncio.wait_for(self._send_exec_approval_card(prompt, replacement), window)
@@ -6059,6 +6062,7 @@ class DiscordAdapter(DiscordAuthorizationMixin, DiscordMediaMixin, DiscordThread
                     logger.warning("[%s] approval card re-post %d not confirmed in time: request_id=%s",
                                    self.name, attempt + 1, request_id)
                     replacement.undelivered = False
+                    clear_gateway_approval_undelivered(prompt.session_key, request_id)
                     break
                 if result.success:
                     # The card is delivered now: it, not the text prompt's deadline, ends the wait.
@@ -6069,7 +6073,8 @@ class DiscordAdapter(DiscordAuthorizationMixin, DiscordMediaMixin, DiscordThread
                     replacement.undelivered = False
                     clear_gateway_approval_undelivered(prompt.session_key, request_id)
                     break
-                # The replacement stays undelivered until a repost shows the card; a later reconnect retries it.
+                replacement.undelivered = True
+                # The replacement is the registered view now: keep it retryable on a later reconnect.
                 logger.warning("[%s] approval card re-post %d failed: request_id=%s: %s",
                                self.name, attempt + 1, request_id, result.error)
 

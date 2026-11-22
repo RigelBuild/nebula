@@ -16,10 +16,10 @@ if [ -n "$RJC_TEST_NODE_PATH" ]; then command -v node > "$RJC_TEST_NODE_PATH"; f
 
 func TestSSHHookRunnerBuildsRunnerWhenHostLacksIt(t *testing.T) {
 	skipUnlessLinux(t)
-	for _, tc := range []struct{ name, config, tool string }{
-		{name: "lefthook", config: "lefthook.yml", tool: "lefthook"},
-		{name: "pre-commit", config: ".pre-commit-config.yaml", tool: "pre-commit"},
-		{name: "prek", config: "prek.toml", tool: "prek"},
+	for _, tc := range []struct{ name, config, body, tool string }{
+		{name: "lefthook", config: "lefthook.yml", body: "committed\n", tool: "lefthook"},
+		{name: "pre-commit", config: ".pre-commit-config.yaml", body: "repos: []\n", tool: "pre-commit"},
+		{name: "prek", config: "prek.toml", body: "repos = []\n", tool: "prek"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f, runner := sshGateFixture(t)
@@ -40,7 +40,7 @@ func TestSSHHookRunnerBuildsRunnerWhenHostLacksIt(t *testing.T) {
 			if wantsNode {
 				t.Setenv("RJC_TEST_NODE_PATH", nodePathFile)
 			}
-			f.commit(t, tc.config)
+			f.commitFile(t, tc.config, tc.body)
 			base, head := sshRange(t, f)
 			var output bytes.Buffer
 			out, _, err := runner.Run(f.ctx, base, head, nil, &output)
@@ -114,7 +114,7 @@ func TestSSHHookRunnerUsesPinnedNodeOnlyWhenNodeOrNpmMissing(t *testing.T) {
 			t.Setenv("RJC_TEST_NIX_STORE", store)
 			nodePathFile := filepath.Join(t.TempDir(), "node-path")
 			t.Setenv("RJC_TEST_NODE_PATH", nodePathFile)
-			f.commit(t, ".pre-commit-config.yaml")
+			f.commitFile(t, ".pre-commit-config.yaml", "repos: []\n")
 			base, head := sshRange(t, f)
 			var output bytes.Buffer
 			out, _, err := runner.Run(f.ctx, base, head, nil, &output)
@@ -160,7 +160,7 @@ func TestSSHHookRunnerContinuesWhenPinnedNodeBuildFails(t *testing.T) {
 	t.Setenv("RJC_TEST_NODE_PATH", nodePathFile)
 	t.Setenv("RJC_TEST_NIX_BUILD_FAIL_PACKAGE", "nodejs_24")
 	t.Setenv("RJC_TEST_NIX_STORE", t.TempDir())
-	f.commit(t, ".pre-commit-config.yaml")
+	f.commitFile(t, ".pre-commit-config.yaml", "repos: []\n")
 	base, head := sshRange(t, f)
 	var output bytes.Buffer
 	out, _, err := runner.Run(f.ctx, base, head, nil, &output)

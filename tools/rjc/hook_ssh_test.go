@@ -24,6 +24,7 @@ import (
 // A hook transfer frames the bundle as "<size>\n<bytes>" and keeps stdin open; the fake reads the frame, then re-sends it
 // and passes the rest of stdin through, so the remote guard still sees EOF when the client ends. For the hk run pre-push
 // call it copies the bundle to RJC_TEST_SSH_PAYLOAD and, once, exits 75 when RJC_TEST_SSH_STALE_MARK is set.
+// The remote stderr still goes to stderr, and is also appended to RJC_TEST_SSH_STDERR when that is set.
 const fakeSSH = `#!/bin/sh
 if [ -n "$RJC_TEST_SSH_ARGS" ]; then printf '%s\0' "$@" > "$RJC_TEST_SSH_ARGS"; fi
 while [ "$#" -gt 0 ]; do
@@ -58,8 +59,14 @@ if [ -n "$n" ]; then
   feed=$!
   in=$fifo
 fi
+err=$(mktemp)
+exec 4>&2 2>"$err"
 sh -c "$*" < "$in" 3<&-
 rc=$?
+exec 2>&4 4>&-
+cat "$err" >&2
+if [ -n "$RJC_TEST_SSH_STDERR" ]; then cat "$err" >> "$RJC_TEST_SSH_STDERR"; fi
+rm -f "$err"
 if [ -n "$n" ]; then kill "$feed" 2>/dev/null; rm -f "$fifo"; fi
 rm -f "$buf"
 exit $rc
@@ -127,6 +134,17 @@ func sshGateFixture(t *testing.T) (*fixture, sshHookRunner) {
 	writeTestFile(t, filepath.Join(f.repo.root, "devenv.nix"), "{}\n")
 	t.Setenv("RJC_TEST_NIX_LOG", filepath.Join(t.TempDir(), "nix-log"))
 	t.Setenv("RJC_TEST_SSH_ARGS", filepath.Join(t.TempDir(), "ssh-args"))
+	sshStderr := filepath.Join(t.TempDir(), "ssh-stderr")
+	t.Setenv("RJC_TEST_SSH_STDERR", sshStderr)
+	t.Cleanup(func() {
+		if !t.Failed() {
+			return
+		}
+		data, err := os.ReadFile(sshStderr)
+		if err == nil && len(data) > 0 {
+			t.Logf("remote ssh stderr:\n%s", data)
+		}
+	})
 	return f, sshHookRunner{repo: f.repo, host: "gate@fixture.invalid"}
 }
 
@@ -143,7 +161,7 @@ func hostPathWithout(t *testing.T, tool string) string {
 	skipUnlessLinux(t)
 	t.Helper()
 	dir := t.TempDir()
-	for _, name := range []string{"sh", "env", "git", "mktemp", "mkfifo", "flock", "find", "touch", "timeout", "tail", "true", "seq", "rm", "mkdir", "cat", "cp", "chmod", "mv", "dirname", "tar", "gzip", "sed", "paste", "tr", "df", "nproc", "uname", "jj", "setsid", "ps", "awk", "head", "wc", "kill", "sleep"} {
+	for _, name := range []string{"sh", "env", "git", "mktemp", "mkfifo", "flock", "find", "touch", "timeout", "tail", "true", "seq", "rm", "mkdir", "cat", "cp", "chmod", "mv", "dirname", "tar", "gzip", "sed", "paste", "tr", "df", "nproc", "uname", "jj", "setsid", "ps", "awk", "head", "wc", "kill", "sleep", "cut", "date"} {
 		path, err := exec.LookPath(name)
 		if err != nil {
 			t.Fatalf("host PATH needs %s, which is not on the ambient PATH: %v", name, err)
@@ -1152,10 +1170,10 @@ func TestSSHHookRunnerUsesHostHKWithoutBuilding(t *testing.T) {
 // TestSSHHookRunnerFallbackIncludesConfiguredTool checks the builtin shell package set and configured host runner.
 func TestSSHHookRunnerFallbackIncludesConfiguredTool(t *testing.T) {
 	skipUnlessLinux(t)
-	for _, tc := range []struct{ name, config, tool string }{
-		{name: "lefthook", config: "lefthook.yml", tool: "lefthook"},
-		{name: "pre-commit", config: ".pre-commit-config.yaml", tool: "pre-commit"},
-		{name: "prek", config: "prek.toml", tool: "prek"},
+	for _, tc := range []struct{ name, config, body, tool string }{
+		{name: "lefthook", config: "lefthook.yml", body: "committed\n", tool: "lefthook"},
+		{name: "pre-commit", config: ".pre-commit-config.yaml", body: "repos: []\n", tool: "pre-commit"},
+		{name: "prek", config: "prek.toml", body: "repos = []\n", tool: "prek"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f, runner := sshGateFixture(t)
@@ -1171,7 +1189,7 @@ func TestSSHHookRunnerFallbackIncludesConfiguredTool(t *testing.T) {
 			}
 			f.repo.env = append(f.repo.env, "PATH="+path)
 			writeFakeTool(t, filepath.Join(os.Getenv("HOME"), "bin", tc.tool), fakeHK)
-			f.commit(t, tc.config)
+			f.commitFile(t, tc.config, tc.body)
 			base, head := sshRange(t, f)
 			var output bytes.Buffer
 			out, _, err := runner.Run(f.ctx, base, head, nil, &output)

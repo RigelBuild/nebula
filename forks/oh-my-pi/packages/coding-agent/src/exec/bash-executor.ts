@@ -105,6 +105,8 @@ export interface BashExecutorOptions {
 	/** Artifact path/id for full output storage */
 	artifactPath?: string;
 	artifactId?: string;
+	/** Redacts the whole spill file once closed; see OutputSinkOptions.redactArtifactText. */
+	redactArtifactText?: (text: string) => Promise<string>;
 	/**
 	 * Invoked when the native minimizer rewrote the command's output, giving
 	 * the caller a chance to persist the lossless original capture (typically
@@ -782,6 +784,7 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 				: undefined,
 		artifactPath: options?.artifactPath,
 		artifactId: options?.artifactId,
+		redactArtifactText: options?.redactArtifactText,
 		headBytes: resolveOutputSinkHeadBytes(settings),
 		artifactMaxBytes: resolveOutputSinkArtifactMaxBytes(settings),
 		maxColumns: resolveOutputMaxColumns(settings),

@@ -1279,6 +1279,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 						}).shellFilesystem(),
 						artifactPath,
 						artifactId,
+						redactArtifactText: this.session.redactArtifactText?.bind(this.session),
 						onChunk: chunk => outputTap.append(chunk),
 						onPreview: text => {
 							void report(text, { output: text, async: { state: "running", jobId, type: "bash" } });
@@ -2048,6 +2049,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 					env: backendPreflight?.env,
 					artifactPath,
 					artifactId,
+					redactArtifactText: this.session.redactArtifactText?.bind(this.session),
 				})
 			: // executeBash runs its OWN direnv preflight internally — pass the RAW
 				// command here so the unset prefix is not applied twice.
@@ -2072,6 +2074,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 					}).shellFilesystem(),
 					artifactPath,
 					artifactId,
+					redactArtifactText: this.session.redactArtifactText?.bind(this.session),
 					// Stream the sink's own inline view rather than re-buffering chunks.
 					onPreview: emitFrame
 						? text => {

@@ -32,11 +32,18 @@ declare module "@oh-my-pi/pi-agent-core" {
 		/** Set while the session runs the Spotlight experiment: the tool wrapper passes the final result of each of
 		 *  the agent's own calls (`toolCall` lists it under the tool's name) through it. */
 		spotlightShape?: CalledToolShaper;
+		/**
+		 * Redacts text before it is written to a full-output artifact, through the session's `artifact_text`
+		 * extension handlers. Rejects when a handler throws or times out, so the caller withholds the artifact.
+		 * Absent when the embedder has no extension runner.
+		 */
+		redactArtifactText?(text: string): Promise<string>;
 	}
 }
 
 /** What every tool context of a session starts from: the custom-tool context and the session-wide hooks. */
-export type ToolBaseContext = CustomToolContext & Pick<AgentToolContext, "spotlightShape">;
+export type ToolBaseContext = CustomToolContext &
+	Pick<AgentToolContext, "spotlightShape" | "redactArtifactText">;
 
 export class ToolContextStore {
 	#uiContext: ExtensionUIContext | undefined;

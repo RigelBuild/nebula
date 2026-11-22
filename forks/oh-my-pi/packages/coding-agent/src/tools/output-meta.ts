@@ -626,16 +626,31 @@ async function spillLargeResultToArtifact(
 	// `enforceInlineByteCap`: always truncate past the threshold, and only
 	// attach the `artifact://` recovery link when the save actually succeeded.
 	let artifactId: string | undefined;
+	// Fail closed: a redactor that throws or times out withholds the saved output, so the raw text is never
+	// written and the inline view is withheld with it.
+	let redactionFailed = false;
 	// A failed stream capture only left a preview here. Saving that preview
 	// would invent a misleading full-output recovery link, not recover the log.
 	if (!existingMeta?.artifactError) {
+		let savedText: string | undefined;
 		try {
-			artifactId = await sessionManager.saveArtifact(fullText, toolName);
+			savedText = (await context?.redactArtifactText?.(fullText)) ?? fullText;
 		} catch (error) {
-			logger.warn("Failed to spill large tool result to artifact", {
+			redactionFailed = true;
+			logger.warn("Withheld large tool result: artifact redaction failed", {
 				tool: toolName,
 				error: error instanceof Error ? error.message : String(error),
 			});
+		}
+		if (savedText !== undefined) {
+			try {
+				artifactId = await sessionManager.saveArtifact(savedText, toolName);
+			} catch (error) {
+				logger.warn("Failed to spill large tool result to artifact", {
+					tool: toolName,
+					error: error instanceof Error ? error.message : String(error),
+				});
+			}
 		}
 	}
 
@@ -660,7 +675,7 @@ async function spillLargeResultToArtifact(
 			newContent.push(block);
 		}
 	}
-	newContent.push({ type: "text", text: truncated.content });
+	if (!redactionFailed) newContent.push({ type: "text", text: truncated.content });
 
 	// Build truncation meta
 	const outputLines = truncated.outputLines ?? truncated.totalLines;
@@ -710,7 +725,12 @@ async function spillLargeResultToArtifact(
 		};
 	}
 
-	const newMeta: OutputMeta = { ...existingMeta, truncation: truncationMeta };
+	// A withheld spill keeps no truncation: its inline view is gone, so no line range would describe it.
+	const newMeta: OutputMeta = {
+		...existingMeta,
+		truncation: redactionFailed ? undefined : truncationMeta,
+		artifactError: redactionFailed ? "redact" : existingMeta?.artifactError,
+	};
 	const newDetails = { ...result.details, meta: newMeta };
 
 	// Prune the raw payload only MCP results duplicate into `details.rawContent`.

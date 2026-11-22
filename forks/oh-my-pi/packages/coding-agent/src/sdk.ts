@@ -4449,6 +4449,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			localProtocolOptions,
 			autoApprove: options.autoApprove ?? false,
 			spotlightShape,
+			redactArtifactText: text => session?.extensionRunner?.redactArtifactText(text) ?? Promise.resolve(text),
 		});
 		const toolContextStore = new ToolContextStore(getSessionContext, trackUserWait);
 		toolSession.getToolContext = () => toolContextStore.getContext();

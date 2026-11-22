@@ -105,6 +105,16 @@
           localPkgs = localPackagesFor system;
         in
         packageBinFor pkgs { inherit (localPkgs) bun; };
+      packageReleaseFor =
+        system: omp:
+        let
+          pkgs = pkgsFor system;
+          localPkgs = localPackagesFor system;
+        in
+        pkgs.callPackage ./nix/release-bin.nix {
+          inherit omp;
+          inherit (localPkgs) bun;
+        };
     in
     {
       lib.ompBinFor = packageBinFor;
@@ -114,9 +124,10 @@
         let
           omp = packageFor system;
           omp-bin = packageBinForSystem system;
+          omp-release = packageReleaseFor system (omp.override { withAddonRunpath = false; });
         in
         {
-          inherit omp omp-bin;
+          inherit omp omp-bin omp-release;
           default = omp;
         }
       );

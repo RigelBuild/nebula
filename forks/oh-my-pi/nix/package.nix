@@ -35,6 +35,9 @@
   # Release builds use fat LTO with one codegen unit, which is slow. Set this
   # to false for faster local builds with thin LTO and 16 codegen units.
   withFatLto ? true,
+  # Keep the embedded addon's Nix RUNPATH (pulseaudio, alsa, pipewire) for the
+  # nix package. omp-release sets this false and strips the RUNPATH instead.
+  withAddonRunpath ? true,
 }:
 let
   packageJson = lib.importJSON ../packages/coding-agent/package.json;
@@ -134,6 +137,7 @@ stdenv.mkDerivation {
       # The loader extracts this archived addon at runtime, so fix its
       # interpreter-independent Nix RPATH before Bun embeds it.
       autoPatchelf -- "packages/natives/native/${platform.addon}"
+      ${lib.optionalString withAddonRunpath ''
       # pi-voice dlopens libpulse-simple.so.0 / libpulse.so.0 / libasound.so.2,
       # and Wayland capture libpipewire-0.3.so.0, by bare name; glibc resolves
       # those through the calling object's RUNPATH, so append the client
@@ -149,6 +153,12 @@ stdenv.mkDerivation {
         )
       }" \
         "packages/natives/native/${platform.addon}"
+      ''}
+      ${lib.optionalString (!withAddonRunpath) ''
+        # Release addon: no RUNPATH. libgcc_s.so.1 and the bare-name pulse, alsa
+        # and pipewire dlopens resolve through the host loader path.
+        patchelf --remove-rpath "packages/natives/native/${platform.addon}"
+      ''}
     ''}
     ${lib.optionalString stdenv.hostPlatform.isDarwin ''
       # The darwin stdenv links C code against darwin.libiconv, whose install

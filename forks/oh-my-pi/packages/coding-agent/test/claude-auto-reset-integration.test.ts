@@ -25,7 +25,7 @@ import {
 	createCodexAutoRedeemCoordinator,
 } from "@oh-my-pi/pi-coding-agent/session/codex-auto-reset";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { __resetDirsFromEnvForTests, setAgentDir, TempDir } from "@oh-my-pi/pi-utils";
+import { __resetDirsFromEnvForTests, logger, setAgentDir, TempDir } from "@oh-my-pi/pi-utils";
 import { mockSchedulerWaitWithClock } from "./helpers/mock-scheduler-clock";
 
 import {
@@ -182,7 +182,7 @@ describe("Claude saved-reset trigger integration", () => {
 		useStoredCredentials?: boolean;
 		keepCredits?: number;
 		/** Answers the auto-redeem consent prompt; without it the session has no prompt UI. */
-		consent?: () => Promise<string | undefined>;
+		consent?: (question: string) => Promise<string | undefined>;
 		/** Shares another session's coordinator, as sessions of one process do. */
 		coordinator?: CodexAutoRedeemCoordinator;
 		/** Operator-approved Claude redeems; without one an automated Claude redeem is refused. */
@@ -639,6 +639,7 @@ describe("Claude saved-reset trigger integration", () => {
 			status: claudeStatus(true),
 			streamErrorFirst: true,
 			autoRedeem: "unset",
+			approvals: [claudeApproval()],
 			// The pool is replaced while the planned restore waits for consent.
 			consent: async () => {
 				replaced = authStorage.sessions.restrict("anthropic", session.sessionId, []);
@@ -1028,6 +1029,36 @@ describe("Claude saved-reset trigger integration", () => {
 		},
 	);
 
+	it("warns once per attempt when a Claude redeem is refused for want of an approval, across sweeps", async () => {
+		const warn = vi.spyOn(logger, "warn");
+		const status = claudeStatus(false);
+		for (const credit of status.credits) {
+			credit.expiresAt = new Date(Date.now() + 4 * 60_000).toISOString();
+			credit.usedFractions = { "anthropic:7d": 0 };
+		}
+		const report = withInventory(claudeReport(0), status);
+		status.report = report;
+		const { session, coordinator, targets } = buildSession({
+			report,
+			status,
+			autoRedeem: "yes",
+			salvageHorizonHours: 0,
+			keepCredits: 1,
+		});
+
+		await session.fetchUsageReports();
+		await coordinator.sweepPromise;
+		coordinator.lastSweepAt = 0;
+		await session.fetchUsageReports();
+		await coordinator.sweepPromise;
+
+		const refusals = warn.mock.calls.filter(
+			([message]) => message === "claude-auto-reset: redeem refused, no matching approval record",
+		);
+		expect(refusals).toHaveLength(1);
+		expect(targets).toEqual([]);
+	});
+
 	it("does not spend headlessly before independent Claude consent", async () => {
 		// Codex being disabled does not enable Claude, and short of a reset about to expire an unset headless
 		// session cannot spend silently.
@@ -1049,7 +1080,29 @@ describe("Claude saved-reset trigger integration", () => {
 		});
 	});
 
-	it("still asks before spending an imminent reset when a prompt UI is available", async () => {
+	it("offers an unset Claude reset to the prompt when an operator approval matches it", async () => {
+		const questions: string[] = [];
+		const { session, targets } = buildSession({
+			report: null,
+			status: claudeStatus(true),
+			streamErrorFirst: true,
+			autoRedeem: "unset",
+			approvals: [claudeApproval()],
+			consent: async question => {
+				questions.push(question);
+				return "Yes";
+			},
+		});
+		mockSchedulerWaitWithClock();
+
+		await session.prompt("ask about a reset an approval covers");
+		await session.waitForIdle();
+
+		expect(questions).toEqual([expect.stringContaining("Spend a saved Claude rate-limit reset?")]);
+		expect(targets.map(target => target.credentialId)).toEqual([CREDENTIAL_ID]);
+	});
+
+	it("never asks about an imminent Claude salvage that no approval can match, even with a prompt UI", async () => {
 		const status = claudeStatus(false);
 		for (const credit of status.credits) {
 			credit.expiresAt = new Date(Date.now() + 4 * 60_000).toISOString();
@@ -1083,7 +1136,7 @@ describe("Claude saved-reset trigger integration", () => {
 
 		await session.fetchUsageReports();
 		await coordinator.sweepPromise;
-		expect(questions).toEqual([expect.stringContaining("Spend a saved Claude rate-limit reset?")]);
+		expect(questions).toEqual([]);
 		expect(targets).toEqual([]);
 	});
 });

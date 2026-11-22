@@ -247,7 +247,7 @@ describe("Codex saved-reset consent without a prompt UI", () => {
 		expect(notices).toContainEqual(expect.stringContaining("auto-redeem is unset and no prompt UI is available"));
 	});
 
-	it("still asks an ACP client with form elicitation about a reset about to expire", async () => {
+	it("never offers a Codex reset to an ACP client with form elicitation, since no approval can match it", async () => {
 		const account = {
 			accountId: "acct-a",
 			credentialId: 1,
@@ -262,7 +262,7 @@ describe("Codex saved-reset consent without a prompt UI", () => {
 		await session.prompt("trigger a codex usage limit");
 		await session.waitForIdle();
 
-		expect(elicitations).toEqual([expect.stringContaining("Spend a saved Codex rate-limit reset?")]);
+		expect(elicitations).toEqual([]);
 		expect(targets).toEqual([]);
 		expect(session.agent.state.messages.at(-1)).toMatchObject({ role: "assistant", stopReason: "error" });
 	});

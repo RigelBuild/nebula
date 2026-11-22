@@ -822,6 +822,8 @@ export interface CodexAutoRedeemCoordinator {
 	notifiedKeys: Set<string>;
 	/** Approvals already spent in this process, keyed by `approvalSpentKey`; a spent approval never matches again. */
 	spentApprovals: Set<string>;
+	/** Warning-bearing refusals already logged, keyed by `attemptKey`; each refused attempt warns once. */
+	refusedAttemptKeys: Set<string>;
 	/** Malformed approval entries already warned about, so each is logged once. */
 	warnedApprovalEntries: Set<string>;
 }
@@ -838,6 +840,7 @@ export function createCodexAutoRedeemCoordinator(): CodexAutoRedeemCoordinator {
 		sweepPromise: undefined,
 		notifiedKeys: new Set(),
 		spentApprovals: new Set(),
+		refusedAttemptKeys: new Set(),
 		warnedApprovalEntries: new Set(),
 	};
 }

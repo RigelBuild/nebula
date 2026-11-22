@@ -566,6 +566,7 @@ import {
 	cfgProvidersAnthropicSlowMode,
 	resetWindowModes,
 	cfgOperatorClaudeResetsApprovedRedeems,
+	type ClaudeResetApproval,
 	resetWindowSettings,
 } from "./settings";
 import { findClaudeResetApproval, approvalSpentKey } from "./reset-approval";
@@ -15752,8 +15753,11 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			}
 			return [];
 		}
+		// Only an action an operator approval can match is offered: any other answer of "Yes" would spend nothing.
+		const offered = actions.filter(action => this.#matchingApproval(provider, action, coordinator) !== undefined);
+		if (offered.length === 0) return [];
 
-		const lines = actions.map(action => {
+		const lines = offered.map(action => {
 			if (!("program" in action)) {
 				const codex = action;
 				return codex.reason === "blocked-account"
@@ -15770,9 +15774,9 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 				: `${claude.label}: ${grant} expires in ${formatDuration(claude.expiresInMs ?? 0)}; ${formatUsageResetWindow(claude.salvageWindow ?? "")} is ${Math.round((claude.salvageUsedFraction ?? 0) * 100)}% used.${early}`;
 		});
 		const question =
-			actions.length === 1
+			offered.length === 1
 				? `Spend a saved ${providerLabel} rate-limit reset?\n${lines[0]}`
-				: `Spend ${actions.length} saved ${providerLabel} rate-limit resets?\n${lines.join("\n")}`;
+				: `Spend ${offered.length} saved ${providerLabel} rate-limit resets?\n${lines.join("\n")}`;
 		try {
 			const choice = await runner.getUIContext().select(question, [
 				{ label: "Yes", description: `Redeem now and set ${keyList} to yes.` },
@@ -15782,7 +15786,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 				for (const key of keys) {
 					if (key.get(this.settings) === "unset") key.set(this.settings, choice === "Yes" ? "yes" : "no");
 				}
-				if (choice === "Yes") return actions;
+				if (choice === "Yes") return offered;
 			}
 		} catch (error) {
 			logger.warn(`${source} prompt failed`, { error: String(error) });
@@ -15790,7 +15794,10 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		return [];
 	}
 
-	/** Spend what each governing window allows outright, then ask about the unset ones. */
+	/**
+	 * Spend what each governing window allows outright, then ask about the unset ones. The headless notice
+	 * covers every unset action; the prompt offers only those an operator approval can match.
+	 */
 	async #redeemConsentedResets(
 		provider: "openai-codex" | "anthropic",
 		actions: (CodexResetAction | ClaudeResetAction)[],
@@ -15807,6 +15814,27 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			restoredCredentialIds: [...spent.restoredCredentialIds, ...consented.restoredCredentialIds],
 			poolLimited: spent.poolLimited || consented.poolLimited,
 		};
+	}
+
+	/**
+	 * The operator approval that would authorize this action's redeem, or `undefined`. Codex and salvage
+	 * actions have no approval to match, so they never do. Shared by the consent filter and the executor.
+	 */
+	#matchingApproval(
+		provider: "openai-codex" | "anthropic",
+		action: CodexResetAction | ClaudeResetAction,
+		coordinator: CodexAutoRedeemCoordinator,
+	): ClaudeResetApproval | undefined {
+		if (provider !== "anthropic") return undefined;
+		return findClaudeResetApproval({
+			approvals: cfgOperatorClaudeResetsApprovedRedeems.get(this.settings),
+			accountId: action.target.accountId,
+			blockedResetsAt: action.remainingMs === undefined ? undefined : Date.now() + action.remainingMs,
+			bankedCount: action.availableCount,
+			spent: coordinator.spentApprovals,
+			warned: coordinator.warnedApprovalEntries,
+			nowMs: Date.now(),
+		});
 	}
 
 	#planCodexResets(
@@ -15934,25 +15962,17 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		let poolLimited = false;
 		for (const action of actions) {
 			if (coordinator.attemptedKeys.has(action.attemptKey)) continue;
-			// Automated spends need an operator approval record. None exists for a Codex account (`ClaudeResetApproval`
-			// names only a Claude accountId), so Codex is refused outright; a Claude spend needs a matching approval.
-			const matchedApproval =
-				provider === "anthropic"
-					? findClaudeResetApproval({
-							approvals: cfgOperatorClaudeResetsApprovedRedeems.get(this.settings),
-							accountId: action.target.accountId,
-							blockedResetsAt: action.remainingMs === undefined ? undefined : Date.now() + action.remainingMs,
-							bankedCount: action.availableCount,
-							spent: coordinator.spentApprovals,
-							warned: coordinator.warnedApprovalEntries,
-							nowMs: Date.now(),
-						})
-					: undefined;
+			// Automated spends need an operator approval record: Codex is refused outright (no approval names a
+			// Codex account), and a Claude spend needs a matching approval.
+			const matchedApproval = this.#matchingApproval(provider, action, coordinator);
 			if (!matchedApproval) {
-				logger.warn(`${source}: redeem refused, no matching approval record`, {
-					account: action.accountKey,
-					window: action.window,
-				});
+				if (!coordinator.refusedAttemptKeys.has(action.attemptKey)) {
+					coordinator.refusedAttemptKeys.add(action.attemptKey);
+					logger.warn(`${source}: redeem refused, no matching approval record`, {
+						account: action.accountKey,
+						window: action.window,
+					});
+				}
 				continue;
 			}
 			const previousAttemptAt = coordinator.lastAttemptAtByAccount.get(action.accountKey);

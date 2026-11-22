@@ -344,6 +344,7 @@ export function formatStyledArtifactReference(artifactId: string, theme: Theme):
 
 /** Describe an incomplete artifact capture. */
 export function formatArtifactErrorNotice(error: OutputArtifactError): string {
+	if (error === "redact") return "Full output was withheld: redaction of the saved output failed";
 	return `Full output was not saved completely (artifact ${error} failed)`;
 }
 

@@ -2763,6 +2763,8 @@ export class ExtensionRunner {
 	/**
 	 * Runs `artifact_text` handlers over text about to be written to a bash original-output
 	 * artifact. The last defined `text` wins; with no handlers the text is returned unchanged.
+	 * A handler that throws or times out rejects, so the caller withholds the artifact rather
+	 * than keep the unredacted text.
 	 */
 	async redactArtifactText(text: string): Promise<string> {
 		if (!this.hasHandlers("artifact_text")) return text;
@@ -2780,6 +2782,9 @@ export class ExtensionRunner {
 					ctx,
 					ext,
 					extensionHandlerTimeoutMs,
+					(kind, message) => {
+						throw new Error(`artifact_text handler ${kind}: ${message}`);
+					},
 				)) as ArtifactTextEventResult | undefined;
 				if (handlerResult?.text !== undefined) current = handlerResult.text;
 			}

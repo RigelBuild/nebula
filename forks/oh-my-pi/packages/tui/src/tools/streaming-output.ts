@@ -1740,8 +1740,9 @@ export class OutputSink {
 	}
 
 	/**
-	 * Redact the closed spill file in place. A throw removes the file and records
-	 * `redact`, so the unredacted capture is never advertised.
+	 * Redact the closed spill file in place. If redaction throws or times out, the file
+	 * is removed (or truncated when removal fails) and `redact` is recorded, so the
+	 * unredacted capture is never advertised or left readable under its id.
 	 */
 	async #redactSpillFile(filePath: string): Promise<void> {
 		const redact = this.#redactArtifactText;
@@ -1751,7 +1752,7 @@ export class OutputSink {
 			const redacted = await redact(raw);
 			if (redacted !== raw) await fs.promises.writeFile(filePath, redacted);
 		} catch {
-			await fs.promises.rm(filePath, { force: true }).catch(() => {});
+			await fs.promises.rm(filePath, { force: true }).catch(() => fs.promises.truncate(filePath, 0).catch(() => {}));
 			this.#recordArtifactError("redact");
 		}
 	}

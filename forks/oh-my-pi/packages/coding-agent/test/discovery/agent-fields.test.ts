@@ -188,6 +188,37 @@ describe("parseAgentFields", () => {
 		expect(fields?.autoloadSkills).toBeUndefined();
 	});
 
+	test("parses skills allowlist from array frontmatter", () => {
+		expect(parseAgentFields({ name: "oracle", description: "desc", skills: ["a", "b"] })?.skills).toEqual(["a", "b"]);
+	});
+
+	test("parses skills allowlist from CSV string and trims entries", () => {
+		expect(parseAgentFields({ name: "oracle", description: "desc", skills: "a, b" })?.skills).toEqual(["a", "b"]);
+	});
+
+	test("returns undefined skills allowlist when field absent or null", () => {
+		expect(parseAgentFields({ name: "oracle", description: "desc" })?.skills).toBeUndefined();
+		expect(parseAgentFields({ name: "oracle", description: "desc", skills: null })?.skills).toBeUndefined();
+	});
+
+	test("keeps an explicitly empty skills allowlist distinct from an absent one", () => {
+		expect(parseAgentFields({ name: "oracle", description: "desc", skills: [] })?.skills).toEqual([]);
+		expect(parseAgentFields({ name: "oracle", description: "desc", skills: "" })?.skills).toEqual([]);
+	});
+
+	test.each([
+		["non-string scalar", 1],
+		["object", {}],
+		["boolean", true],
+		["non-string array", [1]],
+	])("treats a malformed %s skills value as an empty allowlist that advertises none", (_label, skills) => {
+		expect(parseAgentFields({ name: "oracle", description: "desc", skills })?.skills).toEqual([]);
+	});
+
+	test("keeps string entries in a mixed skills array and drops the rest", () => {
+		expect(parseAgentFields({ name: "oracle", description: "desc", skills: ["a", 1] })?.skills).toEqual(["a"]);
+	});
+
 	test("parses readSummarize from boolean frontmatter", () => {
 		expect(parseAgentFields({ name: "scout", description: "desc", readSummarize: false })?.readSummarize).toBe(false);
 		expect(parseAgentFields({ name: "scout", description: "desc", readSummarize: true })?.readSummarize).toBe(true);

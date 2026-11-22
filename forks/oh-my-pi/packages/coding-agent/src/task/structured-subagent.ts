@@ -737,10 +737,13 @@ async function refreshSkillsForAutoload(session: ToolSession, agent: AgentDefini
 }
 
 function resolveAutoloadSkills(session: ToolSession, agent: AgentDefinition) {
-	const skills = [...(session.skills ?? [])];
+	const roster = [...(session.skills ?? [])];
 	const autoloadSkills = agent.autoloadSkills?.length
-		? agent.autoloadSkills.map(name => skills.find(skill => skill.name === name)).filter(skill => skill !== undefined)
+		? agent.autoloadSkills.map(name => roster.find(skill => skill.name === name)).filter(skill => skill !== undefined)
 		: [];
+	// The allowlist narrows only what the child advertises; autoload above still resolves against the full roster.
+	const allowed = agent.skills ? new Set(agent.skills) : undefined;
+	const skills = allowed ? roster.filter(skill => allowed.has(skill.name)) : roster;
 	return { skills, autoloadSkills };
 }
 

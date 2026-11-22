@@ -289,6 +289,33 @@ describe("discoverAgents", () => {
 		expect(agent?.model).toBeUndefined();
 	});
 
+	test("drops skills allowlist of a Claude-format plugin agent so it advertises the full roster", async () => {
+		// Same Claude-dialect drop as `model`: `skills: [a]` is not an OMP allowlist for this agent.
+		enableProvider("claude-plugins");
+		await writeOmpMarketplacePlugin(tempHome, {
+			agentName: "claude-skills-probe",
+			model: "sonnet",
+			manifest: "claude",
+		});
+		const agentFile = path.join(
+			tempHome,
+			"marketplace-cache",
+			"claude-skills-probe",
+			"agents",
+			"claude-skills-probe.md",
+		);
+		await fs.writeFile(
+			agentFile,
+			["---", "name: claude-skills-probe", "description: probe.", "skills: [a]", "---", "body"].join("\n"),
+		);
+
+		const { agents } = await discoverAgents(projectDir, tempHome);
+		const agent = agents.find(candidate => candidate.name === "claude-skills-probe");
+
+		expect(agent).toBeDefined();
+		expect(agent?.skills).toBeUndefined();
+	});
+
 	test("honors model frontmatter when a plugin declares both OMP and Claude manifests (#12031 review)", async () => {
 		// `.omp-plugin/plugin.json` wins over a sibling `.claude-plugin/plugin.json`,
 		// mirroring the MCP-config precedence, so OMP selectors survive.

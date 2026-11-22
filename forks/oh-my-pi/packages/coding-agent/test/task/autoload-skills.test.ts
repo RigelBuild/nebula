@@ -338,3 +338,101 @@ describe("autoloadSkills through task spawn", () => {
 		}
 	});
 });
+
+describe("skills allowlist through task spawn", () => {
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
+
+	const roster: Skill[] = ["a", "b", "c", "d"].map(name => ({
+		name,
+		description: `Skill ${name}`,
+		filePath: `/skills/${name}/SKILL.md`,
+		baseDir: `/skills/${name}`,
+		source: "user",
+	}));
+
+	function createParent(): ToolSession {
+		return {
+			cwd: "/tmp",
+			hasUI: false,
+			settings: Settings.isolated({ "task.isolation.enabled": false }),
+			getSessionFile: () => null,
+			getSessionSpawns: () => "*",
+			getSessionAgents: () => [],
+			getPlanModeState: () => undefined,
+			skills: roster,
+		} as unknown as ToolSession;
+	}
+
+	function createYieldingChild(): AgentSession {
+		return createMockSession(({ emit }) => {
+			emit({
+				type: "tool_execution_end",
+				toolCallId: "tool-1",
+				toolName: "yield",
+				result: {
+					content: [{ type: "text", text: "Result submitted." }],
+					details: { status: "success", data: { ok: true } },
+				},
+				isError: false,
+			});
+		});
+	}
+
+	// Spawns the agent and returns the child plus the skill names the child session was created with.
+	async function spawnAgent(agent: Partial<AgentDefinition>) {
+		vi.spyOn(discoveryModule, "discoverAgents").mockResolvedValue({
+			agents: [{ name: "scoped-agent", description: "test", systemPrompt: "test", source: "project", ...agent }],
+			projectAgentsDir: null,
+		});
+		const child = createYieldingChild();
+		const createSpy = vi.spyOn(sdkModule, "createAgentSession").mockResolvedValue(createSessionResult(child));
+
+		await runStructuredSubagent({
+			session: createParent(),
+			invocationKind: "task",
+			assignment: "do work",
+			agent: "scoped-agent",
+		});
+
+		const advertised = createSpy.mock.calls[0]?.[0]?.skills?.map(skill => skill.name);
+		return { child, advertised };
+	}
+
+	it("advertises only the allowlisted skills, in session order", async () => {
+		const { advertised } = await spawnAgent({ skills: ["b", "a"] });
+
+		expect(advertised).toEqual(["a", "b"]);
+	});
+
+	it("advertises the full session roster when no allowlist is set", async () => {
+		const { advertised } = await spawnAgent({});
+
+		expect(advertised).toEqual(["a", "b", "c", "d"]);
+	});
+
+	it("advertises no skills when the allowlist is empty", async () => {
+		const { advertised } = await spawnAgent({ skills: [] });
+
+		expect(advertised).toEqual([]);
+	});
+
+	it("still autoloads a skill outside the allowlist, without advertising it", async () => {
+		vi.spyOn(skillsModule, "buildSkillPromptMessage").mockImplementation(async skill => ({
+			message: `Content of ${skill.name}`,
+			details: { name: skill.name, path: skill.filePath, lineCount: 1 },
+		}));
+
+		const { child, advertised } = await spawnAgent({ skills: ["a"], autoloadSkills: ["c"] });
+
+		expect(child.sendCustomMessage).toHaveBeenCalledWith(
+			expect.objectContaining({
+				customType: SKILL_PROMPT_MESSAGE_TYPE,
+				content: "Content of c",
+			}),
+			{ triggerTurn: false },
+		);
+		expect(advertised).toEqual(["a"]);
+	});
+});

@@ -118,14 +118,14 @@ async function setup(enabled = true) {
 }
 
 describe("gateway Codex reset hook", () => {
-	it("redeems after five minutes and a fresh final read", async () => {
+	it("refuses a Codex weekly reset after five minutes: no approval record covers Codex", async () => {
 		const s = await setup();
 		expect(await s.call()).toBe(false);
 		s.advance(300_000);
-		expect(await s.call()).toBe(true);
+		expect(await s.call()).toBe(false);
 		expect(s.report).toHaveBeenCalledTimes(3);
 		expect(s.report.mock.calls.every(call => call[2]?.fresh === true)).toBe(true);
-		expect(s.redeem).toHaveBeenCalledTimes(1);
+		expect(s.redeem).not.toHaveBeenCalled();
 	});
 	it("resets the clock on a lower read", async () => {
 		const s = await setup();
@@ -204,14 +204,14 @@ describe("gateway Codex reset hook", () => {
 		expect(s.redeem).not.toHaveBeenCalled();
 		expect(s.report).not.toHaveBeenCalled();
 	});
-	it("shares one redeem among concurrent hooks", async () => {
+	it("refuses concurrent Codex hooks: no approval record covers Codex", async () => {
 		const s = await setup();
 		expect(await Promise.all([s.call(), s.call()])).toEqual([false, false]);
 		expect(s.report).toHaveBeenCalledTimes(1);
 		s.advance(300_000);
-		expect(await Promise.all([s.call(), s.call()])).toEqual([true, true]);
+		expect(await Promise.all([s.call(), s.call()])).toEqual([false, false]);
 		expect(s.report).toHaveBeenCalledTimes(3);
-		expect(s.redeem).toHaveBeenCalledTimes(1);
+		expect(s.redeem).not.toHaveBeenCalled();
 	});
 	it("sweeps without traffic", async () => {
 		const s = await setup();
@@ -229,6 +229,13 @@ describe("gateway Codex reset hook", () => {
 		s.advance(300_000);
 		await sweep();
 		expect(models).toEqual(["", ""]);
-		expect(s.redeem).toHaveBeenCalledTimes(1);
+		expect(s.redeem).not.toHaveBeenCalled();
+	});
+	it("does not redeem a Codex weekly reset without an approval record", async () => {
+		const s = await setup();
+		await s.call();
+		s.advance(300_000);
+		expect(await s.call()).toBe(false);
+		expect(s.redeem).not.toHaveBeenCalled();
 	});
 });

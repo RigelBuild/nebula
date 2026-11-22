@@ -121,6 +121,8 @@ async function setup(
 		keepCredits?: number;
 		minBlockedMinutes?: number;
 		accountless?: boolean;
+		/** Writes an operator approval for the blocked window, so the spend is authorized. */
+		approve?: boolean;
 	} = {},
 ) {
 	const bankedReset = options.bankedReset ?? true;
@@ -182,6 +184,8 @@ async function setup(
 	const redeem = spyOn(storage.resets, "redeem").mockResolvedValue({ ok: true, code: "reset", provider: "anthropic" });
 	const hook = createGatewayClaudeResetHook({ storage, settings, coordinator: coordinator() });
 	const windowResetsAt = usage.limits.find(limit => limit.id === "anthropic:7d")?.window?.resetsAt ?? 0;
+	if (options.approve)
+		cfgClaudeResetsApprovedRedeems.set(settings, [approval(windowResetsAt, "2099-01-01T00:00:00.000Z")]);
 	return { hook, list, redeem, report, credentialId: stored.id, settings, storage, usage, windowResetsAt };
 }
 
@@ -222,7 +226,7 @@ describe("gateway Claude reset hook", () => {
 	});
 
 	it("redeems an eligible Cedar reset covering the exhausted 7d limit once", async () => {
-		const { hook, list, redeem, credentialId, report } = await setup("yes", "anthropic:7d");
+		const { hook, list, redeem, credentialId, report } = await setup("yes", "anthropic:7d", { approve: true });
 		const signal = new AbortController().signal;
 		expect(await hook({ provider: "anthropic", credentialId, modelId: "claude-sonnet", signal })).toBe(true);
 		expect(report).toHaveBeenCalledTimes(1);
@@ -236,7 +240,7 @@ describe("gateway Claude reset hook", () => {
 	});
 
 	it("shares one redeem between concurrent 429s on the same credential", async () => {
-		const { hook, redeem, credentialId } = await setup("yes", "anthropic:7d");
+		const { hook, redeem, credentialId } = await setup("yes", "anthropic:7d", { approve: true });
 		const signal = new AbortController().signal;
 		const results = await Promise.all([
 			hook({ provider: "anthropic", credentialId, modelId: "claude-sonnet", signal }),
@@ -258,6 +262,24 @@ describe("gateway Claude reset hook", () => {
 		).toBe(false);
 		expect(list).not.toHaveBeenCalled();
 		expect(redeem).not.toHaveBeenCalled();
+	});
+
+	it("does not redeem a non-drain-first weekly reset without an approval, even with consented auto-redeem", async () => {
+		const { hook, redeem, credentialId } = await setup("yes", "anthropic:7d");
+		const warn = spyOn(logger, "warn").mockImplementation(() => {});
+		expect(
+			await hook({
+				provider: "anthropic",
+				credentialId,
+				modelId: "claude-sonnet",
+				signal: new AbortController().signal,
+			}),
+		).toBe(false);
+		expect(redeem).not.toHaveBeenCalled();
+		expect(warn).toHaveBeenCalledWith(
+			NEEDS_APPROVAL,
+			expect.objectContaining({ credentialId, accountId: "acct-cedar" }),
+		);
 	});
 
 	it("does not redeem a drain-first weekly reset without an approval, and logs the need once", async () => {
@@ -655,7 +677,7 @@ describe("gateway Claude reset hook", () => {
 	});
 
 	it("keeps auto-redeem yes behavior for a drain-first account", async () => {
-		const { hook, redeem, credentialId } = await setup("yes", "anthropic:7d", { drainFirst: true });
+		const { hook, redeem, credentialId } = await setup("yes", "anthropic:7d", { drainFirst: true, approve: true });
 		expect(
 			await hook({
 				provider: "anthropic",
@@ -1035,6 +1057,7 @@ describe("gateway Claude reset hook for Fable pins", () => {
 		grantClears: string[],
 		fableConsent: "yes" | "unset" = "yes",
 		weeklyConsent: "yes" | "no" = "no",
+		approve = false,
 	) {
 		const storage = await AuthStorage.create(":memory:");
 		storages.push(storage);
@@ -1080,11 +1103,13 @@ describe("gateway Claude reset hook for Fable pins", () => {
 			provider: "anthropic",
 		});
 		const hook = createGatewayClaudeResetHook({ storage, settings, coordinator: coordinator() });
+		const fableReset = usage.limits.find(limit => limit.id === "anthropic:7d:fable")?.window?.resetsAt ?? 0;
+		if (approve) cfgClaudeResetsApprovedRedeems.set(settings, [approval(fableReset, "2099-01-01T00:00:00.000Z")]);
 		return { hook, redeem, credentialId: stored.id };
 	}
 
 	it("redeems a Fable launch grant when a Fable-model request hits an exhausted Fable window", async () => {
-		const { hook, redeem, credentialId } = await setupFable(["anthropic:7d:fable"]);
+		const { hook, redeem, credentialId } = await setupFable(["anthropic:7d:fable"], "yes", "no", true);
 		const result = await hook({
 			provider: "anthropic",
 			credentialId,
@@ -1191,6 +1216,8 @@ describe("gateway Claude reset hook for Fable pins", () => {
 			provider: "anthropic",
 		});
 		const hook = createGatewayClaudeResetHook({ storage, settings, coordinator: coordinator() });
+		const weeklyReset = usage.limits.find(limit => limit.id === "anthropic:7d")?.window?.resetsAt ?? 0;
+		cfgClaudeResetsApprovedRedeems.set(settings, [approval(weeklyReset, "2099-01-01T00:00:00.000Z")]);
 
 		const result = await hook({
 			provider: "anthropic",

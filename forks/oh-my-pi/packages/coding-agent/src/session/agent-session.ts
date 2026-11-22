@@ -565,8 +565,10 @@ import {
 	cfgTierOpenai,
 	cfgProvidersAnthropicSlowMode,
 	resetWindowModes,
+	cfgOperatorClaudeResetsApprovedRedeems,
 	resetWindowSettings,
 } from "./settings";
+import { findClaudeResetApproval, approvalSpentKey } from "./reset-approval";
 import { type AnthropicSlowModeLane, anthropicSlowModeLanes, formatUsageLimitLabel } from "./anthropic-slow-mode";
 import type { UsageLimitState } from "./usage-limit";
 import { cfgInterruptMode } from "../modes/settings";
@@ -15932,6 +15934,27 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		let poolLimited = false;
 		for (const action of actions) {
 			if (coordinator.attemptedKeys.has(action.attemptKey)) continue;
+			// Automated spends need an operator approval record. None exists for a Codex account (`ClaudeResetApproval`
+			// names only a Claude accountId), so Codex is refused outright; a Claude spend needs a matching approval.
+			const matchedApproval =
+				provider === "anthropic"
+					? findClaudeResetApproval({
+							approvals: cfgOperatorClaudeResetsApprovedRedeems.get(this.settings),
+							accountId: action.target.accountId,
+							blockedResetsAt: action.remainingMs === undefined ? undefined : Date.now() + action.remainingMs,
+							bankedCount: action.availableCount,
+							spent: coordinator.spentApprovals,
+							warned: coordinator.warnedApprovalEntries,
+							nowMs: Date.now(),
+						})
+					: undefined;
+			if (!matchedApproval) {
+				logger.warn(`${source}: redeem refused, no matching approval record`, {
+					account: action.accountKey,
+					window: action.window,
+				});
+				continue;
+			}
 			const previousAttemptAt = coordinator.lastAttemptAtByAccount.get(action.accountKey);
 			coordinator.attemptedKeys.add(action.attemptKey);
 			coordinator.lastAttemptAtByAccount.set(action.accountKey, Date.now());
@@ -16012,6 +16035,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			}
 			switch (outcome.code) {
 				case "reset": {
+					if (matchedApproval) coordinator.spentApprovals.add(approvalSpentKey(matchedApproval));
 					restored.push(action.target.credentialId);
 					const left =
 						action.availableCount === undefined ? undefined : ` (${Math.max(0, action.availableCount - 1)} left)`;

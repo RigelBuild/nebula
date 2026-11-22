@@ -67,12 +67,12 @@ import {
 	REDEEM_RETRY_DEFER_MS,
 	resetPlanSettings,
 } from "../session/codex-auto-reset";
+import { approvalSpentKey, findClaudeResetApproval } from "../session/reset-approval";
 import {
-	type ClaudeResetApproval,
+	cfgOperatorClaudeResetsApprovedRedeems,
 	type ClaudeResetBankingSettings,
 	cfgClaudeResets,
 	cfgCodexResets,
-	cfgOperatorClaudeResetsApprovedRedeems,
 	resetWindowModes,
 } from "../session/settings";
 import {
@@ -419,47 +419,6 @@ function hasUsableExhaustedClaudeWeeklyReset(report: UsageReport | null | undefi
 	);
 }
 
-/** Live reset times jitter by a few seconds, and an operator types a whole minute; match within this many ms. */
-const APPROVAL_RESET_TOLERANCE_MS = 5 * 60_000;
-
-/** Stable identity of one approval: its account, the window it covers, and its ref. */
-function approvalSpentKey(approval: ClaudeResetApproval): string {
-	return `${approval.accountId}@${approval.windowResetsAt}@${approval.ref}`;
-}
-
-/**
- * Whether an operator-typed approval entry is usable. Entries are typed by hand, so an entry that is not
- * an object, or lacks a non-empty `accountId`, a parseable `expiresAt`/`windowResetsAt`, or a
- * non-negative integer `creditsLeft`, can never match. It is skipped, with one warn per bad entry.
- */
-function validApprovalEntry(entry: unknown, warned: Set<string>): entry is ClaudeResetApproval {
-	if (typeof entry === "object" && entry !== null) {
-		const accountId = "accountId" in entry ? entry.accountId : undefined;
-		const expiresAt = "expiresAt" in entry ? entry.expiresAt : undefined;
-		const windowResetsAt = "windowResetsAt" in entry ? entry.windowResetsAt : undefined;
-		const creditsLeft = "creditsLeft" in entry ? entry.creditsLeft : undefined;
-		if (
-			typeof accountId === "string" &&
-			accountId.trim() !== "" &&
-			typeof expiresAt === "string" &&
-			Number.isFinite(Date.parse(expiresAt)) &&
-			typeof windowResetsAt === "string" &&
-			Number.isFinite(Date.parse(windowResetsAt)) &&
-			typeof creditsLeft === "number" &&
-			Number.isInteger(creditsLeft) &&
-			creditsLeft >= 0
-		) {
-			return true;
-		}
-	}
-	const key = JSON.stringify(entry) ?? String(entry);
-	if (!warned.has(key)) {
-		warned.add(key);
-		logger.warn("auth-gateway Claude reset approval skipped", { reason: "malformed entry" });
-	}
-	return false;
-}
-
 export function createGatewayClaudeResetHook(args: {
 	storage: AuthStorage;
 	settings: Settings;
@@ -539,26 +498,18 @@ export function createGatewayClaudeResetHook(args: {
 				logger.info("auth-gateway Claude reset planning failed", { credentialId, error: String(error) });
 				return false;
 			}
-			// A drain-first weekly spend needs an operator approval bound to this window's reset time, to the
+			// Every redeem from this hook needs an operator approval bound to this window's reset time, to the
 			// banked count it was given for, and not yet spent. Entries are typed by hand, so each one is checked.
-			const approvals = cfgOperatorClaudeResetsApprovedRedeems.get(args.settings);
-			const matchingApproval =
-				credential.accountId === undefined
-					? undefined
-					: approvals.find(approval => {
-							if (!validApprovalEntry(approval, warnedApprovalEntries)) return false;
-							return (
-								approval.accountId === credential.accountId &&
-								Date.parse(approval.expiresAt) > Date.now() &&
-								blockedResetsAt !== undefined &&
-								Math.abs(Date.parse(approval.windowResetsAt) - blockedResetsAt) <=
-									APPROVAL_RESET_TOLERANCE_MS &&
-								approval.creditsLeft === bankedCount &&
-								!args.coordinator.spentApprovals.has(approvalSpentKey(approval))
-							);
-						});
-			const drainFirstWeeklySpend = drainFirstRecovery && actions.some(action => action.window === "weekly");
-			if (drainFirstWeeklySpend && !matchingApproval) {
+			const matchingApproval = findClaudeResetApproval({
+				approvals: cfgOperatorClaudeResetsApprovedRedeems.get(args.settings),
+				accountId: credential.accountId,
+				blockedResetsAt,
+				bankedCount,
+				spent: args.coordinator.spentApprovals,
+				warned: warnedApprovalEntries,
+				nowMs: Date.now(),
+			});
+			if (actions.length > 0 && !matchingApproval) {
 				const needKey = `${credential.accountId}@${blockedResetsAt}`;
 				if (!reportedApprovalNeeds.has(needKey)) {
 					reportedApprovalNeeds.add(needKey);
@@ -613,14 +564,12 @@ export function createGatewayClaudeResetHook(args: {
 					ok: outcome.ok,
 				});
 				if (outcome.ok) {
-					if (matchingApproval && drainFirstRecovery && action.window === "weekly") {
-						args.coordinator.spentApprovals.add(approvalSpentKey(matchingApproval));
-					}
+					if (matchingApproval) args.coordinator.spentApprovals.add(approvalSpentKey(matchingApproval));
 					logger.warn("auth-gateway Claude reset redeemed", {
 						credentialId,
 						accountId: credential.accountId,
 						window: action.window,
-						approvalRef: drainFirstRecovery && action.window === "weekly" ? matchingApproval?.ref : undefined,
+						approvalRef: matchingApproval?.ref,
 					});
 				}
 				return outcome.ok;
@@ -736,35 +685,10 @@ export function createGatewayCodexResetHook(args: {
 					deferredUntilByKey: args.coordinator.deferredUntilByKey,
 					lastAttemptAtByAccount: args.coordinator.lastAttemptAtByAccount,
 				});
-				for (const action of plan.actions) {
-					if (
-						action.reason !== "blocked-account" ||
-						action.target.credentialId !== credentialId ||
-						!action.blockedWindows?.includes("weekly")
-					)
-						continue;
-					if (args.coordinator.attemptedKeys.has(action.attemptKey)) continue;
-					const previous = args.coordinator.lastAttemptAtByAccount.get(action.accountKey);
-					args.coordinator.attemptedKeys.add(action.attemptKey);
-					args.coordinator.lastAttemptAtByAccount.set(action.accountKey, now());
-					let outcome: ResetCreditRedeemOutcome;
-					try {
-						outcome = await args.storage.resets.redeem({
-							target: action.target,
-							signal: AbortSignal.any([signal, AbortSignal.timeout(15_000)]),
-						});
-					} catch (error) {
-						logger.info("auth-gateway Codex reset redeem failed", { credentialId, error: String(error) });
-						outcome = { ok: false, code: "error", provider: "openai-codex" };
-					}
-					if (!outcome.ok && outcome.code !== "already_redeemed" && outcome.code !== "no_credit") {
-						args.coordinator.attemptedKeys.delete(action.attemptKey);
-						args.coordinator.deferredUntilByKey.set(action.attemptKey, now() + REDEEM_RETRY_DEFER_MS);
-						if (previous === undefined) args.coordinator.lastAttemptAtByAccount.delete(action.accountKey);
-						else args.coordinator.lastAttemptAtByAccount.set(action.accountKey, previous);
-					}
-					if (outcome.ok) args.coordinator.exhaustedSinceByCredential.delete(credentialId);
-					return outcome.ok;
+				// No approval record covers a Codex account: `ClaudeResetApproval` names only a Claude accountId, and
+				// reusing it would let a Claude approval authorize a Codex redeem. Refuse every automated Codex redeem.
+				if (plan.actions.some(action => action.target.credentialId === credentialId)) {
+					logger.warn("auth-gateway Codex reset redeem refused: no approval record for Codex", { credentialId });
 				}
 			} catch (error) {
 				logger.info("auth-gateway Codex reset planning failed", { credentialId, error: String(error) });

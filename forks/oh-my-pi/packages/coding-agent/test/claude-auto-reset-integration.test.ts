@@ -28,7 +28,11 @@ import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manage
 import { __resetDirsFromEnvForTests, setAgentDir, TempDir } from "@oh-my-pi/pi-utils";
 import { mockSchedulerWaitWithClock } from "./helpers/mock-scheduler-clock";
 
-import { resetWindowModes } from "@oh-my-pi/pi-coding-agent/session/settings";
+import {
+	cfgClaudeResetsApprovedRedeems,
+	type ClaudeResetApproval,
+	resetWindowModes,
+} from "@oh-my-pi/pi-coding-agent/session/settings";
 
 const ACCOUNT_ID = "claude-account";
 const EMAIL = "claude@example.com";
@@ -60,6 +64,33 @@ function claudeReport(weeklyUsed: number): UsageReport {
 			},
 		],
 		metadata: { accountId: ACCOUNT_ID, email: EMAIL, orgId: ORG_ID },
+	};
+}
+
+/** An operator approval covering the 7d window `claudeReport` blocks, against its banked count of one. */
+function claudeApproval(): ClaudeResetApproval {
+	return {
+		accountId: ACCOUNT_ID,
+		approvedBy: "matt",
+		ref: "RIG-11726",
+		expiresAt: new Date(Date.now() + 24 * HOUR).toISOString(),
+		windowResetsAt: new Date(Date.now() + 3 * 24 * HOUR).toISOString(),
+		creditsLeft: 1,
+	};
+}
+
+/**
+ * An operator approval for the outside account (`claude-excluded`) whose 7d window resets in `outsideWaitMs`.
+ * The outside fixture banks two credits (`availableCount: 2`), and the guard matches `creditsLeft` to that count.
+ */
+function outsideApproval(outsideWaitMs: number): ClaudeResetApproval {
+	return {
+		accountId: "claude-excluded",
+		approvedBy: "matt",
+		ref: "RIG-11726",
+		expiresAt: new Date(Date.now() + 24 * HOUR).toISOString(),
+		windowResetsAt: new Date(Date.now() + outsideWaitMs).toISOString(),
+		creditsLeft: 2,
 	};
 }
 
@@ -154,6 +185,8 @@ describe("Claude saved-reset trigger integration", () => {
 		consent?: () => Promise<string | undefined>;
 		/** Shares another session's coordinator, as sessions of one process do. */
 		coordinator?: CodexAutoRedeemCoordinator;
+		/** Operator-approved Claude redeems; without one an automated Claude redeem is refused. */
+		approvals?: readonly ClaudeResetApproval[];
 	}): {
 		session: AgentSession;
 		coordinator: CodexAutoRedeemCoordinator;
@@ -258,6 +291,7 @@ describe("Claude saved-reset trigger integration", () => {
 			"claudeResets.salvageHorizonHours": options.salvageHorizonHours ?? 12,
 			"claudeResets.keepCredits": options.keepCredits ?? 0,
 		});
+		if (options.approvals) cfgClaudeResetsApprovedRedeems.set(settings, [...options.approvals]);
 		settings.setModelRole("default", `${model.provider}/${model.id}`);
 		const sessionManager = SessionManager.inMemory();
 		managers.push(sessionManager);
@@ -425,6 +459,7 @@ describe("Claude saved-reset trigger integration", () => {
 			report: claudeReport(1),
 			status: claudeStatus(true),
 			streamErrorFirst: true,
+			approvals: [claudeApproval()],
 		});
 		mockSchedulerWaitWithClock();
 
@@ -454,6 +489,20 @@ describe("Claude saved-reset trigger integration", () => {
 		expect(recovered).toBe(true);
 	});
 
+	it("does not redeem a Claude reset in a session without an approval record", async () => {
+		const { session, targets } = buildSession({
+			report: claudeReport(1),
+			status: claudeStatus(true),
+			streamErrorFirst: true,
+		});
+		mockSchedulerWaitWithClock();
+
+		await session.prompt("trigger a Claude usage limit");
+		await session.waitForIdle();
+
+		expect(targets).toEqual([]);
+	});
+
 	it("redeems a banked reset before retrying with OAuth when an unblocked stored API key exists", async () => {
 		const oauthAccess = "claude-oauth-access-token";
 		const storedApiKey = "sk-ant-api03-test";
@@ -481,6 +530,7 @@ describe("Claude saved-reset trigger integration", () => {
 			useStoredCredentials: true,
 			clearResetCredentialBlocks: true,
 			restoreWeeklyUsage: true,
+			approvals: [claudeApproval()],
 		});
 		mockSchedulerWaitWithClock();
 
@@ -511,6 +561,7 @@ describe("Claude saved-reset trigger integration", () => {
 			report: null,
 			status: claudeStatus(true),
 			streamErrorFirst: true,
+			approvals: [claudeApproval()],
 		});
 
 		await session.prompt("continue through a quota reset");
@@ -530,6 +581,7 @@ describe("Claude saved-reset trigger integration", () => {
 			status: claudeStatus(true),
 			streamErrorFirst: true,
 			transientFailures: 1,
+			approvals: [claudeApproval()],
 		});
 		mockSchedulerWaitWithClock();
 
@@ -547,6 +599,7 @@ describe("Claude saved-reset trigger integration", () => {
 			streamErrorFirst: true,
 			listFailures: 1,
 			maxDelayMs: 2_500,
+			approvals: [claudeApproval()],
 		});
 		mockSchedulerWaitWithClock();
 
@@ -614,6 +667,7 @@ describe("Claude saved-reset trigger integration", () => {
 			report: null,
 			status: claudeStatus(true),
 			streamErrorFirst: true,
+			approvals: [claudeApproval()],
 		});
 		const pool = await poolToSessionAccount(session, 3 * 24 * HOUR);
 		mockSchedulerWaitWithClock();
@@ -644,7 +698,13 @@ describe("Claude saved-reset trigger integration", () => {
 	it("restores an account outside a pooled peer's pool for an unrestricted session that joined its pass", async () => {
 		// The shared account holds only the kept reserve; the outside account has a spare reset.
 		const openQuota = { restored: false };
-		const pooled = buildSession({ report: null, status: claudeStatus(true), streamErrorFirst: true, keepCredits: 1 });
+		const pooled = buildSession({
+			report: null,
+			status: claudeStatus(true),
+			streamErrorFirst: true,
+			keepCredits: 1,
+			approvals: [claudeApproval()],
+		});
 		const open = buildSession({
 			report: null,
 			status: claudeStatus(true),
@@ -652,6 +712,7 @@ describe("Claude saved-reset trigger integration", () => {
 			keepCredits: 1,
 			quota: openQuota,
 			coordinator: pooled.coordinator,
+			approvals: [outsideApproval(3 * 24 * HOUR)],
 		});
 		const pool = await poolToSessionAccount(pooled.session, 3 * 24 * HOUR);
 		const spent = recordSpends(credentialId => (credentialId === pool.outsideId ? openQuota : undefined));
@@ -670,13 +731,19 @@ describe("Claude saved-reset trigger integration", () => {
 
 	it("restores the shared account for an unrestricted session that joined a pass whose pool dropped it mid-spend", async () => {
 		const openQuota = { restored: false };
-		const pooled = buildSession({ report: null, status: claudeStatus(true), streamErrorFirst: true });
+		const pooled = buildSession({
+			report: null,
+			status: claudeStatus(true),
+			streamErrorFirst: true,
+			approvals: [claudeApproval()],
+		});
 		const open = buildSession({
 			report: null,
 			status: claudeStatus(true),
 			streamErrorFirst: true,
 			quota: openQuota,
 			coordinator: pooled.coordinator,
+			approvals: [claudeApproval()],
 		});
 		const pool = await poolToSessionAccount(pooled.session, 3 * 24 * HOUR);
 		// Only the shared account is listed, so planning excludes nothing.
@@ -705,13 +772,20 @@ describe("Claude saved-reset trigger integration", () => {
 
 	it("recovers a pooled session and an unrestricted one with one restore of the account they share", async () => {
 		const quota = { restored: false };
-		const open = buildSession({ report: null, status: claudeStatus(true), streamErrorFirst: true, quota });
+		const open = buildSession({
+			report: null,
+			status: claudeStatus(true),
+			streamErrorFirst: true,
+			quota,
+			approvals: [claudeApproval()],
+		});
 		const pooled = buildSession({
 			report: null,
 			status: claudeStatus(true),
 			streamErrorFirst: true,
 			quota,
 			coordinator: open.coordinator,
+			approvals: [claudeApproval()],
 		});
 		const pool = await poolToSessionAccount(pooled.session, 24 * HOUR);
 		const spent = recordSpends(credentialId => (credentialId === pool.pooledId ? quota : undefined));
@@ -761,6 +835,7 @@ describe("Claude saved-reset trigger integration", () => {
 			status: claudeStatus(true),
 			streamErrorFirst: true,
 			quota,
+			approvals: [claudeApproval()],
 		});
 		await first.session.prompt("restore the shared account");
 		await first.session.waitForIdle();
@@ -792,6 +867,7 @@ describe("Claude saved-reset trigger integration", () => {
 			streamErrorFirst: true,
 			keepCredits: 1,
 			quota: openQuota,
+			approvals: [outsideApproval(3 * 24 * HOUR)],
 		});
 		const pooled = buildSession({ report: null, status: claudeStatus(true), streamErrorFirst: true, keepCredits: 1 });
 		const pool = await poolToSessionAccount(pooled.session, 3 * 24 * HOUR);
@@ -860,9 +936,9 @@ describe("Claude saved-reset trigger integration", () => {
 		}
 	});
 
-	it("salvages an expiring early-use Cedar grant from the usage heartbeat exactly once, listing only to confirm it", async () => {
+	it("refuses an expiring Cedar grant salvage without an approval: a salvage spend has no blocked reset to bind", async () => {
 		const status = claudeStatus(false);
-		const { session, coordinator, targets, listCalls } = buildSession({
+		const { session, coordinator, targets } = buildSession({
 			report: withInventory(claudeReport(0.5), status),
 			status,
 		});
@@ -870,13 +946,12 @@ describe("Claude saved-reset trigger integration", () => {
 		await session.fetchUsageReports();
 		expect(coordinator.sweepPromise).toBeDefined();
 		await coordinator.sweepPromise;
-		expect(targets).toHaveLength(1);
+		expect(targets).toEqual([]);
 
 		coordinator.lastSweepAt = 0;
 		await session.fetchUsageReports();
 		await coordinator.sweepPromise;
-		expect(targets).toHaveLength(1);
-		expect(listCalls()).toBe(1);
+		expect(targets).toEqual([]);
 	});
 
 	it("lists no Claude account and salvages nothing when its usage report carries no reset inventory", async () => {
@@ -909,7 +984,7 @@ describe("Claude saved-reset trigger integration", () => {
 		expect(targets).toEqual([]);
 	});
 
-	it("spends for a credential stored without its organization under the organization its live listing resolves", async () => {
+	it("refuses a salvage for a credential stored without its organization: no approval can bind a salvage spend", async () => {
 		const status = claudeStatus(false);
 		const report = withInventory(claudeReport(0.5), status);
 		report.metadata = { accountId: ACCOUNT_ID, email: EMAIL };
@@ -920,21 +995,12 @@ describe("Claude saved-reset trigger integration", () => {
 
 		await session.fetchUsageReports();
 		await coordinator.sweepPromise;
-		expect(targets).toEqual([
-			{
-				provider: "anthropic",
-				credentialId: CREDENTIAL_ID,
-				creditId: "cedar-grant-1",
-				accountId: ACCOUNT_ID,
-				email: EMAIL,
-				orgId: ORG_ID,
-			},
-		]);
-		expect([...coordinator.lastAttemptAtByAccount.keys()]).toEqual([`anthropic|${ORG_ID}|${CREDENTIAL_ID}`]);
+		expect(targets).toEqual([]);
+		expect([...coordinator.lastAttemptAtByAccount.keys()]).toEqual([]);
 	});
 
 	it.each(["yes", "no", "unset"] as const)(
-		"consumes an imminent reset without a prompt UI only when auto-redeem is yes (%s)",
+		"refuses an imminent-reset salvage without an approval, for every consent value (%s)",
 		async autoRedeem => {
 			const status = claudeStatus(false);
 			for (const credit of status.credits) {
@@ -953,25 +1019,12 @@ describe("Claude saved-reset trigger integration", () => {
 
 			await session.fetchUsageReports();
 			await coordinator.sweepPromise;
-			expect(targets).toEqual(
-				autoRedeem === "yes"
-					? [
-							{
-								provider: "anthropic",
-								credentialId: CREDENTIAL_ID,
-								creditId: "cedar-grant-1",
-								accountId: ACCOUNT_ID,
-								email: EMAIL,
-								orgId: ORG_ID,
-							},
-						]
-					: [],
-			);
+			expect(targets).toEqual([]);
 
 			coordinator.lastSweepAt = 0;
 			await session.fetchUsageReports();
 			await coordinator.sweepPromise;
-			expect(targets).toHaveLength(autoRedeem === "yes" ? 1 : 0);
+			expect(targets).toEqual([]);
 		},
 	);
 

@@ -820,6 +820,10 @@ export interface CodexAutoRedeemCoordinator {
 	/** Settlement of the most recently scheduled sweep (never rejects). */
 	sweepPromise: Promise<void> | undefined;
 	notifiedKeys: Set<string>;
+	/** Approvals already spent in this process, keyed by `approvalSpentKey`; a spent approval never matches again. */
+	spentApprovals: Set<string>;
+	/** Malformed approval entries already warned about, so each is logged once. */
+	warnedApprovalEntries: Set<string>;
 }
 
 /** Fresh, empty coordinator: backs the process-wide default; inject one per test for isolation. */
@@ -833,6 +837,8 @@ export function createCodexAutoRedeemCoordinator(): CodexAutoRedeemCoordinator {
 		lastSweepAt: 0,
 		sweepPromise: undefined,
 		notifiedKeys: new Set(),
+		spentApprovals: new Set(),
+		warnedApprovalEntries: new Set(),
 	};
 }
 

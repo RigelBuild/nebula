@@ -664,6 +664,60 @@ async def test_failed_card_send_is_kept_as_undelivered(monkeypatch):
     assert adapter._exec_approval_views[request_id]._message is None
     await adapter.disconnect()
 
+
+@pytest.mark.asyncio
+async def test_unconfirmed_card_is_not_marked_never_shown_when_the_text_fallback_also_fails(monkeypatch):
+    """A card that is not confirmed in time may already be on screen, so the prompt is not 'never shown':
+    a failed text fallback must not mark the request undelivered. The timed-out request is still withdrawn."""
+    from gateway.platforms.base import ExecApprovalPrompt
+
+    adapter = DiscordAdapter(PlatformConfig(enabled=True, token="test-token",
+                                            extra={"approval_card_confirm_timeout": 0.2}))
+    session = "agent:other:discord:555"
+    request_id = uuid.uuid4().hex
+    entry = _queue_entry(monkeypatch, session, request_id)
+
+    async def card_never_confirmed(_prompt, _view):
+        await asyncio.Event().wait()
+    monkeypatch.setattr(adapter, "_send_exec_approval_card", card_never_confirmed)
+    monkeypatch.setattr(adapter, "_send_exec_approval_text_fallback", AsyncMock(return_value="send_path_degraded"))
+    prompt = ExecApprovalPrompt(
+        chat_id="555", session_key=session, text="rm x", command="rm x", smart_denied=False,
+        actions=[("Allow once", "once", "primary"), ("Deny", "deny", "danger")],
+        request_id=request_id, metadata={"thread_id": "777"})
+
+    result = await adapter._send_exec_approval_prompt(prompt)
+
+    assert result.error == discord_platform._CARD_CONFIRM_TIMEOUT_ERROR
+    assert entry.undelivered is None
+    assert await _until(lambda: entry not in approval._gateway_queues.get(session, []), timeout=3)
+    assert entry.cancelled == "the approval card was not delivered"
+
+
+@pytest.mark.asyncio
+async def test_failed_card_with_failed_text_fallback_is_marked_never_shown(monkeypatch):
+    """Counterpart: a card that failed outright (not a confirm timeout) and a failed text fallback leave no
+    surface showing the prompt, so the request is marked undelivered with both failure reasons."""
+    from gateway.platforms.base import ExecApprovalPrompt, SendResult
+
+    adapter = DiscordAdapter(PlatformConfig(enabled=True, token="test-token",
+                                            extra={"approval_card_confirm_timeout": 0.2}))
+    session = "agent:other:discord:555"
+    request_id = uuid.uuid4().hex
+    entry = _queue_entry(monkeypatch, session, request_id)
+    monkeypatch.setattr(adapter, "_send_exec_approval_card",
+                        AsyncMock(return_value=SendResult(success=False, error="Not connected")))
+    monkeypatch.setattr(adapter, "_send_exec_approval_text_fallback", AsyncMock(return_value="send_path_degraded"))
+    prompt = ExecApprovalPrompt(
+        chat_id="555", session_key=session, text="rm x", command="rm x", smart_denied=False,
+        actions=[("Allow once", "once", "primary"), ("Deny", "deny", "danger")],
+        request_id=request_id, metadata={"thread_id": "777"})
+
+    await adapter._send_exec_approval_prompt(prompt)
+
+    assert entry.undelivered == "Not connected, then send_path_degraded"
+    assert await _until(lambda: entry not in approval._gateway_queues.get(session, []), timeout=3)
+
 @pytest.mark.asyncio
 async def test_ui_timeout_then_reconnect_press_ends_wait_as_cancelled(monkeypatch):
     # Live sequence: the card's UI timeout finishes the view; a reconnect swaps the client; an
@@ -1991,4 +2045,322 @@ async def test_only_exact_approve_or_deny_is_swallowed_other_text_passes_through
     handle = await _answer(adapter, monkeypatch, _text(text, "22222", 777))
     assert handle.await_count == 1
     assert entry.result is None and not entry.event.is_set()
+    await adapter.disconnect()
+
+
+def _undelivered_prompt(session, request_id):
+    from gateway.platforms.base import ExecApprovalPrompt
+    return ExecApprovalPrompt(
+        chat_id="555", session_key=session, text="rm x", command="rm x", smart_denied=False,
+        actions=[("Allow once", "once", "primary"), ("Deny", "deny", "danger")],
+        request_id=request_id, metadata={"thread_id": "777"})
+
+
+def _gated_text_fallback(monkeypatch, adapter):
+    """Hold the text fallback until the test releases it, then it fails. Returns (started, release)."""
+    started, release = asyncio.Event(), asyncio.Event()
+
+    async def fallback(_prompt):
+        started.set()
+        await release.wait()
+        return "send_path_degraded"
+    monkeypatch.setattr(adapter, "_send_exec_approval_text_fallback", fallback)
+    return started, release
+
+
+@pytest.mark.asyncio
+async def test_repost_that_fails_once_then_shows_the_card_clears_the_never_shown_mark(monkeypatch):
+    # The card and its text fallback both fail, so the request is marked never shown. Repost 1 fails, repost 2
+    # shows the card. The mark must come off, or a /stop would say the card was never shown.
+    from gateway.platforms.base import SendResult
+
+    adapter = DiscordAdapter(PlatformConfig(enabled=True, token="test-token",
+                                            extra={"approval_card_confirm_timeout": 5}))
+    created: list[_FakeBot] = []
+    await _connect(adapter, monkeypatch, created)
+    monkeypatch.setattr(adapter, "_EXEC_APPROVAL_REPOST_BACKOFF", (0.0, 0.0))
+    monkeypatch.setattr(adapter, "_send_exec_approval_text_fallback", AsyncMock(return_value="send_path_degraded"))
+    card = AsyncMock(side_effect=[
+        SendResult(success=False, error="Not connected"),  # the card
+        SendResult(success=False, error="down"),  # repost 1
+        SendResult(success=True, message_id="3"),  # repost 2
+    ])
+    monkeypatch.setattr(adapter, "_send_exec_approval_card", card)
+    session = "agent:other:discord:555"
+    request_id = uuid.uuid4().hex
+    entry = _queue_entry(monkeypatch, session, request_id)
+
+    await adapter._send_exec_approval_prompt(_undelivered_prompt(session, request_id))
+    assert entry.undelivered == "Not connected, then send_path_degraded"
+    await asyncio.wait_for(adapter._repost_undelivered_exec_approval_cards(), 5)
+
+    assert card.await_count == 3
+    assert entry.undelivered is None
+    assert not getattr(adapter._exec_approval_views[request_id], "undelivered", False)
+    await adapter.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_text_fallback_failing_after_a_repost_showed_the_card_does_not_mark_never_shown(monkeypatch):
+    # The card fails, the text fallback is still in flight, and a reconnect repost shows the card. When the
+    # fallback then fails, the card was shown, so the request must not be marked never shown.
+    from gateway.platforms.base import SendResult
+
+    adapter = DiscordAdapter(PlatformConfig(enabled=True, token="test-token",
+                                            extra={"approval_card_confirm_timeout": 5}))
+    created: list[_FakeBot] = []
+    await _connect(adapter, monkeypatch, created)
+    monkeypatch.setattr(adapter, "_EXEC_APPROVAL_REPOST_BACKOFF", (0.0,))
+    started, release = _gated_text_fallback(monkeypatch, adapter)
+    monkeypatch.setattr(adapter, "_send_exec_approval_card", AsyncMock(side_effect=[
+        SendResult(success=False, error="Not connected"),  # the card
+        SendResult(success=True, message_id="2"),  # the repost
+    ]))
+    session = "agent:other:discord:555"
+    request_id = uuid.uuid4().hex
+    entry = _queue_entry(monkeypatch, session, request_id)
+
+    prompt_task = asyncio.create_task(adapter._send_exec_approval_prompt(_undelivered_prompt(session, request_id)))
+    await asyncio.wait_for(started.wait(), 5)
+    await asyncio.wait_for(adapter._repost_undelivered_exec_approval_cards(), 5)
+    assert entry.undelivered is None
+    release.set()
+    await asyncio.wait_for(prompt_task, 5)
+
+    assert entry.undelivered is None
+    await adapter.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_repost_failing_every_attempt_keeps_the_request_never_shown_with_the_card_failure(monkeypatch):
+    # The card and its text fallback fail, then every repost attempt fails too. No surface ever showed the prompt,
+    # so the mark stays, and its reason is the card's failure followed by the fallback's.
+    from gateway.platforms.base import SendResult
+
+    adapter = DiscordAdapter(PlatformConfig(enabled=True, token="test-token",
+                                            extra={"approval_card_confirm_timeout": 5}))
+    created: list[_FakeBot] = []
+    await _connect(adapter, monkeypatch, created)
+    monkeypatch.setattr(adapter, "_EXEC_APPROVAL_REPOST_BACKOFF", (0.0, 0.0, 0.0))
+    monkeypatch.setattr(adapter, "_send_exec_approval_text_fallback", AsyncMock(return_value="send_path_degraded"))
+    card = AsyncMock(side_effect=[SendResult(success=False, error="Not connected")]
+                     + [SendResult(success=False, error="down") for _ in range(3)])
+    monkeypatch.setattr(adapter, "_send_exec_approval_card", card)
+    session = "agent:other:discord:555"
+    request_id = uuid.uuid4().hex
+    entry = _queue_entry(monkeypatch, session, request_id)
+
+    await adapter._send_exec_approval_prompt(_undelivered_prompt(session, request_id))
+    await asyncio.wait_for(adapter._repost_undelivered_exec_approval_cards(), 5)
+
+    assert card.await_count == 4
+    assert entry.undelivered == "Not connected, then send_path_degraded"
+    await adapter.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_fallback_for_a_card_a_later_repost_showed_does_not_mark_the_request(monkeypatch):
+    # F4, stale view. The card fails and its text fallback is in flight. Repost 1 fails and registers a replacement
+    # view for the request. Repost 2 shows the card on that replacement. The original card's flag was never
+    # cleared, so a fallback that reads it would mark a shown card as never shown.
+    from gateway.platforms.base import SendResult
+
+    adapter = DiscordAdapter(PlatformConfig(enabled=True, token="test-token",
+                                            extra={"approval_card_confirm_timeout": 5}))
+    created: list[_FakeBot] = []
+    await _connect(adapter, monkeypatch, created)
+    monkeypatch.setattr(adapter, "_EXEC_APPROVAL_REPOST_BACKOFF", (0.0,))
+    started, release = _gated_text_fallback(monkeypatch, adapter)
+    card = AsyncMock(side_effect=[
+        SendResult(success=False, error="Not connected"),  # the card
+        SendResult(success=False, error="down"),  # repost 1: fails, registers a replacement view
+        SendResult(success=True, message_id="3"),  # repost 2: shows the card on the replacement
+    ])
+    monkeypatch.setattr(adapter, "_send_exec_approval_card", card)
+    session = "agent:other:discord:555"
+    request_id = uuid.uuid4().hex
+    entry = _queue_entry(monkeypatch, session, request_id)
+
+    prompt_task = asyncio.create_task(adapter._send_exec_approval_prompt(_undelivered_prompt(session, request_id)))
+    await asyncio.wait_for(started.wait(), 5)
+    await asyncio.wait_for(adapter._repost_undelivered_exec_approval_cards(), 5)
+    assert entry.undelivered is None
+    await asyncio.wait_for(adapter._repost_undelivered_exec_approval_cards(), 5)
+    assert card.await_count == 3
+    assert entry.undelivered is None
+    release.set()
+    await asyncio.wait_for(prompt_task, 5)
+
+    assert entry.undelivered is None
+    await adapter.disconnect()
+
+
+def _assert_withdrawn_plain(result, cause):
+    assert result["approved"] is False
+    assert result.get("user_consent") is False
+    assert result["outcome"] == "cancelled"
+    assert "denied by user" not in result["message"].lower()
+    assert cause in result["message"]
+    assert "NOT consented" in result["message"]
+
+
+@pytest.fixture
+def _gateway_approval_session(monkeypatch):
+    """A gateway approval session in manual mode, as the tools-side attribution tests set up: the gate must
+    prompt, so cron, yolo and interactive env are cleared and approval config is pinned to manual."""
+    from tools import approval as mod
+    from tools import approval_context
+    key = "test-undelivered-repost-stop"
+    mod._gateway_queues.clear()
+    mod._gateway_notify_cbs.clear()
+    mod._session_approved.clear()
+    mod._denial_tally.pop(key, None)
+    for k in ("HERMES_CRON_SESSION", "HERMES_YOLO_MODE", "HERMES_INTERACTIVE"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("HERMES_GATEWAY_SESSION", "1")
+    monkeypatch.setenv("HERMES_SESSION_KEY", key)
+    monkeypatch.setattr(mod, "_YOLO_MODE_FROZEN", False)
+    monkeypatch.setattr(approval_context, "_get_approval_config", lambda: {"mode": "manual", "timeout": 60})
+    yield key
+    mod._gateway_queues.clear()
+    mod._gateway_notify_cbs.clear()
+
+
+@pytest.mark.asyncio
+async def test_undelivered_approval_shown_by_a_later_repost_is_withdrawn_as_a_plain_stop(
+        monkeypatch, _gateway_approval_session):
+    """A card that failed, then was posted again on reconnect, was shown to Matt. A /stop after that repost keeps
+    the withdrawal text; it must not say the approval was never shown."""
+    import threading
+
+    from gateway.platforms.base import ExecApprovalPrompt, SendResult
+    from tools import approval as mod
+    from tools.interrupt import set_interrupt
+
+    session_key = _gateway_approval_session
+    notified = threading.Event()
+    seen = {}
+
+    def notify(data):
+        seen.update(data)
+        notified.set()
+
+    mod.register_gateway_notify(session_key, notify)
+    holder = {}
+
+    def worker():
+        holder["tid"] = threading.get_ident()
+        holder["result"] = mod.check_all_command_guards("rm -rf .git", "local")
+
+    thread = threading.Thread(target=worker)
+    thread.start()
+    assert await asyncio.to_thread(notified.wait, 10), "approval was never enqueued"
+
+    adapter = DiscordAdapter(PlatformConfig(enabled=True, token="test-token"))
+    monkeypatch.setattr(adapter, "_EXEC_APPROVAL_REPOST_BACKOFF", (0.0,))
+    monkeypatch.setattr(adapter, "_send_exec_approval_text_fallback", AsyncMock(return_value="send_path_degraded"))
+    card = AsyncMock(side_effect=[
+        SendResult(success=False, error="Not connected"),  # the first card never reaches Discord
+        SendResult(success=True, message_id="2"),  # the reconnect repost does
+    ])
+    monkeypatch.setattr(adapter, "_send_exec_approval_card", card)
+    prompt = ExecApprovalPrompt(
+        chat_id="555", session_key=session_key, text="rm -rf .git", command="rm -rf .git", smart_denied=False,
+        actions=[("Allow once", "once", "primary"), ("Deny", "deny", "danger")],
+        request_id=seen["request_id"], metadata={"thread_id": "777"})
+
+    await adapter._send_exec_approval_prompt(prompt)
+    await asyncio.wait_for(adapter._repost_undelivered_exec_approval_cards(), 5)
+    assert card.await_count == 2
+    set_interrupt(True, holder["tid"], reason="Stop requested")
+    try:
+        await asyncio.to_thread(thread.join, 10)
+    finally:
+        set_interrupt(False, holder["tid"])
+    assert not thread.is_alive()
+    result = holder["result"]
+    _assert_withdrawn_plain(result, "Stop requested")
+    assert "approval was withdrawn before the user answered (Stop requested)" in result["message"]
+    assert "never shown" not in result["message"]
+    assert session_key not in mod._denial_tally
+
+
+@pytest.mark.asyncio
+async def test_in_flight_repost_whose_fallback_then_fails_is_named_never_shown(monkeypatch):
+    # The card fails and its text fallback is in flight. A reconnect repost starts and its card send is still in
+    # flight when the fallback fails. Neither surface has shown the prompt yet, so the request is marked never
+    # shown. When the repost then fails too, the mark must stay: /stop must not read as a plain withdrawal.
+    from gateway.platforms.base import SendResult
+
+    adapter = DiscordAdapter(PlatformConfig(enabled=True, token="test-token",
+                                            extra={"approval_card_confirm_timeout": 5}))
+    created: list[_FakeBot] = []
+    await _connect(adapter, monkeypatch, created)
+    monkeypatch.setattr(adapter, "_EXEC_APPROVAL_REPOST_BACKOFF", (0.0,))
+    started, release = _gated_text_fallback(monkeypatch, adapter)
+    card_calls = []
+    repost_card_started, release_repost_card = asyncio.Event(), asyncio.Event()
+
+    async def card(_prompt, _view):
+        card_calls.append(1)
+        if len(card_calls) == 1:
+            return SendResult(success=False, error="Not connected")  # the card
+        repost_card_started.set()
+        await release_repost_card.wait()
+        return SendResult(success=False, error="down")  # the repost
+    monkeypatch.setattr(adapter, "_send_exec_approval_card", card)
+    session = "agent:other:discord:555"
+    request_id = uuid.uuid4().hex
+    entry = _queue_entry(monkeypatch, session, request_id)
+
+    prompt_task = asyncio.create_task(adapter._send_exec_approval_prompt(_undelivered_prompt(session, request_id)))
+    await asyncio.wait_for(started.wait(), 5)
+    repost_task = asyncio.create_task(adapter._repost_undelivered_exec_approval_cards())
+    await asyncio.wait_for(repost_card_started.wait(), 5)
+    release.set()
+    await asyncio.wait_for(prompt_task, 5)
+    assert entry.undelivered == "Not connected, then send_path_degraded"
+    release_repost_card.set()
+    await asyncio.wait_for(repost_task, 5)
+
+    assert card_calls == [1, 1]
+    assert entry.undelivered is not None
+    assert entry.shown is False
+    await adapter.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_repost_that_times_out_leaves_the_request_never_shown(monkeypatch):
+    # The card and its text fallback fail, so the request is marked never shown before any repost. The reconnect
+    # repost's card send then hangs past the window. The card may or may not have reached Matt, so the repost
+    # cannot prove it was shown: the never-shown mark must stay, and /stop must not read as a plain withdrawal.
+    from gateway.platforms.base import SendResult
+
+    adapter = DiscordAdapter(PlatformConfig(enabled=True, token="test-token",
+                                            extra={"approval_card_confirm_timeout": 0.2}))
+    created: list[_FakeBot] = []
+    await _connect(adapter, monkeypatch, created)
+    monkeypatch.setattr(adapter, "_EXEC_APPROVAL_REPOST_BACKOFF", (0.0,))
+    monkeypatch.setattr(adapter, "_send_exec_approval_text_fallback", AsyncMock(return_value="send_path_degraded"))
+    card_calls = []
+
+    async def card(_prompt, _view):
+        card_calls.append(1)
+        if len(card_calls) == 1:
+            return SendResult(success=False, error="Not connected")  # the card
+        await asyncio.Event().wait()  # the repost hangs past the window
+    monkeypatch.setattr(adapter, "_send_exec_approval_card", card)
+    session = "agent:other:discord:555"
+    request_id = uuid.uuid4().hex
+    entry = _queue_entry(monkeypatch, session, request_id)
+
+    await adapter._send_exec_approval_prompt(_undelivered_prompt(session, request_id))
+    assert entry.undelivered == "Not connected, then send_path_degraded"
+    # The card-failure withdrawal shares the window and would fire mid-repost. This test pins the repost timeout.
+    adapter._exec_approval_views[request_id].undelivered_withdrawal.cancel()
+    await asyncio.wait_for(adapter._repost_undelivered_exec_approval_cards(), 5)
+
+    assert card_calls == [1, 1]
+    assert entry.undelivered is not None
+    assert entry.shown is False
     await adapter.disconnect()

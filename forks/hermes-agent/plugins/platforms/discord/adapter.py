@@ -223,6 +223,7 @@ _DISCORD_NONCONVERSATIONAL_METADATA_KEYS = frozenset({
 })
 _DISCORD_IMAGE_REDIRECT_STATUSES = {301, 302, 303, 307, 308}
 _DISCORD_IMAGE_MAX_REDIRECTS = 10
+_CARD_CONFIRM_TIMEOUT_ERROR = "approval card send not confirmed in time"
 # Upgrade-bridge fallback: recognizes status bumps from gateway versions pre-dating
 # metadata["non_conversational"]. New emitters must set the metadata flag, not add regexes.
 _DISCORD_NONCONVERSATIONAL_HISTORY_MESSAGE_PATTERNS = (
@@ -5972,7 +5973,7 @@ class DiscordAdapter(DiscordAuthorizationMixin, DiscordMediaMixin, DiscordThread
         try:
             result = await asyncio.wait_for(self._send_exec_approval_card(prompt, view), window)
         except TimeoutError:
-            result = SendResult(success=False, error="approval card send not confirmed in time")
+            result = SendResult(success=False, error=_CARD_CONFIRM_TIMEOUT_ERROR)
         from gateway.relay.egress import declined_send
         if result.success or not view.request_id or declined_send(result):
             return result
@@ -5985,12 +5986,18 @@ class DiscordAdapter(DiscordAuthorizationMixin, DiscordMediaMixin, DiscordThread
         self._background_tasks.add(task)
         task.add_done_callback(self._background_tasks.discard)
         task.add_done_callback(_consume_background_task_result)
-        await self._send_exec_approval_text_fallback(prompt)
+        text_failure = await self._send_exec_approval_text_fallback(prompt)
+        if text_failure is not None and result.error != _CARD_CONFIRM_TIMEOUT_ERROR:
+            # Card and text fallback both failed: no surface shows the prompt, so a /stop must say so. A reconnect
+            # repost that already showed the card wins: its request is not marked, even if this fallback fails later.
+            from tools.approval import mark_gateway_approval_undelivered
+            mark_gateway_approval_undelivered(prompt.session_key, view.request_id, f"{result.error}, then {text_failure}")
         return SendResult(success=False, error=result.error, raw_response={"approval_text_fallback_posted": True})
 
-    async def _send_exec_approval_text_fallback(self, prompt: ExecApprovalPrompt) -> None:
-        """Post the plain-text approval prompt in the approval's own thread. Never raises. The request is withdrawn
-        after approval_card_confirm_timeout, so the prompt states that window, not approvals.timeout."""
+    async def _send_exec_approval_text_fallback(self, prompt: ExecApprovalPrompt) -> str | None:
+        """Post the plain-text approval prompt in the approval's own thread. Never raises. Returns ``None`` when the
+        text prompt was delivered, else the failure reason. The request is withdrawn after approval_card_confirm_timeout,
+        so the prompt states that window, not approvals.timeout."""
         from gateway.run_turn_runner_approval_text import approval_text_prompt
         actions = set(prompt.choices)
         window = _read_approval_card_confirm_timeout(getattr(self.config, "extra", None))
@@ -6000,10 +6007,14 @@ class DiscordAdapter(DiscordAuthorizationMixin, DiscordMediaMixin, DiscordThread
                                     smart_denied=prompt.smart_denied, deadline_s=math.ceil(window))
         try:
             metadata = {**(prompt.metadata or {}), "is_approval_prompt": True}
-            await self.send(prompt.chat_id, text, metadata=metadata)
-        except Exception:
+            result = await self.send(prompt.chat_id, text, metadata=metadata)
+            if not getattr(result, "success", False):
+                return getattr(result, "error", None) or "text prompt send failed"
+        except Exception as exc:
             logger.warning("[%s] approval text prompt send failed: request_id=%s", self.name, prompt.request_id,
                            exc_info=True)
+            return f"{type(exc).__name__}"
+        return None
 
     @staticmethod
     async def _withdraw_undelivered_approval(session_key: str, request_id: str, window: float) -> None:
@@ -6016,7 +6027,10 @@ class DiscordAdapter(DiscordAuthorizationMixin, DiscordMediaMixin, DiscordThread
 
     async def _repost_undelivered_exec_approval_cards(self) -> None:
         """After a reconnect, post each still-pending card that never reached Discord again in its own thread."""
-        from tools.approval import list_gateway_approval_authority
+        from tools.approval import (
+            clear_gateway_approval_undelivered,
+            list_gateway_approval_authority,
+        )
         window = _read_approval_card_confirm_timeout(getattr(self.config, "extra", None))
         for request_id, view in list(self._exec_approval_views.items()):
             prompt = getattr(view, "prompt", None)
@@ -6027,28 +6041,39 @@ class DiscordAdapter(DiscordAuthorizationMixin, DiscordMediaMixin, DiscordThread
             if request_id not in pending:
                 continue
             view.stop()
+            loop_view = view
             for attempt, delay in enumerate(self._EXEC_APPROVAL_REPOST_BACKOFF):
                 await asyncio.sleep(delay)
                 if request_id not in {a.get("request_id") for a in list_gateway_approval_authority(prompt.session_key)}:
                     break
+                # A later reconnect repost registered its own live view: this loop no longer owns the request.
+                # A finished or dropped view is not an owner, so an unrelated card's registration cannot stop a repost.
+                current = self._exec_approval_views.get(request_id)
+                if current is not None and current is not loop_view and not current.is_finished():
+                    break
                 replacement = self._new_exec_approval_view(prompt)
+                loop_view = replacement
+                replacement.undelivered_withdrawal = getattr(view, "undelivered_withdrawal", None)
                 try:
                     result = await asyncio.wait_for(self._send_exec_approval_card(prompt, replacement), window)
                 except TimeoutError:
                     # Known limit: Discord may have posted the card before the cancel; its buttons then stay live.
-                    # Treat it as maybe delivered and never post a second card.
+                    # Treat it as maybe delivered and never post a second card. The never-shown mark stays: delivery is unconfirmed.
                     logger.warning("[%s] approval card re-post %d not confirmed in time: request_id=%s",
                                    self.name, attempt + 1, request_id)
+                    replacement.undelivered = False
                     break
                 if result.success:
                     # The card is delivered now: it, not the text prompt's deadline, ends the wait.
                     withdrawal = getattr(view, "undelivered_withdrawal", None)
                     if withdrawal is not None:
                         withdrawal.cancel()
+                    view.undelivered = False
+                    replacement.undelivered = False
+                    clear_gateway_approval_undelivered(prompt.session_key, request_id)
                     break
-                # The replacement is the registered view now: keep it retryable on a later reconnect.
                 replacement.undelivered = True
-                replacement.undelivered_withdrawal = getattr(view, "undelivered_withdrawal", None)
+                # The replacement is the registered view now: keep it retryable on a later reconnect.
                 logger.warning("[%s] approval card re-post %d failed: request_id=%s: %s",
                                self.name, attempt + 1, request_id, result.error)
 

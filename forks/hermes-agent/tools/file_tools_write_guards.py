@@ -307,7 +307,7 @@ def _request_protected_instruction_approval(reasons: list[str], task_id: str = "
     try:
         import tools.approval as _approval
         from tools.approval_context import _fire_approval_hook, get_current_session_key
-        from tools.approval_gateway_wait import _await_gateway_decision
+        from tools.approval_gateway_wait import _await_gateway_decision, withdrawn_reason
         from tools.approval_prompt import prompt_dangerous_approval
     except Exception:
         return blocked.format(why=_APPROVAL_UNAVAILABLE)
@@ -338,7 +338,7 @@ def _request_protected_instruction_approval(reasons: list[str], task_id: str = "
         if decision.get("notify_failed"):
             return blocked.format(why="requires approval but the approval request could not be delivered.")
         if decision.get("cancelled"):
-            return blocked.format(why=f"approval was withdrawn before the user answered ({decision['cancelled']}).")
+            return blocked.format(why=withdrawn_reason(decision["cancelled"]) + ".")
         choice, timed = decision.get("choice"), not decision.get("resolved")
     else:
         # CLI surface: per-thread approval callback (prompt_toolkit panel).

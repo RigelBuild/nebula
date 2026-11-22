@@ -129,8 +129,9 @@ func TestRootChecksFixHintCoversEveryFailure(t *testing.T) {
 // TestP0SkipNonUrgentRefusedBeforeRootChecks checks that checkSkip refuses a p0 reason whose Linear issue is not
 // Urgent before any root-checks run, so the slow checks never start for a skip that cannot push.
 func TestP0SkipNonUrgentRefusedBeforeRootChecks(t *testing.T) {
+	t.Parallel()
 	fake := &fakeRootChecks{}
-	f := fixtureRepo(t)
+	f := parallelFixtureRepo(t)
 	f.repo.profile.SkipChecks = exampleRootChecks
 	f.repo.rootChecks = fake.run
 	f.repo.lookupLinearPriority = func(context.Context, string) (int, string, bool, error) { return 2, "started", true, nil }

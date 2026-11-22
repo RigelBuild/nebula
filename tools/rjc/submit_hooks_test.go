@@ -40,7 +40,8 @@ func TestSubmitHooksBeforePush(t *testing.T) {
 }
 
 func TestSubmitRigelProfileSkipsAbsentHooks(t *testing.T) {
-	f := fixtureRepo(t)
+	t.Parallel()
+	f := parallelFixtureRepo(t)
 	profile, err := ProfileFor(loadExampleConfig(t), "https://github.com/example/factory.git")
 	if err != nil {
 		t.Fatal(err)
@@ -79,7 +80,8 @@ func TestSubmitRigelProfileSkipsAbsentHooks(t *testing.T) {
 }
 
 func TestSubmitJJVineProfileSkipsAbsentHooks(t *testing.T) {
-	f := fixtureRepo(t)
+	t.Parallel()
+	f := parallelFixtureRepo(t)
 	profile, err := ProfileFor(loadExampleConfig(t), "https://github.com/example/jj-vine.git")
 	if err != nil {
 		t.Fatal(err)

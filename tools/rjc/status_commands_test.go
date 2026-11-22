@@ -7,7 +7,8 @@ import (
 )
 
 func TestStatusCLIEmptyJSON(t *testing.T) {
-	f := fixtureRepo(t)
+	t.Parallel()
+	f := parallelFixtureRepo(t)
 	var out, errOut bytes.Buffer
 	code := run(f.ctx, []string{"status", "--all", "--repo", "example/app", "-o", "json"}, &out, &errOut)
 	if code != 0 {

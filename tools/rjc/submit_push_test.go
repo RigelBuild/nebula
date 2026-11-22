@@ -154,7 +154,8 @@ func TestPushCancelledHeadWaitIsInterruptFailure(t *testing.T) {
 }
 
 func TestPushMetadataErrorIsNotRetried(t *testing.T) {
-	f := fixtureRepo(t)
+	t.Parallel()
+	f := parallelFixtureRepo(t)
 	reads := &atomic.Int32{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		reads.Add(1)

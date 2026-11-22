@@ -43,7 +43,8 @@ func trackingFixture(t *testing.T, mirror string, conflict bool) *fixture {
 }
 
 func TestUpstreamSyncRejectsNonTracking(t *testing.T) {
-	f := fixtureRepo(t)
+	t.Parallel()
+	f := parallelFixtureRepo(t)
 	for _, posture := range []ForkPosture{forkNone, "owned"} {
 		f.repo.profile.Posture = posture
 		_, err := f.repo.upstreamSync(f.ctx, upstreamSyncOptions{issue: "EX-1"}, io.Discard)

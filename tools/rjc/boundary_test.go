@@ -10,7 +10,8 @@ import (
 )
 
 func TestMovedForeignParentRefusesBeforeFirstSubmit(t *testing.T) {
-	f := fixtureRepo(t)
+	t.Parallel()
+	f := parallelFixtureRepo(t)
 	parent := f.new(t, "EX-1", "feat(rjc): preserve the selected parent", "")
 	foreign := strings.Replace(parent, "test-lane/", "other-lane/", 1)
 	jjTest(t, f.repo, "bookmark", "rename", parent, foreign)

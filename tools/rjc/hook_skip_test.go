@@ -63,6 +63,7 @@ func TestSkipAdmissionHistory(t *testing.T) {
 }
 
 func TestP0SkipRequiresUrgentIssue(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name      string
 		priority  int
@@ -80,7 +81,7 @@ func TestP0SkipRequiresUrgentIssue(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			f := fixtureRepo(t)
+			f := parallelFixtureRepo(t)
 			bookmark := f.new(t, "EX-1", "feat(rjc): p0 skip test", "")
 			f.commit(t, "skip.txt")
 			jjTest(t, f.repo, "bookmark", "move", bookmark, "--to", "@-")
@@ -125,6 +126,7 @@ func TestP0SkipRequiresUrgentIssue(t *testing.T) {
 }
 
 func TestP0SkipReadyRechecksUrgentIssue(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name      string
 		priority  int
@@ -140,7 +142,7 @@ func TestP0SkipReadyRechecksUrgentIssue(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			f := fixtureRepo(t)
+			f := parallelFixtureRepo(t)
 			bookmark := f.new(t, "EX-1", "feat(rjc): p0 ready recheck", "")
 			f.commit(t, "skip.txt")
 			jjTest(t, f.repo, "bookmark", "move", bookmark, "--to", "@-")
@@ -322,9 +324,10 @@ func TestSkipReasonGrammar(t *testing.T) {
 }
 
 func TestFreeTextSkipNeedsNoFailedRun(t *testing.T) {
+	t.Parallel()
 	for _, reason := range []string{"flaky runner", "artifact:EX-1"} {
 		t.Run(reason, func(t *testing.T) {
-			f := fixtureRepo(t)
+			f := parallelFixtureRepo(t)
 			bookmark := f.new(t, "EX-1", "feat(rjc): free text skip", "")
 			f.commit(t, "skip.txt")
 			jjTest(t, f.repo, "bookmark", "move", bookmark, "--to", "@-")
@@ -350,6 +353,7 @@ func TestFreeTextSkipNeedsNoFailedRun(t *testing.T) {
 }
 
 func TestSkipOnReadyPRBypassRules(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name    string
 		skip    string
@@ -362,7 +366,7 @@ func TestSkipOnReadyPRBypassRules(t *testing.T) {
 		{name: "skip-target refused", targets: []SkippedTarget{{Target: "a:test", Reason: "EX-1"}}, refused: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			f := fixtureRepo(t)
+			f := parallelFixtureRepo(t)
 			bookmark := f.new(t, "EX-1", "feat(rjc): ready PR bypass", "")
 			f.commit(t, "feature.txt")
 			opt := submitOptions{bookmark: bookmark, title: "feat(rjc): ready PR bypass", bodyFile: f.bodyFile}
@@ -439,7 +443,8 @@ func TestSkipCoversUpperHeadsAboveFailedLower(t *testing.T) {
 }
 
 func TestSkipRefusesUpperHeadWhenLowerMovedPastFailure(t *testing.T) {
-	f := fixtureRepo(t)
+	t.Parallel()
+	f := parallelFixtureRepo(t)
 	stubIssueState(t, f)
 	lower := f.new(t, "EX-1", "feat(rjc): moved lower failure", "")
 	f.commit(t, "lower.txt")
@@ -471,7 +476,8 @@ func TestSkipRefusesUpperHeadWhenLowerMovedPastFailure(t *testing.T) {
 }
 
 func TestSkipRefusesUpperHeadNotDescendingFromFailedTip(t *testing.T) {
-	f := fixtureRepo(t)
+	t.Parallel()
+	f := parallelFixtureRepo(t)
 	stubIssueState(t, f)
 	lower := f.new(t, "EX-1", "feat(rjc): failed lower tip", "")
 	f.commit(t, "lower.txt")
@@ -505,7 +511,8 @@ func TestSkipRefusesUpperHeadNotDescendingFromFailedTip(t *testing.T) {
 }
 
 func TestSkipCoverUsesReviewFixParentTip(t *testing.T) {
-	f := fixtureRepo(t)
+	t.Parallel()
+	f := parallelFixtureRepo(t)
 	stubIssueState(t, f)
 	parent := f.new(t, "EX-1", "feat(rjc): review fix parent", "")
 	f.commit(t, "parent.txt")
@@ -551,7 +558,8 @@ func TestSkipCoverUsesReviewFixParentTip(t *testing.T) {
 }
 
 func TestSkipRefusesUpperHeadWithDifferentHookConfig(t *testing.T) {
-	f := fixtureRepo(t)
+	t.Parallel()
+	f := parallelFixtureRepo(t)
 	stubIssueState(t, f)
 	lower := f.new(t, "EX-1", "feat(rjc): hook config mismatch", "")
 	f.commit(t, "lower.txt")
@@ -588,7 +596,8 @@ func TestSkipRefusesUpperHeadWithDifferentHookConfig(t *testing.T) {
 }
 
 func TestSkipKeepsUpperHeadOwnFailedRun(t *testing.T) {
-	f := fixtureRepo(t)
+	t.Parallel()
+	f := parallelFixtureRepo(t)
 	stubIssueState(t, f)
 	lower := f.new(t, "EX-1", "feat(rjc): upper own run kept", "")
 	f.commit(t, "lower.txt")

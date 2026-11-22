@@ -54,7 +54,8 @@ func TestFailedAndSkippedRunsRetry(t *testing.T) {
 }
 
 func TestSkipRejectsStaleIdentity(t *testing.T) {
-	f := fixtureRepo(t)
+	t.Parallel()
+	f := parallelFixtureRepo(t)
 	f.commit(t, "feature.txt")
 	head := jjTest(t, f.repo, "log", "--no-graph", "-r", "@-", "-T", "commit_id")
 	line := []Change{{Bookmark: "test-lane/feature", Tip: head, Base: mainOrigin, Owned: true}}

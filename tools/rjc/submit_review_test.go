@@ -63,7 +63,8 @@ func TestSubmitReviewSkipsExistingLabel(t *testing.T) {
 }
 
 func TestSubmitReviewDoesNotLabelStackSibling(t *testing.T) {
-	f := fixtureRepo(t)
+	t.Parallel()
+	f := parallelFixtureRepo(t)
 	parent := f.new(t, "EX-1", reviewSubmitTitle, "")
 	f.commit(t, "parent-review.txt")
 	if err := f.repo.submit(f.ctx, submitOptions{bookmark: parent, title: reviewSubmitTitle, bodyFile: f.bodyFile}, f, io.Discard); err != nil {
@@ -261,7 +262,8 @@ func TestSubmitUpstreamRecordReadFailureNamesPushedPR(t *testing.T) {
 }
 
 func TestSubmitDesignOnlyPRAddsDesignLabel(t *testing.T) {
-	f := fixtureRepo(t)
+	t.Parallel()
+	f := parallelFixtureRepo(t)
 	bookmark := f.new(t, "EX-1", reviewSubmitTitle, "")
 	f.commit(t, "docs/designs/record.md")
 	if err := f.repo.submit(f.ctx, submitOptions{bookmark: bookmark, title: reviewSubmitTitle, bodyFile: f.bodyFile}, f, io.Discard); err != nil {
@@ -274,7 +276,8 @@ func TestSubmitDesignOnlyPRAddsDesignLabel(t *testing.T) {
 }
 
 func TestSubmitMixedDesignPRAddsNoDesignLabel(t *testing.T) {
-	f := fixtureRepo(t)
+	t.Parallel()
+	f := parallelFixtureRepo(t)
 	bookmark := f.new(t, "EX-1", reviewSubmitTitle, "")
 	f.commit(t, "docs/designs/record.md")
 	f.commit(t, "tools/y.go")
@@ -287,7 +290,8 @@ func TestSubmitMixedDesignPRAddsNoDesignLabel(t *testing.T) {
 }
 
 func TestSubmitDesignLabelSkipsExistingLabel(t *testing.T) {
-	f := fixtureRepo(t)
+	t.Parallel()
+	f := parallelFixtureRepo(t)
 	bookmark := f.new(t, "EX-1", reviewSubmitTitle, "")
 	f.commit(t, "docs/designs/record.md")
 	opt := submitOptions{bookmark: bookmark, title: reviewSubmitTitle, bodyFile: f.bodyFile}
@@ -309,7 +313,8 @@ func TestSubmitDesignLabelSkipsExistingLabel(t *testing.T) {
 }
 
 func TestSubmitDesignRenameFromCodeAddsNoDesignLabel(t *testing.T) {
-	f := fixtureRepo(t)
+	t.Parallel()
+	f := parallelFixtureRepo(t)
 	writeTestFile(t, filepath.Join(f.repo.root, "tools/y.go"), "package tools\n")
 	jjTest(t, f.repo, "commit", "-m", "chore: add tool file")
 	jjTest(t, f.repo, "bookmark", "move", "main", "--to", "@-")
@@ -350,7 +355,8 @@ func designStackFixture(t *testing.T, f *fixture, lowerPath, upperPath string) (
 }
 
 func TestSubmitDesignLabelFailureKeepsStackPushing(t *testing.T) {
-	f := fixtureRepo(t)
+	t.Parallel()
+	f := parallelFixtureRepo(t)
 	lower, upper := designStackFixture(t, f, "docs/designs/parent.md", "docs/designs/child.md")
 	f.labelStatus = http.StatusInternalServerError
 
@@ -361,7 +367,8 @@ func TestSubmitDesignLabelFailureKeepsStackPushing(t *testing.T) {
 }
 
 func TestSubmitDesignLabelOnlyOnDesignOnlyUpperPR(t *testing.T) {
-	f := fixtureRepo(t)
+	t.Parallel()
+	f := parallelFixtureRepo(t)
 	lower, upper := designStackFixture(t, f, "tools/parent.go", "docs/designs/child.md")
 
 	code, output := runReviewSubmit(t, f, upper, false, false)
@@ -372,7 +379,8 @@ func TestSubmitDesignLabelOnlyOnDesignOnlyUpperPR(t *testing.T) {
 }
 
 func TestSubmitDesignLabelNeedsRepoOptIn(t *testing.T) {
-	f := fixtureRepo(t)
+	t.Parallel()
+	f := parallelFixtureRepo(t)
 	bookmark := f.new(t, "EX-1", reviewSubmitTitle, "")
 	f.commit(t, "docs/designs/record.md")
 	f.repo.profile.DesignLabel = false

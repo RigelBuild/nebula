@@ -94,7 +94,8 @@ func assertRetargetPostPatchFailure(t *testing.T, err error) {
 	}
 }
 func TestRetargetSelectionRefusesBeforePatch(t *testing.T) {
-	f := fixtureRepo(t)
+	t.Parallel()
+	f := parallelFixtureRepo(t)
 	bookmark := f.new(t, "EX-1", "feat(rjc): selection before retarget", "")
 	f.commit(t, "work.txt")
 	jjTest(t, f.repo, "bookmark", "move", bookmark, "--to", "@-")
@@ -110,7 +111,8 @@ func TestRetargetSelectionRefusesBeforePatch(t *testing.T) {
 }
 
 func TestRestoreRetargetFailureIsToolFailure(t *testing.T) {
-	f := fixtureRepo(t)
+	t.Parallel()
+	f := parallelFixtureRepo(t)
 	bookmark := f.new(t, "EX-1", "feat(rjc): failed base restore", "")
 	f.commit(t, "work.txt")
 	jjTest(t, f.repo, "bookmark", "move", bookmark, "--to", "@-")
@@ -141,7 +143,8 @@ func TestRestoreRetargetFailureIsToolFailure(t *testing.T) {
 }
 
 func TestRetargetRestoredBaseSkipsReview(t *testing.T) {
-	f := fixtureRepo(t)
+	t.Parallel()
+	f := parallelFixtureRepo(t)
 	bookmark := f.new(t, "EX-1", "feat(rjc): restored base", "")
 	f.commit(t, "work.txt")
 	jjTest(t, f.repo, "bookmark", "move", bookmark, "--to", "@-")
@@ -172,7 +175,8 @@ func (e failedAfterPush) Submit(ctx context.Context, bookmark, body string, noHo
 }
 
 func TestPushErrorAfterHeadMovesRequestsReview(t *testing.T) {
-	f := fixtureRepo(t)
+	t.Parallel()
+	f := parallelFixtureRepo(t)
 	bookmark := f.new(t, "EX-1", "feat(rjc): review failed push", "")
 	jjTest(t, f.repo, "git", "push", "--bookmark", bookmark)
 	old := jjTest(t, f.repo, "log", "--no-graph", "-r", quoteRev(bookmark), "-T", "commit_id")
@@ -191,7 +195,8 @@ func TestPushErrorAfterHeadMovesRequestsReview(t *testing.T) {
 }
 
 func TestRetargetReadbackFailureKeepsTrunk(t *testing.T) {
-	f := fixtureRepo(t)
+	t.Parallel()
+	f := parallelFixtureRepo(t)
 	bookmark := f.new(t, "EX-1", "feat(rjc): failed push readback", "")
 	jjTest(t, f.repo, "git", "push", "--bookmark", bookmark)
 	old := jjTest(t, f.repo, "log", "--no-graph", "-r", quoteRev(bookmark), "-T", "commit_id")
@@ -225,7 +230,8 @@ func TestRetargetReadbackFailureKeepsTrunk(t *testing.T) {
 }
 
 func TestRetargetEarlyExitRequestsReview(t *testing.T) {
-	f := fixtureRepo(t)
+	t.Parallel()
+	f := parallelFixtureRepo(t)
 	bookmark := f.new(t, "EX-1", "feat(rjc): review early exit", "")
 	jjTest(t, f.repo, "git", "push", "--bookmark", bookmark)
 	old := jjTest(t, f.repo, "log", "--no-graph", "-r", quoteRev(bookmark), "-T", "commit_id")
@@ -244,9 +250,10 @@ func TestRetargetEarlyExitRequestsReview(t *testing.T) {
 }
 
 func TestRetargetAlreadyOnTrunkRequestsReview(t *testing.T) {
+	t.Parallel()
 	for _, failAfterPush := range []bool{false, true} {
 		t.Run(map[bool]string{false: "success", true: "push-error"}[failAfterPush], func(t *testing.T) {
-			f := fixtureRepo(t)
+			f := parallelFixtureRepo(t)
 			bookmark := f.new(t, "EX-1", "feat(rjc): review moved head", "")
 			jjTest(t, f.repo, "git", "push", "--bookmark", bookmark)
 			old := jjTest(t, f.repo, "log", "--no-graph", "-r", quoteRev(bookmark), "-T", "commit_id")
@@ -304,7 +311,8 @@ func reviewRequestCount(calls []string) int {
 }
 
 func TestRetargetPatchAppliedBeforeError(t *testing.T) {
-	f := fixtureRepo(t)
+	t.Parallel()
+	f := parallelFixtureRepo(t)
 	bookmark := f.new(t, "EX-1", "feat(rjc): ambiguous patch", "")
 	f.commit(t, "work.txt")
 	jjTest(t, f.repo, "bookmark", "move", bookmark, "--to", "@-")

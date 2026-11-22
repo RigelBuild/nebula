@@ -81,6 +81,7 @@ func TestLocalHookRunnerPhases(t *testing.T) {
 }
 
 func TestHookIdentityConfigTable(t *testing.T) {
+	t.Parallel()
 	want := map[string]string{
 		"hk.pkl":       "hk",
 		"lefthook.yml": "lefthook", "lefthook.yaml": "lefthook", "lefthook.json": "lefthook", "lefthook.jsonc": "lefthook", "lefthook.toml": "lefthook",
@@ -94,7 +95,7 @@ func TestHookIdentityConfigTable(t *testing.T) {
 	}
 	for _, config := range hookConfigs {
 		t.Run(config.path, func(t *testing.T) {
-			f := fixtureRepo(t)
+			f := parallelFixtureRepo(t)
 			f.commit(t, config.path)
 			base, head := sshRange(t, f)
 			rec, got, err := f.repo.hookIdentityConfig(f.ctx, Change{Base: base, Tip: head})
@@ -106,7 +107,8 @@ func TestHookIdentityConfigTable(t *testing.T) {
 }
 
 func TestHookIdentityConfigPrecedence(t *testing.T) {
-	f := fixtureRepo(t)
+	t.Parallel()
+	f := parallelFixtureRepo(t)
 	f.commit(t, "lefthook.yml")
 	f.commit(t, "hk.pkl")
 	base, head := sshRange(t, f)

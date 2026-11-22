@@ -251,7 +251,8 @@ func TestSubmitRetargetRefusesUnsafeLocalHooksBeforeMutation(t *testing.T) {
 }
 
 func TestSubmitRetargetRefusesForeignIntermediateBookmarkBeforeMutation(t *testing.T) {
-	f := fixtureRepo(t)
+	t.Parallel()
+	f := parallelFixtureRepo(t)
 	installFastTrunk(t, f)
 	bookmark := f.new(t, "EX-1", "feat(rjc): rebuild submitted change", "")
 	f.commit(t, "old.txt")

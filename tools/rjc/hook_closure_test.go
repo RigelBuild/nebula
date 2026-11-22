@@ -63,7 +63,8 @@ func TestInheritRefusesGateClosureChange(t *testing.T) {
 
 // M fail-closed: if go list cannot derive the closure, inheritance is refused, not allowed through.
 func TestInheritRefusesWhenClosureUnderivable(t *testing.T) {
-	f := fixtureRepo(t)
+	t.Parallel()
+	f := parallelFixtureRepo(t)
 	stubIssueState(t, f)
 	// No go.mod and no gate runner, so go list fails at the lower tip.
 	store, line := inheritFixtureNoModule(t, f, "docs/readme.txt")

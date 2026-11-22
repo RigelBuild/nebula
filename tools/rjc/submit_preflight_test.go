@@ -172,7 +172,8 @@ func testAdoptionRefusalLeavesHistory(t *testing.T, f *fixture, kind string) {
 }
 
 func TestSubmitPreflightSelectsTargetWithForeignAuthor(t *testing.T) {
-	f := fixtureRepo(t)
+	t.Parallel()
+	f := parallelFixtureRepo(t)
 	title := "feat(rjc): retain target selection"
 	bookmark := f.new(t, "EX-1", title, "")
 	jjTest(t, f.repo, "config", "set", "--repo", "user.email", "other@example.com")

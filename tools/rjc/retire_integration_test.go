@@ -12,7 +12,8 @@ import (
 )
 
 func TestRetireDeletesOnlySelectedBookmark(t *testing.T) {
-	f := fixtureRepo(t)
+	t.Parallel()
+	f := parallelFixtureRepo(t)
 	b := f.new(t, "EX-1", "feat(rjc): retirement", "")
 	jjTest(t, f.repo, "git", "push", "--bookmark", b)
 	entry := LedgerEntry{Repo: f.repo.profile.Name, PR: 1, Bookmark: b, Codename: f.repo.codename}
@@ -233,7 +234,8 @@ func TestRetireBranchGoneSkipsPush(t *testing.T) {
 }
 
 func TestRetireNoPRRefusesWhenPRExists(t *testing.T) {
-	f := fixtureRepo(t)
+	t.Parallel()
+	f := parallelFixtureRepo(t)
 	b := f.new(t, "EX-1", "feat(rjc): retirement", "")
 	f.prs[b] = 1
 	err := f.repo.retire(f.ctx, retireOptions{bookmark: b, noPR: true}, nil)

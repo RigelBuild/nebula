@@ -100,7 +100,8 @@ func TestTrackingTrunk(t *testing.T) {
 }
 
 func TestNewRejectsClosedForkParent(t *testing.T) {
-	f := fixtureRepo(t)
+	t.Parallel()
+	f := parallelFixtureRepo(t)
 	profile, err := ProfileFor(loadExampleConfig(t), "https://github.com/example/tracked-fork")
 	if err != nil {
 		t.Fatal(err)

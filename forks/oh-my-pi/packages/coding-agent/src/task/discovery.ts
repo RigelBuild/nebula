@@ -61,7 +61,10 @@ async function loadAgentsFromDir({ dir, source, ignoreModel }: AgentDirectory): 
 				.readFile(filePath, "utf-8")
 				.then(content => {
 					const agent = parseAgent(filePath, content, source, "warn");
-					if (ignoreModel) agent.model = undefined;
+					if (ignoreModel) {
+						agent.model = undefined;
+						agent.skills = undefined;
+					}
 					return agent;
 				})
 				.catch(error => {

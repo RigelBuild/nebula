@@ -15731,7 +15731,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		const providerLabel = provider === "anthropic" ? "Claude" : "Codex";
 		const source = provider === "anthropic" ? "claude-auto-reset" : "codex-auto-reset";
 		const windowSettings = resetWindowSettings[provider];
-		const keys = [
+		const allKeys = [
 			...new Set(
 				actions.flatMap(action =>
 					(action.window ? [action.window] : (["5h", "weekly"] as const)).flatMap(
@@ -15740,7 +15740,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 				),
 			),
 		];
-		const keyList = keys.map(key => key.id).join(", ");
+		const keyList = allKeys.map(key => key.id).join(", ");
 		const runner = this.#extensionRunner;
 		if (!runner?.hasUI() || !this.#interactivePrompts) {
 			if (!coordinator.notifiedKeys.has(actions[0].attemptKey)) {
@@ -15756,6 +15756,16 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		// Only an action an operator approval can match is offered: any other answer of "Yes" would spend nothing.
 		const offered = actions.filter(action => this.#matchingApproval(provider, action, coordinator) !== undefined);
 		if (offered.length === 0) return [];
+		const keys = [
+			...new Set(
+				offered.flatMap(action =>
+					(action.window ? [action.window] : (["5h", "weekly"] as const)).flatMap(
+						window => windowSettings[window] ?? [],
+					),
+				),
+			),
+		];
+		const offeredKeyList = keys.map(key => key.id).join(", ");
 
 		const lines = offered.map(action => {
 			if (!("program" in action)) {
@@ -15779,8 +15789,8 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 				: `Spend ${offered.length} saved ${providerLabel} rate-limit resets?\n${lines.join("\n")}`;
 		try {
 			const choice = await runner.getUIContext().select(question, [
-				{ label: "Yes", description: `Redeem now and set ${keyList} to yes.` },
-				{ label: "No", description: `Do not redeem, and set ${keyList} to no.` },
+				{ label: "Yes", description: `Redeem now and set ${offeredKeyList} to yes.` },
+				{ label: "No", description: `Do not redeem, and set ${offeredKeyList} to no.` },
 			]);
 			if (choice === "Yes" || choice === "No") {
 				for (const key of keys) {

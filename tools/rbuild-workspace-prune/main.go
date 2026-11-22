@@ -22,15 +22,42 @@ const (
 	pruneStagePrefix = ".prune-"
 )
 
-// options holds the parsed settings for one prune run.
+// options holds settings for one prune root.
 type options struct {
 	root    string
+	pattern string
 	maxIdle time.Duration
 	procDir string
 	dryRun  bool
 	home    bool                         // prunes the fleet home tree (see home.go) instead of seat workspaces
 	walk    homeWalk                     // bounds the home idle walk; the zero value uses the defaults
 	readCwd func(string) (string, error) // reads one cwd link; tests substitute it
+}
+
+type rootSpec struct {
+	dir     string
+	pattern string
+}
+
+type rootFlags []rootSpec
+
+func (f *rootFlags) String() string { return "" }
+
+func (f *rootFlags) Set(value string) error {
+	dir, pattern, hasPattern := strings.Cut(value, "=")
+	if dir == "" {
+		return errors.New("--root requires a directory")
+	}
+	if hasPattern {
+		if pattern == "" || filepath.IsAbs(pattern) || strings.HasPrefix(filepath.Clean(pattern), "..") {
+			return errors.New("--root glob must be a nonempty relative path")
+		}
+		if _, err := filepath.Match(pattern, ""); err != nil {
+			return fmt.Errorf("invalid --root glob: %w", err)
+		}
+	}
+	*f = append(*f, rootSpec{dir: dir, pattern: pattern})
+	return nil
 }
 
 // printer writes progress lines and keeps the first write error.
@@ -57,8 +84,9 @@ func run(args []string, stdout, stderr io.Writer) error {
 	flags := flag.NewFlagSet("rbuild-workspace-prune", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	var opts options
+	var roots rootFlags
 	var home, maxIdleText string
-	flags.StringVar(&opts.root, "root", "", "rbuild workspace root, for example $HOME/workspaces")
+	flags.Var(&roots, "root", "prune a root directory, optionally followed by =GLOB")
 	flags.StringVar(&home, "home", "", "rbuild home to prune instead of --root, for example $HOME")
 	flags.StringVar(&maxIdleText, "max-idle", defaultMaxIdle.String(), "remove workspaces untouched for longer than this")
 	flags.StringVar(&opts.procDir, "proc", "/proc", "process table checked for busy workspaces")
@@ -69,7 +97,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	if flags.NArg() != 0 {
 		return errors.New("unexpected positional arguments")
 	}
-	if (opts.root == "") == (home == "") {
+	if (len(roots) == 0) == (home == "") {
 		return errors.New("exactly one of --root or --home is required")
 	}
 	maxIdle, err := time.ParseDuration(maxIdleText)
@@ -78,19 +106,24 @@ func run(args []string, stdout, stderr io.Writer) error {
 	}
 	opts.maxIdle, opts.readCwd = maxIdle, os.Readlink
 	if home != "" {
-		opts.root, opts.home = home, true
+		roots = append(roots, rootSpec{dir: home})
+		opts.home = true
 	}
-	// Resolve symlinks so cwd paths from /proc compare against the same root.
-	root, err := filepath.EvalSymlinks(opts.root)
-	if errors.Is(err, fs.ErrNotExist) {
-		// A host without an rbuild root or home has nothing to prune.
-		return nil
+	for _, spec := range roots {
+		root, err := filepath.EvalSymlinks(spec.dir)
+		if errors.Is(err, fs.ErrNotExist) {
+			// A host without one of the configured roots has nothing to prune there.
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("resolve workspace root %s: %w", spec.dir, err)
+		}
+		opts.root, opts.pattern = root, spec.pattern
+		if err := prune(opts, time.Now(), stdout); err != nil {
+			return err
+		}
 	}
-	if err != nil {
-		return fmt.Errorf("resolve workspace root: %w", err)
-	}
-	opts.root = root
-	return prune(opts, time.Now(), stdout)
+	return nil
 }
 
 // prune removes idle, unbusy workspaces under opts.root.
@@ -114,15 +147,6 @@ func prune(opts options, now time.Time, stdout io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("refusing to prune: %w", err)
 	}
-	held, err := heldSlot(root, opts, now)
-	if err != nil {
-		return fmt.Errorf("refusing to prune: %w", err)
-	}
-	if held != "" {
-		// Slot locks are host-wide, so a held lock may own any workspace.
-		_, err := fmt.Fprintf(stdout, "skip all: slot lock %s held\n", held)
-		return err
-	}
 	var removeErrs []error
 	for _, staged := range leftovers {
 		if err := pruneStaged(root, staged, busy, opts, out); err != nil {
@@ -137,10 +161,9 @@ func prune(opts options, now time.Time, stdout io.Writer) error {
 	return errors.Join(append(removeErrs, out.err)...)
 }
 
-// pruneCandidate stages one workspace, rechecks /proc and the slot locks, and
-// deletes it if it is still idle. A staged copy that became busy, or any held
-// slot lock, renames it back unless a new run recreated the old name, in which
-// case it stays staged for a later run.
+// pruneCandidate stages one candidate, rescans /proc, and deletes it if it is
+// still idle. A busy staged copy is restored unless a new run recreated its
+// original name, in which case it stays staged for a later run.
 func pruneCandidate(root *os.Root, rel string, busy []string, opts options, now time.Time, out *printer) error {
 	if isBusy(rel, busy) {
 		out.printf("skip busy %s\n", rel)
@@ -155,13 +178,6 @@ func pruneCandidate(root *os.Root, rel string, busy []string, opts options, now 
 		return fmt.Errorf("stage %s: %w", rel, err)
 	}
 	rescan, err := scanBusy(opts)
-	if err == nil {
-		var held string
-		if held, err = heldSlot(root, opts, now); err == nil && held != "" {
-			// A run took a slot after the first check; it may be about to use this tree.
-			rescan = append(rescan, staged)
-		}
-	}
 	if err != nil {
 		restoreErr := root.Rename(staged, rel)
 		return errors.Join(fmt.Errorf("refusing to prune %s: %w", rel, err), restoreErr)
@@ -191,76 +207,15 @@ func pruneStaged(root *os.Root, staged string, busy []string, opts options, out 
 		out.printf("would remove leftover %s\n", staged)
 		return nil
 	}
+	rescan, err := scanBusy(opts)
+	if err != nil {
+		return fmt.Errorf("refusing to prune leftover %s: %w", staged, err)
+	}
+	if isBusy(staged, rescan) {
+		out.printf("skip busy leftover %s\n", staged)
+		return nil
+	}
 	return removeStaged(root, staged, staged, out)
-}
-
-// staleLockAge matches rbuild's staleLockShell: a pending, ownerless or
-// unknown-state lock whose dir is older than this is stale, not held.
-const staleLockAge = 120 * time.Second
-
-// maxOwnerBytes bounds an owner file read; the file is writable by rbuild.
-const maxOwnerBytes = 256
-
-// slotLockHeld returns the held <lockDir>/slot-N lock name, or "". It mirrors
-// rbuild's staleLockShell: a "run <id> <pid>" lock is held while the pid lives,
-// a malformed run lock is not, and any other lock is held until its dir is
-// older than staleLockAge.
-func slotLockHeld(root *os.Root, lockDir, procDir string, now time.Time) (string, error) {
-	entries, err := readDirFS(root, lockDir)
-	if errors.Is(err, fs.ErrNotExist) {
-		return "", nil
-	}
-	if err != nil {
-		return "", fmt.Errorf("read slot locks: %w", err)
-	}
-	for _, entry := range entries {
-		name := entry.Name()
-		if !entry.IsDir() || !strings.HasPrefix(name, "slot-") || strings.HasSuffix(name, ".reclaim") {
-			continue
-		}
-		lock := filepath.Join(lockDir, name)
-		owner, err := readOwner(root, filepath.Join(lock, "owner"))
-		if err != nil && !errors.Is(err, fs.ErrNotExist) {
-			return "", fmt.Errorf("read owner of %s: %w", name, err)
-		}
-		fields := strings.Fields(owner)
-		if len(fields) > 0 && fields[0] == "run" {
-			if len(fields) != 3 || !isPID(fields[2]) {
-				// rbuild reclaims a malformed run lock at once.
-				continue
-			}
-			_, err = os.Stat(filepath.Join(procDir, fields[2]))
-			if err == nil {
-				return name, nil
-			}
-			if !errors.Is(err, fs.ErrNotExist) {
-				return "", fmt.Errorf("check owner pid of %s: %w", name, err)
-			}
-			continue
-		}
-		// Pending, ownerless (the dir is made before owner) or unknown state.
-		info, err := root.Stat(lock)
-		if errors.Is(err, fs.ErrNotExist) {
-			continue
-		}
-		if err != nil {
-			return "", fmt.Errorf("stat %s: %w", name, err)
-		}
-		if now.Sub(info.ModTime()) <= staleLockAge {
-			return name, nil
-		}
-	}
-	return "", nil
-}
-
-// readOwner reads at most maxOwnerBytes of a lock owner file through the root.
-func readOwner(root *os.Root, name string) (string, error) {
-	f, err := root.Open(name)
-	if err != nil {
-		return "", err
-	}
-	data, err := io.ReadAll(io.LimitReader(f, maxOwnerBytes))
-	return string(data), errors.Join(err, f.Close())
 }
 
 // removeStaged deletes name through the root and reports success under label.
@@ -309,31 +264,24 @@ func idleCandidates(root *os.Root, now time.Time, maxIdle time.Duration) ([]stri
 	return out, nil
 }
 
-// idleLongerThan reports whether the newest mtime of rel and its top-level
-// entries is older than maxIdle. A change only in deeper subdirectories is not seen.
-func idleLongerThan(root *os.Root, rel string, dir fs.DirEntry, now time.Time, maxIdle time.Duration) (bool, error) {
-	info, err := dir.Info()
-	if err != nil {
-		return false, fmt.Errorf("stat workspace %s: %w", rel, err)
-	}
-	newest := info.ModTime()
-	entries, err := readDirFS(root, rel)
-	if err != nil {
-		return false, fmt.Errorf("read workspace %s: %w", rel, err)
-	}
-	for _, entry := range entries {
-		info, err := entry.Info()
-		if errors.Is(err, fs.ErrNotExist) {
-			continue
-		}
+// idleLongerThan checks every entry in the workspace without following symlinks.
+func idleLongerThan(root *os.Root, rel string, _ fs.DirEntry, now time.Time, maxIdle time.Duration) (bool, error) {
+	idle := true
+	err := fs.WalkDir(root.FS(), filepath.ToSlash(rel), func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
-			return false, fmt.Errorf("stat %s/%s: %w", rel, entry.Name(), err)
+			return err
 		}
-		if info.ModTime().After(newest) {
-			newest = info.ModTime()
+		info, err := entry.Info()
+		if err != nil {
+			return err
 		}
-	}
-	return now.Sub(newest) > maxIdle, nil
+		if now.Sub(info.ModTime()) <= maxIdle {
+			idle = false
+			return fs.SkipAll
+		}
+		return nil
+	})
+	return idle, err
 }
 
 // stagedLeftovers returns staged seat/.prune-* directories from earlier runs

@@ -463,218 +463,101 @@ func writeSlotOwner(t *testing.T, root string, slot int, owner string) {
 	}
 }
 
-// TestPruneSlotLockStates covers each slot-lock state that decides free or held.
-func TestPruneSlotLockStates(t *testing.T) {
+func TestGlobPrune(t *testing.T) {
 	cases := []struct {
-		name    string
-		setup   func(t *testing.T, root string)
-		removed bool
-		wantErr bool
+		name, pattern, path, busy string
+		recent, lock, removed     bool
 	}{
-		{
-			name: "malformed run owner is free",
-			setup: func(t *testing.T, root string) {
-				t.Helper()
-				writeSlotOwner(t, root, 0, "run only-id\n")
-			},
-			removed: true,
-		},
-		{
-			name: "fresh lock with no owner file is held",
-			setup: func(t *testing.T, root string) {
-				t.Helper()
-				lock := filepath.Join(root, lockDirName, "slot-0")
-				if err := os.MkdirAll(lock, 0o755); err != nil {
-					t.Fatal(err)
-				}
-				if err := os.Chtimes(lock, testNow, testNow); err != nil {
-					t.Fatal(err)
-				}
-			},
-		},
-		{
-			name: "reclaim entry is skipped",
-			setup: func(t *testing.T, root string) {
-				t.Helper()
-				lock := filepath.Join(root, lockDirName, "slot-0.reclaim")
-				if err := os.MkdirAll(lock, 0o755); err != nil {
-					t.Fatal(err)
-				}
-				if err := os.Chtimes(lock, testNow, testNow); err != nil {
-					t.Fatal(err)
-				}
-			},
-			removed: true,
-		},
-		{
-			name: "owner read error refuses",
-			setup: func(t *testing.T, root string) {
-				t.Helper()
-				// A directory named owner opens but fails to read with EISDIR.
-				if err := os.MkdirAll(filepath.Join(root, lockDirName, "slot-0", "owner"), 0o755); err != nil {
-					t.Fatal(err)
-				}
-			},
-			wantErr: true,
-		},
+		{"agents workspace", "workspaces/*/*", "workspaces/seat/ws", "", false, false, true},
+		{"agents clone", "rigel/clones/*", "rigel/clones/x", "", false, false, true},
+		{"agents factory", "rigel/fix-6766b-run/*", "rigel/fix-6766b-run/factory", "", false, false, true},
+		{"rjc worktree", "RigelBuild/*/w[0-9]*", "RigelBuild/repo/w0", "", false, false, true},
+		{"recent nested file", "workspaces/*/*", "workspaces/seat/ws", "", true, false, false},
+		{"live cwd", "workspaces/*/*", "workspaces/seat/ws", "cwd", false, false, false},
+		{"open fd", "workspaces/*/*", "workspaces/seat/ws", "fd", false, false, false},
+		{"held slot", "workspaces/*/*", "workspaces/seat/ws", "", false, true, true},
+		{"shared bare cache", "RigelBuild/*/w[0-9]*", "RigelBuild/x.git", "", false, false, false},
+		{"shared tools", "RigelBuild/*/w[0-9]*", "tools/cache", "", false, false, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()
-			idle := setWorkspace(t, root, "seat", "idle", testNow.Add(-48*time.Hour))
-			tc.setup(t, root)
-			procDir := makeProcTable(t)
-
-			var out strings.Builder
-			opts := options{root: resolvedRoot(t, root), maxIdle: 24 * time.Hour, procDir: procDir, readCwd: os.Readlink}
-			err := prune(opts, testNow, &out)
-			if (err != nil) != tc.wantErr {
-				t.Fatalf("prune error = %v, wantErr %v", err, tc.wantErr)
+			path := idleTree(t, root, tc.path)
+			if tc.recent {
+				touchAt(t, filepath.Join(path, "data"), testNow.Add(-time.Hour))
+				setMtime(t, path, homeOld)
 			}
-			_, statErr := os.Stat(idle)
-			if gone := errors.Is(statErr, fs.ErrNotExist); gone != tc.removed {
-				t.Fatalf("workspace removed = %v, want %v (output %q)", gone, tc.removed, out.String())
+			proc := makeProcTable(t)
+			if tc.busy != "" {
+				proc = makeProcTable(t, "100")
+				if tc.busy == "cwd" {
+					linkCwd(t, proc, "100", resolvedRoot(t, path))
+				} else {
+					fd := filepath.Join(proc, "100", "fd")
+					if err := os.Mkdir(fd, 0o755); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.Symlink(filepath.Join(resolvedRoot(t, path), "data"), filepath.Join(fd, "3")); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			if tc.lock {
+				writeSlotOwner(t, root, 0, "pending held\n")
+			}
+			var out strings.Builder
+			opts := options{root: resolvedRoot(t, root), pattern: tc.pattern, maxIdle: 24 * time.Hour, procDir: proc, readCwd: os.Readlink}
+			if err := prune(opts, testNow, &out); err != nil {
+				t.Fatal(err)
+			}
+			_, err := os.Stat(path)
+			if gone := errors.Is(err, fs.ErrNotExist); gone != tc.removed {
+				t.Fatalf("removed=%v want %v: %v", gone, tc.removed, err)
 			}
 		})
 	}
 }
 
-// TestPruneRecheckErrorRestoresName fails the post-stage lock re-check and
-// checks that the error is returned and the workspace keeps its name.
-func TestPruneRecheckErrorRestoresName(t *testing.T) {
-	root := t.TempDir()
-	ws := setWorkspace(t, root, "seat", "ws", testNow.Add(-48*time.Hour))
-	resolved := resolvedRoot(t, root)
-	procDir := makeProcTable(t, "100")
-	readLink := func(path string) (string, error) {
-		// Only the rescan reads /proc here; make the owner unreadable just then.
-		if err := os.MkdirAll(filepath.Join(resolved, lockDirName, "slot-0", "owner"), 0o755); err != nil {
-			return "", err
-		}
-		return "", &fs.PathError{Op: "readlink", Path: path, Err: syscall.ENOENT}
-	}
-
-	r := openRootForTest(t, root)
-	opts := options{root: resolved, maxIdle: 24 * time.Hour, procDir: procDir, readCwd: readLink}
-	var out strings.Builder
-	err := pruneCandidate(r, filepath.Join("seat", "ws"), nil, opts, testNow, &printer{w: &out})
-	if err == nil || !strings.Contains(err.Error(), "refusing to prune seat/ws") {
-		t.Fatalf("pruneCandidate error = %v, want refusal", err)
-	}
-	if _, err := os.Stat(ws); err != nil {
-		t.Fatalf("workspace not restored after a failed re-check: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(resolved, "seat", ".prune-ws-"+strconvPID())); !errors.Is(err, fs.ErrNotExist) {
-		t.Fatalf("staged copy left behind: %v", err)
-	}
-}
-
-// TestPruneSkipsWhileSlotLockHeld keeps an idle workspace while a live run
-// holds a slot lock, even though no process has its cwd in the tree.
-func TestPruneSkipsWhileSlotLockHeld(t *testing.T) {
-	root := t.TempDir()
-	idle := setWorkspace(t, root, "seat", "idle", testNow.Add(-48*time.Hour))
-	writeSlotOwner(t, root, 0, "run held 4242\n")
-	procDir := makeProcTable(t, "4242")
-
-	var out strings.Builder
-	opts := options{root: resolvedRoot(t, root), maxIdle: 24 * time.Hour, procDir: procDir, readCwd: os.Readlink}
-	if err := prune(opts, testNow, &out); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(idle); err != nil {
-		t.Fatalf("workspace removed while a slot lock was held: %v", err)
-	}
-}
-
-// TestPruneIgnoresSlotLockOfExitedRun removes an idle workspace when the only
-// slot lock names a pid that no longer exists.
-func TestPruneIgnoresSlotLockOfExitedRun(t *testing.T) {
-	root := t.TempDir()
-	idle := setWorkspace(t, root, "seat", "idle", testNow.Add(-48*time.Hour))
-	writeSlotOwner(t, root, 0, "run gone 4242\n")
-	procDir := makeProcTable(t)
-
-	var out strings.Builder
-	opts := options{root: resolvedRoot(t, root), maxIdle: 24 * time.Hour, procDir: procDir, readCwd: os.Readlink}
-	if err := prune(opts, testNow, &out); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(idle); !errors.Is(err, fs.ErrNotExist) {
-		t.Fatalf("idle workspace still present: %v", err)
-	}
-}
-
-// TestPruneSkipsWhileFreshPendingLock keeps an idle workspace while a run sits
-// in the pending acquire-to-exec window, and names the lock in the output.
-func TestPruneSkipsWhileFreshPendingLock(t *testing.T) {
-	root := t.TempDir()
-	idle := setWorkspace(t, root, "seat", "idle", testNow.Add(-48*time.Hour))
-	writeSlotOwner(t, root, 1, "pending fresh\n")
-	procDir := makeProcTable(t)
-
-	var out strings.Builder
-	opts := options{root: resolvedRoot(t, root), maxIdle: 24 * time.Hour, procDir: procDir, readCwd: os.Readlink}
-	if err := prune(opts, testNow, &out); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(idle); err != nil {
-		t.Fatalf("workspace removed while a pending lock was fresh: %v", err)
-	}
-	if !strings.Contains(out.String(), "skip all: slot lock slot-1 held") {
-		t.Fatalf("output %q does not name the held lock", out.String())
-	}
-}
-
-// TestPruneIgnoresStalePendingLock removes an idle workspace when the only
-// lock is pending and older than staleLockAge, as rbuild would reclaim it.
-func TestPruneIgnoresStalePendingLock(t *testing.T) {
-	root := t.TempDir()
-	idle := setWorkspace(t, root, "seat", "idle", testNow.Add(-48*time.Hour))
-	writeSlotOwner(t, root, 0, "pending gone\n")
-	old := testNow.Add(-2 * staleLockAge)
-	if err := os.Chtimes(filepath.Join(root, lockDirName, "slot-0"), old, old); err != nil {
-		t.Fatal(err)
-	}
-	procDir := makeProcTable(t)
-
-	var out strings.Builder
-	opts := options{root: resolvedRoot(t, root), maxIdle: 24 * time.Hour, procDir: procDir, readCwd: os.Readlink}
-	if err := prune(opts, testNow, &out); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(idle); !errors.Is(err, fs.ErrNotExist) {
-		t.Fatalf("idle workspace kept behind a stale pending lock: %v", err)
-	}
-}
-
-// TestPruneLockTakenAfterStageRestores takes a slot lock between the first
-// check and staging. The post-stage re-check must rename the tree back.
-func TestPruneLockTakenAfterStageRestores(t *testing.T) {
-	root := t.TempDir()
-	ws := setWorkspace(t, root, "seat", "ws", testNow.Add(-48*time.Hour))
-	resolved := resolvedRoot(t, root)
-	procDir := makeProcTable(t, "100")
-	readLink := func(path string) (string, error) {
-		// Only the rescan reads /proc here; a run acquires a slot just then.
-		writeSlotOwner(t, resolved, 0, "pending late\n")
-		return "", &fs.PathError{Op: "readlink", Path: path, Err: syscall.ENOENT}
-	}
-
-	r := openRootForTest(t, root)
-	opts := options{root: resolved, maxIdle: 24 * time.Hour, procDir: procDir, readCwd: readLink}
-	var out strings.Builder
-	if err := pruneCandidate(r, filepath.Join("seat", "ws"), nil, opts, testNow, &printer{w: &out}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(ws); err != nil {
-		t.Fatalf("workspace not restored after a lock was taken: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(resolved, "seat", ".prune-ws-"+strconvPID())); !errors.Is(err, fs.ErrNotExist) {
-		t.Fatalf("staged copy left behind: %v", err)
-	}
-	if !strings.Contains(out.String(), "skip busy after stage seat/ws") {
-		t.Fatalf("output %q does not report the lock re-check", out.String())
+func TestGlobStagedAndSibling(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		staged, busy bool
+	}{
+		{"staged live fd", true, true},
+		{"staged idle", true, false},
+		{"container live child and idle sibling", false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			name := "live"
+			if tc.staged {
+				name = ".prune-live-123"
+			}
+			live := idleTree(t, root, filepath.Join("workspaces", "seat", name))
+			idle := idleTree(t, root, "workspaces/seat/idle")
+			proc := makeProcTable(t)
+			if tc.busy {
+				proc = makeProcTable(t, "100")
+				fd := filepath.Join(proc, "100", "fd")
+				if err := os.Mkdir(fd, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(filepath.Join(resolvedRoot(t, live), "data"), filepath.Join(fd, "3")); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var out strings.Builder
+			opts := options{root: resolvedRoot(t, root), pattern: "workspaces/*/*", maxIdle: 24 * time.Hour, procDir: proc, readCwd: os.Readlink}
+			if err := prune(opts, testNow, &out); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := os.Stat(live); errors.Is(err, fs.ErrNotExist) == tc.busy {
+				t.Fatalf("live removed=%v, busy=%v", errors.Is(err, fs.ErrNotExist), tc.busy)
+			}
+			if _, err := os.Stat(idle); !errors.Is(err, fs.ErrNotExist) {
+				t.Fatalf("idle sibling kept: %v", err)
+			}
+		})
 	}
 }
 

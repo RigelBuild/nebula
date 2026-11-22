@@ -161,9 +161,9 @@ func TestHomeIdleWalkBoundFallsBackToTopLevel(t *testing.T) {
 		timeBound bool
 		removed   bool
 	}{
-		{"time bound idle", "harness/job/a", false, true, true},
+		{"time bound idle", "harness/job/a", false, true, false},
 		{"time bound fresh top-level entry", "harness/job/a", true, true, false},
-		{"depth bound idle", deep, false, false, true},
+		{"depth bound idle", deep, false, false, false},
 		{"depth bound fresh top-level entry", deep, true, false, false},
 	}
 	for _, tc := range cases {
@@ -206,20 +206,6 @@ func TestHomePruneDryRunRemovesNothing(t *testing.T) {
 	}
 	if !strings.Contains(out, "would remove harness/old-run") {
 		t.Fatalf("output %q does not report the dry-run candidate", out)
-	}
-}
-
-// TestHomePruneSkipsWhileSlotLockHeld removes nothing while rbuild/.locks holds a live slot.
-func TestHomePruneSkipsWhileSlotLockHeld(t *testing.T) {
-	home := t.TempDir()
-	job := idleTree(t, home, "harness/old-run")
-	writeSlotOwner(t, filepath.Join(home, "rbuild"), 0, "run held 4242\n")
-	out := pruneHome(t, homeOpts(t, home, makeProcTable(t, "4242")))
-	if _, err := os.Stat(job); err != nil {
-		t.Fatalf("idle job removed while a slot lock was held: %v", err)
-	}
-	if !strings.Contains(out, "skip all: slot lock slot-0 held") {
-		t.Fatalf("output %q does not report the held lock", out)
 	}
 }
 

@@ -6,13 +6,14 @@ import (
 )
 
 func TestMainRedTrackingTrunkWorkspace(t *testing.T) {
+	t.Parallel()
 	f := trackingFixture(t, "main", false)
 	tip := jjTest(t, f.repo, "log", "--no-graph", "-r", "rigel-release@origin", "-T", "commit_id")
 	base := jjTest(t, f.repo, "log", "--no-graph", "-r", "main@origin", "-T", "commit_id")
 	if tip == base {
 		t.Fatal("fixture trunk and mirror must differ")
 	}
-	t.Setenv("RJC_TEST_RECHECK_STATUS", "failed")
+	f.repo.env = append(f.repo.env, "RJC_TEST_RECHECK_STATUS=failed")
 	rec := HookRecord{Result: hookPartial, SkippedTargets: []SkippedTarget{{Target: "a:test"}}}
 	passed, err := f.repo.recheckMainRed(f.ctx, f.repo.profile, rec, tip)
 	if err != nil || len(passed) != 0 {

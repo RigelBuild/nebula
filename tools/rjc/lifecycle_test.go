@@ -21,7 +21,7 @@ type lifecycleFixture struct {
 
 func newLifecycleFixture(t *testing.T) *lifecycleFixture {
 	t.Helper()
-	f := fixtureRepo(t)
+	f := parallelFixtureRepo(t)
 	bookmark := f.new(t, "EX-1", "feat(rjc): lifecycle test", "")
 	f.commit(t, "change.txt")
 	if err := f.repo.submit(f.ctx, submitOptions{bookmark: bookmark, title: "feat(rjc): lifecycle test (EX-1)", bodyFile: f.bodyFile, draft: true}, f, io.Discard); err != nil {
@@ -92,6 +92,7 @@ func (l *lifecycleFixture) clear(author, head, base string) {
 }
 
 func TestLifecycleClearPromotesDraftAndReadyIsIdempotent(t *testing.T) {
+	t.Parallel()
 	l := newLifecycleFixture(t)
 	if code, out := l.command(t, "note", l.bookmark, "--clear", "--reviewed", strings.Repeat("a", 40)); code != 1 || !strings.Contains(out, "head-mismatch") {
 		t.Fatalf("code %d %s", code, out)
@@ -135,6 +136,7 @@ func TestLifecycleClearPromotesDraftAndReadyIsIdempotent(t *testing.T) {
 	}
 }
 func TestLifecycleClearRetryPromotesExistingMarker(t *testing.T) {
+	t.Parallel()
 	l := newLifecycleFixture(t)
 	priorityState := "completed"
 	l.f.repo.lookupLinearPriority = func(_ context.Context, issue string) (int, string, bool, error) {
@@ -169,6 +171,7 @@ func TestLifecycleClearRetryPromotesExistingMarker(t *testing.T) {
 }
 
 func TestLifecycleClearP0SkipRequiresOpenUrgentIssue(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name        string
 		priority    int
@@ -181,6 +184,7 @@ func TestLifecycleClearP0SkipRequiresOpenUrgentIssue(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			l := newLifecycleFixture(t)
 			l.f.repo.lookupLinearPriority = func(_ context.Context, issue string) (int, string, bool, error) {
 				if issue != "EX-9887" {
@@ -215,6 +219,7 @@ func TestLifecycleClearP0SkipRequiresOpenUrgentIssue(t *testing.T) {
 }
 
 func TestLifecycleClearLeavesIneligibleDraft(t *testing.T) {
+	t.Parallel()
 	l := newLifecycleFixture(t)
 	store := localPrePush{root: l.f.repo.stateDir}
 	rec, found, err := store.Read(l.f.ctx, l.f.repo.profile.Name, 1, l.head)
@@ -235,8 +240,10 @@ func TestLifecycleClearLeavesIneligibleDraft(t *testing.T) {
 }
 
 func TestAlreadyReadyRejectsMovedHeadOrBase(t *testing.T) {
+	t.Parallel()
 	for _, moved := range []string{"head", "base"} {
 		t.Run(moved, func(t *testing.T) {
+			t.Parallel()
 			l := newLifecycleFixture(t)
 			l.clear("agent", l.head, l.f.repo.profile.Trunk)
 			meta := l.f.metadata[1]

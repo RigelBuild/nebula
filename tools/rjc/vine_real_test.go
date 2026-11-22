@@ -106,6 +106,7 @@ func TestRealVineRetargetDivergedMirror(t *testing.T) {
 }
 
 func TestRealVineRecordedMergeSelection(t *testing.T) {
+	t.Parallel()
 	f := trackingFixture(t, "main", false)
 	bookmark, err := f.repo.upstreamSync(f.ctx, upstreamSyncOptions{issue: "EX-1"}, io.Discard)
 	if err != nil {

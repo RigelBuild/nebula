@@ -8,6 +8,7 @@ import (
 )
 
 func TestLifecycleRoundRejectsNonAncestor(t *testing.T) {
+	t.Parallel()
 	l := newLifecycleFixture(t)
 	file := filepath.Join(t.TempDir(), "round.txt")
 	if err := os.WriteFile(file, []byte("review"), 0600); err != nil {
@@ -21,6 +22,7 @@ func TestLifecycleRoundRejectsNonAncestor(t *testing.T) {
 }
 
 func TestLifecycleMissingLedgerAndEvidence(t *testing.T) {
+	t.Parallel()
 	l := newLifecycleFixture(t)
 	l.clear("agent", l.head, "main")
 	ledger := Ledger{root: l.f.repo.stateDir}
@@ -53,6 +55,7 @@ func TestLifecycleMissingLedgerAndEvidence(t *testing.T) {
 }
 
 func TestLifecycleReadyRefusesMovedBase(t *testing.T) {
+	t.Parallel()
 	l := newLifecycleFixture(t)
 	l.clear("agent", l.head, "main")
 	meta := l.f.metadata[1]
@@ -66,6 +69,7 @@ func TestLifecycleReadyRefusesMovedBase(t *testing.T) {
 }
 
 func TestLifecycleClearAllowsOwnedPublishedChild(t *testing.T) {
+	t.Parallel()
 	l := newLifecycleFixture(t)
 	jjTest(t, l.f.repo, "new", quoteRev(l.bookmark), "-m", "feat: owned child")
 	writeTestFile(t, filepath.Join(l.f.repo.root, "child.txt"), "child\n")
@@ -80,6 +84,7 @@ func TestLifecycleClearAllowsOwnedPublishedChild(t *testing.T) {
 }
 
 func TestLifecycleNoteRefusesForeignBookmark(t *testing.T) {
+	t.Parallel()
 	l := newLifecycleFixture(t)
 	jjTest(t, l.f.repo, "bookmark", "create", "other-lane/ex-2-lower", "-r", l.bookmark)
 	code, out := l.command(t, "note", "other-lane/ex-2-lower", "--clear", "--reviewed", l.head)

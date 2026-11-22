@@ -35,6 +35,7 @@ func TestSyncMovedTrunk(t *testing.T) {
 }
 
 func TestSyncUpstreamMergeMovedTrunk(t *testing.T) {
+	t.Parallel()
 	f := trackingFixture(t, "main", false)
 	bookmark, err := f.repo.upstreamSync(f.ctx, upstreamSyncOptions{issue: "EX-1"}, io.Discard)
 	if err != nil {
@@ -69,6 +70,7 @@ func TestSyncUpstreamMergeMovedTrunk(t *testing.T) {
 }
 
 func TestSyncUpstreamMergeFailurePrintsRestore(t *testing.T) {
+	t.Parallel()
 	f := trackingFixture(t, "main", false)
 	bookmark, err := f.repo.upstreamSync(f.ctx, upstreamSyncOptions{issue: "EX-1"}, io.Discard)
 	if err != nil {

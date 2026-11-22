@@ -9,14 +9,15 @@ import (
 )
 
 func TestFailedAndSkippedRunsRetry(t *testing.T) {
+	t.Parallel()
 	for _, skipped := range []bool{false, true} {
 		t.Run(map[bool]string{false: "failed", true: "skipped"}[skipped], func(t *testing.T) {
-			f := fixtureRepo(t)
+			t.Parallel()
+			f := parallelFixtureRepo(t)
 			bookmark := f.new(t, "EX-1", "feat(rjc): retry failed hooks", "")
 			f.commit(t, "feature.txt")
 			path := filepath.Join(t.TempDir(), "hook-env.json")
-			t.Setenv("RJC_TEST_HOOK_ENV", path)
-			t.Setenv("RJC_TEST_HOOK_FAIL", "1")
+			f.repo.env = append(f.repo.env, "RJC_TEST_HOOK_ENV="+path, "RJC_TEST_HOOK_FAIL=1")
 			opt := submitOptions{bookmark: bookmark, title: "feat(rjc): retry failed hooks", bodyFile: f.bodyFile}
 			if err := f.repo.submit(f.ctx, opt, f, io.Discard); err == nil || !strings.Contains(err.Error(), "hooks-failed") {
 				t.Fatalf("failure accepted: %v", err)
@@ -41,7 +42,7 @@ func TestFailedAndSkippedRunsRetry(t *testing.T) {
 			if err := os.Remove(path); err != nil {
 				t.Fatal(err)
 			}
-			t.Setenv("RJC_TEST_HOOK_FAIL", "0")
+			f.repo.env = append(f.repo.env, "RJC_TEST_HOOK_FAIL=0")
 			opt.skip = ""
 			if err := f.repo.submit(f.ctx, opt, f, io.Discard); err != nil {
 				t.Fatal(err)

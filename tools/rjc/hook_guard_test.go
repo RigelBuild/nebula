@@ -44,6 +44,7 @@ func inheritFixtureNoModule(t *testing.T, f *fixture, file string) (localPrePush
 // H2: an upper increment that touches the gate runner or any hook config must refuse inheritance. Names match
 // case-insensitively (APFS, NTFS), so GO.WORK or TOOLS/GATE-RUNNER/x.go refuses too.
 func TestInheritRefusesRiskyIncrement(t *testing.T) {
+	t.Parallel()
 	for _, file := range []string{
 		"hk.local.pkl",
 		".config/hk.local.pkl",
@@ -66,7 +67,8 @@ func TestInheritRefusesRiskyIncrement(t *testing.T) {
 		"libs/other/vendor/x.go",
 	} {
 		t.Run(file, func(t *testing.T) {
-			f := fixtureRepo(t)
+			t.Parallel()
+			f := parallelFixtureRepo(t)
 			stubIssueState(t, f)
 			store, line := inheritFixtureFile(t, f, file)
 			err := f.repo.checkSkip(f.ctx, line, "main-red:#7", store)

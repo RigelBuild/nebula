@@ -378,3 +378,34 @@ func TestVineLiteralTargetIgnoresForeignAlias(t *testing.T) {
 		t.Fatal("alias caused a forge or push write")
 	}
 }
+
+func TestVineWithConfigTreatsAlreadyUnsetKeyAsRestored(t *testing.T) {
+	t.Parallel()
+	f := parallelFixtureRepo(t)
+	const key = "jj-vine.rjc-test.alreadyUnset"
+	err := f.repo.withVineConfig(f.ctx, []workspaceSetting{{key: key, value: "v1"}}, func() error {
+		jjTest(t, f.repo, "config", "unset", "--workspace", key)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("already-unset key failed restore: %v", err)
+	}
+	if got := jjTest(t, f.repo, "config", "list", "--workspace", key); got != "" {
+		t.Fatalf("key still set after restore: %q", got)
+	}
+}
+
+func TestVineWithConfigPropagatesOtherUnsetErrors(t *testing.T) {
+	t.Parallel()
+	f := parallelFixtureRepo(t)
+	const key = "jj-vine.rjc-test.brokenConfig"
+	broken := filepath.Join(t.TempDir(), "broken.toml")
+	writeTestFile(t, broken, "bad = = [\n")
+	err := f.repo.withVineConfig(f.ctx, []workspaceSetting{{key: key, value: "v1"}}, func() error {
+		f.repo.env = append(f.repo.env, "JJ_CONFIG="+broken)
+		return nil
+	})
+	if err == nil {
+		t.Fatal("restore failure from a broken config was swallowed")
+	}
+}

@@ -1863,14 +1863,15 @@ def is_env_dump_command(command: str | None) -> bool:
 # kubectl's own name: the binary, its ``k`` alias, or ``oc`` (OpenShift).
 _KUBECTL_NAMES = frozenset({"kubectl", "k", "oc"})
 # A standalone ``kubectl``, ``oc`` or ``k`` word in any case: ``kubectl.exe`` and
-# ``C:\tools\kubectl`` match; ``kubectl-foo`` and ``my_k`` do not.
-_KUBECTL_MENTION_RE = re.compile(r"(?<![A-Za-z0-9_-])(?:kubectl|oc|k)(?![A-Za-z0-9_-])", re.IGNORECASE)
+# ``C:\tools\kubectl`` match; ``my_k`` does not. A ``kubectl-<name>`` plugin binary matches on its prefix.
+_KUBECTL_MENTION_RE = re.compile(r"(?<![A-Za-z0-9_-])(?:kubectl-(?=[A-Za-z0-9])|(?:kubectl|oc|k)(?![A-Za-z0-9_-]))", re.IGNORECASE)
 # Output formats that print a Secret with its keys (``data:``/``stringData:``), so the
 # Kubernetes pass can find and mask the values. Any other format masks the whole output.
 _KUBECTL_STRUCTURED_FORMATS = frozenset({"yaml", "json", "name", "wide"})
 # Subcommands that print what a process or the API returns: exec, attach, debug and run stream
-# container output, and cp can copy a file to stdout. Token match, so it over-masks by design.
-_KUBECTL_RAW_SUBCOMMANDS = frozenset({"exec", "attach", "debug", "run", "cp"})
+# container output, cp can copy a file to stdout, and oc rsh and oc extract do the same. Token
+# match, so it over-masks by design.
+_KUBECTL_RAW_SUBCOMMANDS = frozenset({"exec", "attach", "debug", "run", "cp", "rsh", "extract"})
 # A leading ``NAME=value`` token, as in ``KUBECONFIG=/tmp/c kubectl get ...``.
 _ENV_ASSIGNMENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
 # The first word of a read must be plain text: any other character lets the shell build the name.
@@ -1925,13 +1926,54 @@ def _kubectl_outputs_structured(args: list[str]) -> bool:
     return True
 
 
+# Built-in kubectl and oc verbs. Any other verb, a plugin verb included, is masked whole. ``set``
+# stays because ``set env`` without ``--list`` was unmasked before (its ``--list`` is denied above).
+# ``whoami`` is an oc read; its token flags are denied above.
+_KUBECTL_READ_VERBS = frozenset({
+    "get", "describe", "logs", "version", "api-resources", "api-versions", "explain", "events",
+    "top", "wait", "config", "set", "whoami",
+})
+# kubectl and oc global flags that take their value as the next token. ``--flag=value`` carries
+# its value inline and needs no entry here.
+_KUBECTL_GLOBAL_VALUE_FLAGS = frozenset({
+    "-n", "--namespace", "-s", "--server", "--context", "--cluster", "--user", "--kubeconfig",
+    "--token", "--as", "--as-group", "--certificate-authority", "--client-certificate",
+    "--client-key", "--tls-server-name", "--request-timeout", "--cache-dir", "--config",
+    "--loglevel", "--username", "--password", "-v", "--v",
+})
+# kubectl and oc global flags that take no value.
+_KUBECTL_GLOBAL_BOOL_FLAGS = frozenset({
+    "--insecure-skip-tls-verify", "--disable-compression", "--match-server-version",
+    "--warnings-as-errors",
+})
+
+
+def _kubectl_verb(args: list[str]) -> str | None:
+    """The first argument that is not a global flag: the verb kubectl runs. A value flag skips
+    the next token. ``--flag=value`` and a known boolean flag skip only themselves. Any other
+    dash token fails closed (``None``), because it may take the verb as its value."""
+    i = 0
+    while i < len(args):
+        tok = args[i]
+        if tok in _KUBECTL_GLOBAL_VALUE_FLAGS:
+            i += 2
+        elif tok in _KUBECTL_GLOBAL_BOOL_FLAGS or (tok.startswith("--") and "=" in tok):
+            i += 1
+        elif tok.startswith("-"):
+            return None
+        else:
+            return tok
+    return None
+
+
 def _is_structured_kubectl_read(command: str) -> bool:
     """True only for a kubectl/oc/k read that stays unmasked: one pipeline segment on one line,
     no ``$``, backtick, or parenthesis, shlex-parseable, the binary first after ``NAME=value``
-    prefixes, not ``set env --list``, no ``exec``/``attach``/``debug``/``run``/``cp`` token, not
-    ``create token``, no ``--raw`` flag, not ``config view`` with ``--flatten``, and every output
-    format structured. Anything else is masked whole, so a wrapper, substitution or pipe cannot
-    hide a Secret value from the per-line pass."""
+    prefixes, not ``set env --list``, no ``exec``/``attach``/``debug``/``run``/``cp``/``rsh``/
+    ``extract`` token, not ``create token``, no ``--raw`` flag, not ``config view`` with
+    ``--flatten``, not ``oc whoami`` with a token flag, a built-in read verb as the first verb, and
+    every output format structured. Anything else is masked whole, so a wrapper, substitution,
+    pipe or plugin cannot hide a Secret value from the per-line pass."""
     stripped = command.strip()
     if "\n" in command or "\r" in command or stripped[:1] in ("|", ";", "&") or stripped[-1:] in ("|", ";", "&"):
         return False
@@ -1945,6 +1987,7 @@ def _is_structured_kubectl_read(command: str) -> bool:
         return False
     while tokens and _ENV_ASSIGNMENT_RE.match(tokens[0]):
         tokens = tokens[1:]
+    # A kubectl-<name> plugin binary is not in _KUBECTL_NAMES, so it is masked here.
     if not tokens or _binary_base(tokens[0]) not in _KUBECTL_NAMES:
         return False
     raw_words = [w for w in command.replace("\\\n", "").split() if not _ENV_ASSIGNMENT_RE.match(w)]
@@ -1962,6 +2005,11 @@ def _is_structured_kubectl_read(command: str) -> bool:
         return False
     if "config" in args and "view" in args and any(
             tok in ("--raw", "--flatten") or tok.startswith(("--raw=", "--flatten=")) for tok in args):
+        return False
+    verb = _kubectl_verb(args)
+    if verb == "whoami" and any(tok in ("-t", "--show-token") or tok.startswith("--show-token=") for tok in args):
+        return False
+    if verb not in _KUBECTL_READ_VERBS:
         return False
     return _kubectl_outputs_structured(args)
 

@@ -25,7 +25,7 @@ logger = logging.getLogger("tools.approval")
 class _ApprovalEntry:
     """One pending dangerous-command approval inside a gateway session."""
     __slots__ = ("acknowledged", "authority", "cancelled", "card_deny_only", "data", "event", "expired", "observers",
-                 "reason", "result", "settle", "settle_choice")
+                 "reason", "result", "settle", "settle_choice", "undelivered")
 
     def __init__(self, data: dict):
         self.event = threading.Event()
@@ -51,6 +51,9 @@ class _ApprovalEntry:
         self.cancelled: str | None = None
         # The prompt timed out unanswered; followers woken by its event adopt that timeout.
         self.expired = False
+        # Why no surface ever showed the prompt (every delivery path failed, e.g. ``send_path_degraded``).
+        # Set only when the card and its text fallback both failed; a withdrawal then names it.
+        self.undelivered: str | None = None
 
 
 def _same_answerers(leader: dict, follower: dict) -> bool:
@@ -94,6 +97,10 @@ def _poll_event(event: threading.Event, session_key: str, *, interrupt_log: str,
             heartbeat()
 
 
+# Start of the withdrawn-cause text for a prompt no surface ever showed (see ``withdrawn_reason``).
+_NEVER_SHOWN_PREFIX = "approval was never shown to Matt (delivery failed: "
+
+
 def _cancel_cause(state: str, entry) -> str | None:
     """Why the wait ended with nobody answering: the turn was interrupted (cause from the
     per-thread channel — a user /stop or a parent's delegation teardown), the entry was
@@ -101,10 +108,21 @@ def _cancel_cause(state: str, entry) -> str | None:
     under the prompt (notifier unregistered, result never set). ``None`` for a real answer
     or a plain timeout."""
     if state == "interrupted":
-        return get_interrupt_reason() or "turn interrupted"
+        cause = get_interrupt_reason() or "turn interrupted"
+        if entry.undelivered:
+            return f"{_NEVER_SHOWN_PREFIX}{entry.undelivered}); withdrawn ({cause})"
+        return cause
     if state == "set" and entry.result is None:
         return entry.cancelled or "the turn ended before the prompt was answered"
     return None
+
+
+def withdrawn_reason(cancelled: str) -> str:
+    """The agent-facing reason for a withdrawn prompt. A prompt no surface showed names its delivery failure
+    and never reads as a user refusal; any other withdrawal keeps the interrupt cause."""
+    if cancelled.startswith(_NEVER_SHOWN_PREFIX):
+        return cancelled
+    return f"approval was withdrawn before the user answered ({cancelled})"
 
 
 def _finish(payload: dict, resolved: bool, choice: str | None, reason, **extra) -> dict:

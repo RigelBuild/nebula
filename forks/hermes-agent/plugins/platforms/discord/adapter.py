@@ -5985,12 +5985,17 @@ class DiscordAdapter(DiscordAuthorizationMixin, DiscordMediaMixin, DiscordThread
         self._background_tasks.add(task)
         task.add_done_callback(self._background_tasks.discard)
         task.add_done_callback(_consume_background_task_result)
-        await self._send_exec_approval_text_fallback(prompt)
+        text_failure = await self._send_exec_approval_text_fallback(prompt)
+        if text_failure is not None:
+            # Card and text fallback both failed: no surface shows the prompt, so a /stop must say so.
+            from tools.approval import mark_gateway_approval_undelivered
+            mark_gateway_approval_undelivered(prompt.session_key, view.request_id, f"{result.error}, then {text_failure}")
         return SendResult(success=False, error=result.error, raw_response={"approval_text_fallback_posted": True})
 
-    async def _send_exec_approval_text_fallback(self, prompt: ExecApprovalPrompt) -> None:
-        """Post the plain-text approval prompt in the approval's own thread. Never raises. The request is withdrawn
-        after approval_card_confirm_timeout, so the prompt states that window, not approvals.timeout."""
+    async def _send_exec_approval_text_fallback(self, prompt: ExecApprovalPrompt) -> str | None:
+        """Post the plain-text approval prompt in the approval's own thread. Never raises. Returns ``None`` when the
+        text prompt was delivered, else the failure reason. The request is withdrawn after approval_card_confirm_timeout,
+        so the prompt states that window, not approvals.timeout."""
         from gateway.run_turn_runner_approval_text import approval_text_prompt
         actions = set(prompt.choices)
         window = _read_approval_card_confirm_timeout(getattr(self.config, "extra", None))
@@ -6000,10 +6005,14 @@ class DiscordAdapter(DiscordAuthorizationMixin, DiscordMediaMixin, DiscordThread
                                     smart_denied=prompt.smart_denied, deadline_s=math.ceil(window))
         try:
             metadata = {**(prompt.metadata or {}), "is_approval_prompt": True}
-            await self.send(prompt.chat_id, text, metadata=metadata)
-        except Exception:
+            result = await self.send(prompt.chat_id, text, metadata=metadata)
+            if not getattr(result, "success", False):
+                return getattr(result, "error", None) or "text prompt send failed"
+        except Exception as exc:
             logger.warning("[%s] approval text prompt send failed: request_id=%s", self.name, prompt.request_id,
                            exc_info=True)
+            return f"{type(exc).__name__}"
+        return None
 
     @staticmethod
     async def _withdraw_undelivered_approval(session_key: str, request_id: str, window: float) -> None:

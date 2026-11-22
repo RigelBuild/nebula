@@ -129,6 +129,58 @@ def test_coalesced_follower_inherits_the_leaders_cancellation(gateway_session):
     _assert_withdrawn(follower["result"], "parent delegation ended")
 
 
+def test_prompt_no_surface_showed_is_named_when_stop_withdraws_it(gateway_session):
+    """A prompt whose card and text fallback both failed was never shown to Matt. A /stop that
+    withdraws it must say so, not read as a withdrawal the user made, and must book no denial."""
+    mod._denial_tally.pop(SESSION_KEY, None)
+    notified = threading.Event()
+    holder = {}
+
+    def notify_undelivered(data):
+        with mod._lock:
+            entry = next(e for e in mod._gateway_queues[SESSION_KEY] if e.data["request_id"] == data["request_id"])
+            entry.undelivered = "send_path_degraded"
+        notified.set()
+
+    mod.register_gateway_notify(SESSION_KEY, notify_undelivered)
+
+    def worker():
+        holder["tid"] = threading.get_ident()
+        holder["result"] = mod.check_all_command_guards("rm -rf .git", "local")
+
+    thread = threading.Thread(target=worker)
+    thread.start()
+    assert notified.wait(timeout=10), "approval was never enqueued"
+    set_interrupt(True, holder["tid"], reason="Stop requested")
+    try:
+        thread.join(timeout=10)
+    finally:
+        set_interrupt(False, holder["tid"])
+    assert not thread.is_alive()
+    result = holder["result"]
+    assert result["approved"] is False
+    assert result["outcome"] == "cancelled"
+    assert result["user_consent"] is False
+    assert ("BLOCKED: Command approval was never shown to Matt (delivery failed: send_path_degraded); "
+            "withdrawn (Stop requested).") in result["message"]
+    assert "withdrawn before the user answered" not in result["message"]
+    assert SESSION_KEY not in mod._denial_tally
+
+
+def test_delivered_prompt_withdrawn_by_stop_keeps_withdrawal_text(gateway_session):
+    """A prompt that reached a surface and is then withdrawn by /stop keeps the withdrawal text."""
+    thread, holder = _run_gate_until_pending()
+    set_interrupt(True, holder["tid"], reason="Stop requested")
+    try:
+        thread.join(timeout=10)
+    finally:
+        set_interrupt(False, holder["tid"])
+    assert not thread.is_alive()
+    _assert_withdrawn(holder["result"], "Stop requested")
+    assert "never shown" not in holder["result"]["message"]
+
+
+
 @pytest.fixture
 def cli_session(monkeypatch):
     mod._session_approved.clear()

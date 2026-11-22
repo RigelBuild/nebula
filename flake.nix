@@ -22,6 +22,7 @@
       # Each first-party Go command is its own module at tools/<name>/. The
       # value is that module's vendorHash.
       goCommands = {
+        akiflow = null;
         alloy-harness = null;
         alloy-log-caps = "sha256-DCp9LMbw8It+HtwVdcUkEV/zQGEzPjOaqSAUMRhKvEg=";
         ci-queue = "sha256-j0u4b4+5wznZHBa0y2U1C/FvXRbYC94RWXci329hvy8=";

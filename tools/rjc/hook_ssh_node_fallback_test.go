@@ -15,6 +15,7 @@ if [ -n "$RJC_TEST_NODE_PATH" ]; then command -v node > "$RJC_TEST_NODE_PATH"; f
 ` + fakeHK
 
 func TestSSHHookRunnerBuildsRunnerWhenHostLacksIt(t *testing.T) {
+	skipUnlessLinux(t)
 	for _, tc := range []struct{ name, config, tool string }{
 		{name: "lefthook", config: "lefthook.yml", tool: "lefthook"},
 		{name: "pre-commit", config: ".pre-commit-config.yaml", tool: "pre-commit"},
@@ -72,6 +73,7 @@ func TestSSHHookRunnerBuildsRunnerWhenHostLacksIt(t *testing.T) {
 }
 
 func TestSSHHookRunnerUsesPinnedNodeOnlyWhenNodeOrNpmMissing(t *testing.T) {
+	skipUnlessLinux(t)
 	for _, tc := range []struct {
 		name      string
 		managed   bool
@@ -141,6 +143,7 @@ func TestSSHHookRunnerUsesPinnedNodeOnlyWhenNodeOrNpmMissing(t *testing.T) {
 }
 
 func TestSSHHookRunnerContinuesWhenPinnedNodeBuildFails(t *testing.T) {
+	skipUnlessLinux(t)
 	f, runner := sshGateFixture(t)
 	if err := os.Remove(filepath.Join(os.Getenv("HOME"), "bin", "hk")); err != nil {
 		t.Fatal(err)

@@ -13,6 +13,7 @@ import (
 )
 
 func TestPickRunnerHostFreeHostDoesNotTicketOtherHost(t *testing.T) {
+	skipUnlessLinux(t)
 	f, runner := sshGateFixture(t)
 	runner.hosts = []string{"busy@fixture", "free@fixture"}
 	bin := filepath.Join(os.Getenv("HOME"), "bin", "ssh")
@@ -61,6 +62,7 @@ func (w *queueLogWriter) Write(p []byte) (int, error) {
 
 // TestPickRunnerHostLogsQueuePosition: with one live ticket ahead of ours and a full host, the wait log names our position.
 func TestPickRunnerHostLogsQueuePosition(t *testing.T) {
+	skipUnlessLinux(t)
 	f, runner := sshGateFixture(t)
 	t.Setenv("RJC_HOOK_SSH_TIMEOUT", "5m")
 	runner.hosts = []string{"gate@fixture.invalid"}
@@ -120,6 +122,7 @@ func TestAcquireLocalGateSlotWaitsForThirdRun(t *testing.T) {
 	}
 }
 func TestRunHooksQueuesEachChangeBeforeTransfer(t *testing.T) {
+	skipUnlessLinux(t)
 	f, runner := sshGateFixture(t)
 	t.Setenv("RJC_HOOK_SSH_SLOTS", "1")
 	f.commit(t, "hk.pkl")
@@ -261,6 +264,7 @@ exec sh -c "$*"
 	}
 }
 func TestRunRepickMovesHeartbeatToNewHost(t *testing.T) {
+	skipUnlessLinux(t)
 	f, runner := sshGateFixture(t)
 	f.commit(t, "hk.pkl")
 	base, head := sshRange(t, f)

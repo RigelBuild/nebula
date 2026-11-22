@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -103,6 +104,13 @@ shift "$last"
 exec "$@"
 `
 
+func skipUnlessLinux(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS != "linux" {
+		t.Skip("needs Linux setsid/flock/ps sid")
+	}
+}
+
 // sshGateFixture returns a fixture whose ssh runner drives fake ssh and hk on this machine, with no devenv.
 func sshGateFixture(t *testing.T) (*fixture, sshHookRunner) {
 	t.Helper()
@@ -132,6 +140,7 @@ func writeFakeTool(t *testing.T, path, body string) {
 // hostPathWithout returns a restricted PATH without the requested runner. It keeps $HOME/bin for fake tools and symlinks
 // only the remote script dependencies, so the runner cannot come from the ambient PATH.
 func hostPathWithout(t *testing.T, tool string) string {
+	skipUnlessLinux(t)
 	t.Helper()
 	dir := t.TempDir()
 	for _, name := range []string{"sh", "env", "git", "mktemp", "mkfifo", "flock", "find", "touch", "timeout", "tail", "true", "seq", "rm", "mkdir", "cat", "cp", "chmod", "mv", "dirname", "tar", "gzip", "sed", "paste", "tr", "df", "nproc", "uname", "jj", "setsid", "ps", "awk", "head", "wc", "kill", "sleep"} {
@@ -159,6 +168,7 @@ func sshRange(t *testing.T, f *fixture) (string, string) {
 }
 
 func TestSSHHookRunnerPasses(t *testing.T) {
+	skipUnlessLinux(t)
 	f, runner := sshGateFixture(t)
 	f.commit(t, "hk.pkl")
 	base, head := sshRange(t, f)
@@ -168,6 +178,7 @@ func TestSSHHookRunnerPasses(t *testing.T) {
 	}
 }
 func TestSSHHookRunnerConfiguredTools(t *testing.T) {
+	skipUnlessLinux(t)
 	for _, tc := range []struct{ name, config, tool string }{
 		{name: "lefthook", config: "lefthook.yml", tool: "lefthook"},
 		{name: "pre-commit", config: ".pre-commit-config.yaml", tool: "pre-commit"},
@@ -211,6 +222,7 @@ func TestSSHHookRunnerConfiguredTools(t *testing.T) {
 }
 
 func TestSSHHookRunnerReportsFailures(t *testing.T) {
+	skipUnlessLinux(t)
 	f, runner := sshGateFixture(t)
 	f.commit(t, "hk.pkl")
 	base, head := sshRange(t, f)
@@ -245,6 +257,7 @@ func TestSSHHookRunnerMissingRemoteConfig(t *testing.T) {
 }
 
 func TestSSHHookRunnerMissingTool(t *testing.T) {
+	skipUnlessLinux(t)
 	f, runner := sshGateFixture(t)
 	if err := os.Remove(filepath.Join(os.Getenv("HOME"), "bin", "hk")); err != nil {
 		t.Fatal(err)
@@ -282,6 +295,7 @@ func TestSSHHookBodyRejectsMissingConfig(t *testing.T) {
 }
 
 func TestSSHHookRunnerMutatedTreeFails(t *testing.T) {
+	skipUnlessLinux(t)
 	f, runner := sshGateFixture(t)
 	f.commit(t, "hk.pkl")
 	base, head := sshRange(t, f)
@@ -326,6 +340,7 @@ func TestSSHHookRunnerRejectsOptionLikeHost(t *testing.T) {
 }
 
 func TestSSHHookRunnerQuotesIdentity(t *testing.T) {
+	skipUnlessLinux(t)
 	f, runner := sshGateFixture(t)
 	f.commit(t, "hk.pkl")
 	base, head := sshRange(t, f)
@@ -347,6 +362,7 @@ func TestSSHHookRunnerQuotesIdentity(t *testing.T) {
 // TestSSHHookRunnerPassesSlotCountToRemote proves the slot count reaches the remote hook body.
 // ssh does not forward the client env, so the count must travel as an argument and be exported remotely.
 func TestSSHHookRunnerPassesSlotCountToRemote(t *testing.T) {
+	skipUnlessLinux(t)
 	f, runner := sshGateFixture(t)
 	t.Setenv("RJC_HOOK_SSH_SLOTS", "1")
 	t.Setenv("RJC_TEST_HK_SLOTS_FILE", filepath.Join(t.TempDir(), "hook-slots"))
@@ -377,6 +393,7 @@ func TestSSHHookRunnerPassesSlotCountToRemote(t *testing.T) {
 }
 
 func TestSSHHookRunnerPassesTimeoutToRemote(t *testing.T) {
+	skipUnlessLinux(t)
 	f, runner := sshGateFixture(t)
 	t.Setenv("RJC_HOOK_SSH_TIMEOUT", "37s")
 	f.commit(t, "hk.pkl")
@@ -399,6 +416,7 @@ func TestSSHHookRunnerPassesTimeoutToRemote(t *testing.T) {
 // TestSSHHookRunnerBoundsRemoteSetupAndKeepsAlive proves the whole remote command runs under the guard with a limit
 // just under the client deadline, so setup is bounded too, and that ssh sends keepalives so a dead link ends the client.
 func TestSSHHookRunnerBoundsRemoteSetupAndKeepsAlive(t *testing.T) {
+	skipUnlessLinux(t)
 	f, runner := sshGateFixture(t)
 	t.Setenv("RJC_HOOK_SSH_TIMEOUT", "37s")
 	f.commit(t, "hk.pkl")
@@ -433,6 +451,7 @@ func TestSSHHookRunnerBoundsRemoteSetupAndKeepsAlive(t *testing.T) {
 }
 
 func TestSSHHookRunnerRemoteTimeoutIsToolFailure(t *testing.T) {
+	skipUnlessLinux(t)
 	f, runner := sshGateFixture(t)
 	t.Setenv("RJC_HOOK_SSH_TIMEOUT", "30s")
 	bin := filepath.Join(os.Getenv("HOME"), "bin")
@@ -447,6 +466,7 @@ func TestSSHHookRunnerRemoteTimeoutIsToolFailure(t *testing.T) {
 }
 
 func TestSSHHookRunnerHookExit124(t *testing.T) {
+	skipUnlessLinux(t)
 	f, runner := sshGateFixture(t)
 	f.repo.profile.HookReports = false
 	writeFakeTool(t, filepath.Join(os.Getenv("HOME"), "bin", "hk"), "#!/bin/sh\nexit 124\n")
@@ -459,6 +479,7 @@ func TestSSHHookRunnerHookExit124(t *testing.T) {
 }
 
 func TestSSHHookRunnerRealRemoteTimeout(t *testing.T) {
+	skipUnlessLinux(t)
 	f, runner := sshGateFixture(t)
 	f.repo.profile.HookReports = false
 	writeFakeTool(t, filepath.Join(os.Getenv("HOME"), "bin", "hk"), "#!/bin/sh\nsleep 5\n")
@@ -556,6 +577,7 @@ func stopGrandchild(t *testing.T, grandchild string) {
 // TestSSHHookRunnerCancelReleasesSlot cancels the client while remote setup hangs under the slot lock. ssh dies and its
 // stdin closes; the remote must then end its whole session, so the slot frees and the separate-group grandchild exits.
 func TestSSHHookRunnerCancelReleasesSlot(t *testing.T) {
+	skipUnlessLinux(t)
 	f, runner := sshGateFixture(t)
 	f.repo.profile.HookReports = false
 	t.Setenv("RJC_HOOK_SSH_TIMEOUT", "10m")
@@ -586,6 +608,7 @@ func TestSSHHookRunnerCancelReleasesSlot(t *testing.T) {
 // TestSSHHookRunnerGroupKillReleasesSlot mimics Tailscale SSH, which SIGKILLs the session's process group on
 // disconnect. The guard dies with that group, so only a watchdog in its own session can still reap the run.
 func TestSSHHookRunnerGroupKillReleasesSlot(t *testing.T) {
+	skipUnlessLinux(t)
 	f, runner := sshGateFixture(t)
 	f.repo.profile.HookReports = false
 	t.Setenv("RJC_HOOK_SSH_TIMEOUT", "10m")
@@ -631,6 +654,7 @@ exec setsid sh -c 'printf "%s" "$$" > "$RJC_TEST_SSH_LEADER"; exec sh -c "$1"' r
 // TestSSHHookRunnerDeadlineReleasesSlot lets the remote deadline expire while setup hangs. The run fails as
 // hook-ssh-timeout, and the remote session, the separate-group grandchild included, is gone with the slot free.
 func TestSSHHookRunnerDeadlineReleasesSlot(t *testing.T) {
+	skipUnlessLinux(t)
 	f, runner := sshGateFixture(t)
 	f.repo.profile.HookReports = false
 	t.Setenv("RJC_HOOK_SSH_TIMEOUT", "9s")
@@ -657,6 +681,7 @@ func TestSSHHookRunnerDeadlineReleasesSlot(t *testing.T) {
 }
 
 func TestSSHHookWorktreeLockRetries(t *testing.T) {
+	skipUnlessLinux(t)
 	home := t.TempDir()
 	root := filepath.Join(home, "pool")
 	if err := os.MkdirAll(root, 0o755); err != nil {
@@ -685,6 +710,7 @@ func TestSSHHookWorktreeLockRetries(t *testing.T) {
 }
 
 func TestSSHHookConcurrentWorktrees(t *testing.T) {
+	skipUnlessLinux(t)
 	home := t.TempDir()
 	root := filepath.Join(home, "pool")
 	bin := filepath.Join(home, "bin")
@@ -972,6 +998,7 @@ func TestPickRunnerHostWaitsThenPicksWhenSlotFrees(t *testing.T) {
 // TestRunRetriesAfterLostSlotRace drives the real Run. The first remote attempt exits 77, so the slot was taken
 // after the probe. Run must re-pick through the queue and run again, and the second attempt must complete.
 func TestRunRetriesAfterLostSlotRace(t *testing.T) {
+	skipUnlessLinux(t)
 	f, runner := sshGateFixture(t)
 	t.Setenv("RJC_TEST_SSH_SLOT_MARK", filepath.Join(t.TempDir(), "slot-marker"))
 	t.Setenv("RJC_HOOK_SSH_TIMEOUT", "10m")
@@ -1032,6 +1059,7 @@ func TestPickHostAllOverloadedRanksByLoad(t *testing.T) {
 // TestSSHHookRunnerBusyPoolFailsWithoutReusingSlot holds every worktree lock, as four concurrent runs would.
 // The remote script must not reuse a busy slot: the run fails as a tool failure and runs no hook.
 func TestSSHHookRunnerBusyPoolFailsWithoutReusingSlot(t *testing.T) {
+	skipUnlessLinux(t)
 	f, runner := sshGateFixture(t)
 	root := filepath.Join(os.Getenv("HOME"), "rjc-hook", "example", "app")
 	if err := os.MkdirAll(root, 0o755); err != nil {
@@ -1105,6 +1133,7 @@ func TestParseHostStatusReadsFourLines(t *testing.T) {
 // TestSSHHookRunnerUsesHostHKWithoutBuilding runs with hk on the host PATH. The shell then gets hk from the
 // host, and nix build must not run to find it.
 func TestSSHHookRunnerUsesHostHKWithoutBuilding(t *testing.T) {
+	skipUnlessLinux(t)
 	f, runner := sshGateFixture(t)
 	f.commit(t, "hk.pkl")
 	base, head := sshRange(t, f)
@@ -1122,6 +1151,7 @@ func TestSSHHookRunnerUsesHostHKWithoutBuilding(t *testing.T) {
 
 // TestSSHHookRunnerFallbackIncludesConfiguredTool checks the builtin shell package set and configured host runner.
 func TestSSHHookRunnerFallbackIncludesConfiguredTool(t *testing.T) {
+	skipUnlessLinux(t)
 	for _, tc := range []struct{ name, config, tool string }{
 		{name: "lefthook", config: "lefthook.yml", tool: "lefthook"},
 		{name: "pre-commit", config: ".pre-commit-config.yaml", tool: "pre-commit"},
@@ -1176,6 +1206,7 @@ func TestSSHHookRunnerFallbackIncludesConfiguredTool(t *testing.T) {
 }
 
 func TestSSHHookRunnerPicksFlakeDevShell(t *testing.T) {
+	skipUnlessLinux(t)
 	f, runner := sshGateFixture(t)
 	if err := os.Remove(filepath.Join(f.repo.root, "devenv.nix")); err != nil {
 		t.Fatal(err)
@@ -1261,6 +1292,7 @@ func TestSSHHookRunnerRejectsBadTimeout(t *testing.T) {
 }
 
 func TestSSHHookRunnerOverrideShellWins(t *testing.T) {
+	skipUnlessLinux(t)
 	f, runner := sshGateFixture(t)
 	t.Setenv("RJC_HOOK_SSH_SHELL", "nix shell --")
 	f.commit(t, "hk.pkl")
@@ -1316,6 +1348,7 @@ func TestRunDirFailureExitsBeforeLock(t *testing.T) {
 }
 
 func TestSSHHookReleasesLocksWithDaemon(t *testing.T) {
+	skipUnlessLinux(t)
 	home := t.TempDir()
 	bin := filepath.Join(home, "bin")
 	if err := os.MkdirAll(bin, 0o755); err != nil {
@@ -1379,6 +1412,7 @@ func TestSSHHookReleasesLocksWithDaemon(t *testing.T) {
 
 // TestTmpReaperKeepsLiveRunDir proves a reaper cannot delete a locked run directory.
 func TestTmpReaperKeepsLiveRunDir(t *testing.T) {
+	skipUnlessLinux(t)
 	root := t.TempDir()
 	live := filepath.Join(root, "rjc-hook.live")
 	stale := filepath.Join(root, "rjc-hook.stale")
@@ -1444,6 +1478,7 @@ func TestSSHHookRunnerRejectsQuotedShellOverride(t *testing.T) {
 }
 
 func TestSSHHookRunnerSendsOnlyMissingCommits(t *testing.T) {
+	skipUnlessLinux(t)
 	f, runner := sshGateFixture(t)
 	f.commit(t, "hk.pkl")
 	base, first := sshRange(t, f)
@@ -1471,6 +1506,7 @@ func TestSSHHookRunnerSendsOnlyMissingCommits(t *testing.T) {
 }
 
 func TestSSHHookRunnerFallsBackToFullBundle(t *testing.T) {
+	skipUnlessLinux(t)
 	f, runner := sshGateFixture(t)
 	f.commit(t, "hk.pkl")
 	base, first := sshRange(t, f)
@@ -1491,6 +1527,7 @@ func TestSSHHookRunnerFallsBackToFullBundle(t *testing.T) {
 }
 
 func TestSSHHookRunnerKeepsDevenvAcrossRuns(t *testing.T) {
+	skipUnlessLinux(t)
 	f, runner := sshGateFixture(t)
 	f.commit(t, "hk.pkl")
 	base, head := sshRange(t, f)

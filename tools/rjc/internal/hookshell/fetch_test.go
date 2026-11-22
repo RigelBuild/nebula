@@ -8,11 +8,20 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
 
+func skipUnlessLinux(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS != "linux" {
+		t.Skip("needs Linux setsid/flock/ps sid")
+	}
+}
+
 func TestFetch(t *testing.T) {
+	skipUnlessLinux(t)
 	for _, tc := range []struct {
 		name, mode, warning string
 		wantHK              bool

@@ -11,6 +11,7 @@ import (
 )
 
 func TestSSHHookHKFetchSelection(t *testing.T) {
+	skipUnlessLinux(t)
 	for _, managed := range []bool{false, true} {
 		t.Run(strconv.FormatBool(managed), func(t *testing.T) {
 			f, runner := sshGateFixture(t)

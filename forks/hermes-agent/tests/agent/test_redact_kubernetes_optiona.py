@@ -109,6 +109,13 @@ F12_BUILT_NAME = [
     ("dollar-subst", "kube$()ctl get pods -o yaml"),
     ("dollar-brace", "kube${x}ctl get pods -o yaml"),
     ("backslash-newline", "kube\\\nctl get pods -o yaml"),
+    ("newline-before-name", "echo x\nkubectl get secret s -o jsonpath={.data}"),
+    ("crlf-before-name", "true\r\nkubectl get secret s -o jsonpath={.data}"),
+    ("ifs-glued-name", "kubectl${IFS}get secret s -o jsonpath={.data}"),
+    ("ifs-glued-k", "k${IFS}get secret s -o jsonpath={.data}"),
+    ("paren-before-name", "echo)kubectl get secret s -o jsonpath={.data}"),
+    ("brace-before-name", "echo}kubectl get secret s -o jsonpath={.data}"),
+    ("subst-glued-name", "kubectl$(printf ' ')get secret s -o jsonpath={.data}"),
 ]
 
 

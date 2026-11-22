@@ -1818,13 +1818,15 @@ def _binary_base(token: str) -> str:
 
 
 def _mentions_kubectl(command: str | None) -> bool:
-    """True if ``command`` names kubectl, oc or k as a standalone word anywhere. Shell characters
-    that can split or build a word (quotes, backslash, ``$``, backtick, parens, braces, line breaks)
-    are removed first, so ``kube$''ctl`` and ``kube\\<newline>ctl`` still count as a mention."""
+    """True if ``command`` names kubectl, oc or k as a standalone word anywhere. Two copies are
+    checked: shell-building characters (quotes, backslash, ``$``, backtick, parens, braces, line
+    breaks) removed, so ``kube''ctl`` joins; and the same characters as spaces, so ``echo)kubectl``
+    and ``${IFS}`` split. A hit in either copy counts as a mention."""
     if not command or not isinstance(command, str):
         return False
-    stripped = re.sub(r"\$\{[^}]*\}", "", command)
-    return _KUBECTL_MENTION_RE.search(re.sub(r"[\"'\\\\$`(){}\r\n]", "", stripped)) is not None
+    removed = re.sub(r"[\"'\\\\$`(){}\r\n]", "", re.sub(r"\$\{[^}]*\}", "", command))
+    spaced = re.sub(r"[\"'\\\\$`(){}\r\n]", " ", command)
+    return any(_KUBECTL_MENTION_RE.search(t) is not None for t in (removed, spaced))
 
 
 _SHORT_FLAG_CLUSTER_RE = re.compile(r"-[A-Za-z]{2,}")

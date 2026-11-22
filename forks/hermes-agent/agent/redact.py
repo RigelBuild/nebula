@@ -1478,6 +1478,66 @@ def _redact_url_credentials(text: str, code_file: bool) -> str:
     return _redact_userinfo_passwords(text)
 
 
+# Secret-word query params on DB and JDBC URLs (``jdbc:postgresql://h/db?user=u&password=V``,
+# ``redis://h/0?passwd=V``) carry a credential in the query string, so default mode masks them.
+# Web-URL query params stay pass-through (see redact_sensitive_text). Keys match exactly after URL
+# decoding and case folding; the 12 names are the brief's secret words. Text is split into
+# whitespace-free runs and each run gets one query split, so the pass is linear. A regex from
+# each scheme to its ``?`` would rescan the same characters per scheme and go quadratic.
+_DB_URL_RUN_RE = re.compile(r"[^\s\"'<>]+")
+_DB_URL_SCHEME_RE = re.compile(
+    r"(?<![A-Za-z0-9])(?:jdbc:[a-z][a-z0-9+.\-]*:"
+    r"|(?:postgres(?:ql)?|mysql|mariadb|mongodb(?:\+srv)?|rediss?|amqps?)://)",
+    re.IGNORECASE,
+)
+_DB_URL_SECRET_KEYS = frozenset(
+    {
+        "password",
+        "passwd",
+        "pwd",
+        "secret",
+        "token",
+        "key",
+        "apikey",
+        "api_key",
+        "access_token",
+        "client_secret",
+        "sig",
+        "signature",
+    }
+)
+
+
+# Query separators: ``&``, HTML ``&amp;`` (XML and Spring config) and the JSON escape for ``&``.
+# The capture group keeps each separator in the split list, so ``"".join`` restores the text exactly.
+_DB_URL_PARAM_SEP_RE = re.compile(r"(&amp;|&|\\u0026)")
+
+
+def _mask_db_url_run(run: str) -> str:
+    head, sep, rest = run.partition("?")
+    if not sep or _DB_URL_SCHEME_RE.search(head) is None:
+        return run
+    query, frag_sep, fragment = rest.partition("#")
+    parts = _DB_URL_PARAM_SEP_RE.split(query)
+    for i in range(0, len(parts), 2):  # odd indices hold the captured separators
+        key, eq, value = parts[i].partition("=")
+        if (
+            eq
+            and value
+            and not _is_userinfo_placeholder(value)
+            and _canonical_url_param_name(key) in _DB_URL_SECRET_KEYS
+        ):
+            parts[i] = f"{key}=***"
+    return f"{head}?{''.join(parts)}{frag_sep}{fragment}"
+
+
+def _redact_db_url_query_params(text: str) -> str:
+    """Mask secret-word query params on DB and JDBC URLs; keep the key and other params visible."""
+    if "?" not in text:
+        return text
+    return _DB_URL_RUN_RE.sub(lambda m: _mask_db_url_run(m.group(0)), text)
+
+
 def _mask_network_path_userinfo(m) -> str:
     """``//user:pass@host`` without a scheme (#125664 residual); placeholders stay as written."""
     if _is_userinfo_placeholder(m.group(3)):
@@ -1600,6 +1660,8 @@ def redact_sensitive_text(text: str, *, force: bool = False, code_file: bool = F
     # #33801.
     if "://" in text:
         text = _redact_url_credentials(text, code_file)
+    # JDBC URLs have no "://" (``jdbc:h2:tcp:h/db?password=``), so this pass must not sit under that gate.
+    text = _redact_db_url_query_params(text)
     if force and "//" in text:
         text = _NETWORK_PATH_USERINFO_RE.sub(_mask_network_path_userinfo, text)
 

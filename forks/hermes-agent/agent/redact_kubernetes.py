@@ -405,9 +405,9 @@ _DESCRIBE_ARGV_RE = re.compile(r"(?:Command|Args):[ \t]+")
 _DESCRIBE_KEY_LINE_RE = re.compile(r"[A-Za-z_][\w.\-]*:")
 # A plain Spec key (no ``/``, space, ``$``): anything else is masked whole.
 _DESCRIBE_PLAIN_KEY_RE = re.compile(r"[A-Za-z_][\w\-]*")
-# A ``kubectl describe`` header: a column-zero ``Name:`` or ``Namespace:`` line. Python source and
-# docstrings never print one at column zero, so the Command/Args/Spec rules need it.
-_DESCRIBE_HEADER_RE = re.compile(r"^(?:Name|Namespace):[ \t]", re.MULTILINE)
+# A ``kubectl describe`` header: a ``Name:`` or ``Namespace:`` line at column zero or indented,
+# because a nested describe section carries its own Name line. The Command/Args/Spec rules need it.
+_DESCRIBE_HEADER_RE = re.compile(r"^[ \t]*(?:Name|Namespace):[ \t]", re.MULTILINE)
 
 
 def _flow_spans(text: str) -> list:

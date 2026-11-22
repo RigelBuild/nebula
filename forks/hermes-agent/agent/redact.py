@@ -1930,11 +1930,34 @@ def _kubectl_outputs_structured(args: list[str]) -> bool:
 _KUBECTL_BODY_LOG_LEVEL = 6
 
 
+def _vmodule_logs_bodies(value: str | None) -> bool:
+    """True if a ``--vmodule`` value (``pattern=level,...``) reaches ``_KUBECTL_BODY_LOG_LEVEL``.
+    A flag with no value, an entry with no ``=``, or a level that is not a plain number fails closed."""
+    if value is None:
+        return True
+    for entry in value.split(","):
+        _, sep, level = entry.rpartition("=")
+        if not sep or not level.isdecimal() or int(level) >= _KUBECTL_BODY_LOG_LEVEL:
+            return True
+    return False
+
+
 def _kubectl_verbosity_logs_bodies(args: list[str]) -> bool:
     """True if a verbosity flag in ``args`` reaches ``_KUBECTL_BODY_LOG_LEVEL``. A value that is
     not a plain number, or a flag with no value, fails closed. Forms: ``-v N``, ``-vN``, ``-v=N``,
-    ``--v N``, ``--v=N``, ``--loglevel N`` and ``--loglevel=N``."""
+    ``--v N``, ``--v=N``, ``--loglevel N``, ``--loglevel=N``, ``--vmodule PATTERN=N[,...]`` and
+    ``--vmodule=PATTERN=N[,...]``."""
     for i, tok in enumerate(args):
+        if tok == "--vmodule":
+            value = args[i + 1] if i + 1 < len(args) else None
+            if _vmodule_logs_bodies(value):
+                return True
+            continue
+        if tok.startswith("--vmodule="):
+            value = tok.split("=", 1)[1]
+            if _vmodule_logs_bodies(value):
+                return True
+            continue
         if tok in ("-v", "--v", "--loglevel"):
             value = args[i + 1] if i + 1 < len(args) else None
         elif tok.startswith(("--v=", "--loglevel=")):
@@ -1992,7 +2015,7 @@ def _is_structured_kubectl_read(command: str) -> bool:
     """True only for a kubectl/oc/k read that stays unmasked: one pipeline segment on one line,
     no ``$``, backtick, or parenthesis, shlex-parseable, the binary first after ``NAME=value``
     prefixes, not ``set env --list``, no ``exec``/``attach``/``debug``/``run``/``cp``/``rsh``/
-    ``extract`` token, not ``create token``, no ``--raw`` or ``--kuberc`` flag, no ``KUBECTL_KUBERC=``
+    ``extract`` token, not ``create token``, no ``--raw`` or ``--kuberc`` flag, no ``KUBECTL_KUBERC=`` or ``KUBERC=``
     assignment, not ``config view`` with ``--flatten``, not ``oc whoami`` with a token flag, a
     built-in read verb as the first verb, no verbosity at klog level 6 or higher, and
     every output format structured. Anything else is masked whole, so a wrapper, substitution,
@@ -2009,8 +2032,8 @@ def _is_structured_kubectl_read(command: str) -> bool:
     except ValueError:
         return False
     while tokens and _ENV_ASSIGNMENT_RE.match(tokens[0]):
-        # A KUBECTL_KUBERC= assignment is the env form of --kuberc, which the gate cannot read.
-        if tokens[0].startswith("KUBECTL_KUBERC="):
+        # A KUBECTL_KUBERC= or KUBERC= assignment is the env form of --kuberc, which the gate cannot read.
+        if tokens[0].startswith(("KUBECTL_KUBERC=", "KUBERC=")):
             return False
         tokens = tokens[1:]
     # A kubectl-<name> plugin binary is not in _KUBECTL_NAMES, so it is masked here.

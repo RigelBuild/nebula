@@ -1,8 +1,6 @@
-"""RIG-11984 known gaps: bypasses found by the PR 226 review that this change does not close.
+"""RIG-11984 bypasses found by the PR 226 review, closed by this change.
 
-Each row is a real leak today. ``xfail(strict=True)`` keeps the suite green while the gap is
-open, and turns the row red the moment a fix makes it pass, so the marker must then be removed.
-Tracked on RIG-11984; not patched in this change (no second patch round).
+Each row pins one of those bypasses, so a regression fails the suite.
 """
 
 import pytest
@@ -80,10 +78,10 @@ def test_g3_kuberc_default_output_masks_whole_output(command):
 # KUBERC= prefix passes and a kuberc default output stays unread.
 G4_KUBERC_ENV = [
     ("kuberc-env-real", "KUBERC=/tmp/k kubectl get secret s"),
+    ("kuberc-env-after-other", "FOO=1 KUBERC=/tmp/k kubectl get secret s"),
 ]
 
 
-@pytest.mark.xfail(strict=True, reason="RIG-11984 gap G4: KUBERC= env prefix not denied")
 @pytest.mark.parametrize("command", [c for _, c in G4_KUBERC_ENV], ids=[i for i, _ in G4_KUBERC_ENV])
 def test_g4_kuberc_env_prefix_masks_whole_output(command):
     text = V + "\n"
@@ -98,10 +96,14 @@ def test_g4_kuberc_env_prefix_masks_whole_output(command):
 G5_VMODULE = [
     ("vmodule-eq-get", "kubectl get secret s -o name --vmodule=round_trippers=8"),
     ("vmodule-eq-leading", "kubectl --vmodule=round_trippers=8 get secret s -o name"),
+    ("vmodule-space-get", "kubectl get secret s -o name --vmodule round_trippers=8"),
+    ("vmodule-bare-value", "kubectl get secret s -o name --vmodule"),
+    ("vmodule-no-equals", "kubectl get secret s -o name --vmodule round_trippers"),
+    ("vmodule-non-decimal", "kubectl get secret s -o name --vmodule round_trippers=high"),
+    ("vmodule-later-entry", "kubectl get secret s -o name --vmodule foo=1,round_trippers=8"),
 ]
 
 
-@pytest.mark.xfail(strict=True, reason="RIG-11984 gap G5: --vmodule round_trippers level not parsed")
 @pytest.mark.parametrize("command", [c for _, c in G5_VMODULE], ids=[i for i, _ in G5_VMODULE])
 def test_g5_vmodule_verbose_body_masks_value(command):
     text = (
@@ -110,3 +112,11 @@ def test_g5_vmodule_verbose_body_masks_value(command):
     )
     for out in _terminal(text, command):
         assert V not in out, out
+
+
+# Negative control: round_trippers=5 is below the body-logging level, so nothing is masked.
+def test_vmodule_low_level_stays_readable():
+    command = "kubectl get secret s -o yaml --vmodule=round_trippers=5"
+    text = "apiVersion: v1\nkind: Secret\n"
+    for out in _terminal(text, command):
+        assert out == text

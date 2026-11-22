@@ -104,6 +104,83 @@ class TestDbUrlSecretQueryParams:
         )
 
 
+class TestJdbcWithoutSchemeSeparator:
+    """RIG-11725 M1: JDBC URLs have no ``://``; the query pass must still reach them."""
+
+    @pytest.mark.parametrize(
+        ("text", "expected"),
+        [
+            (
+                f"jdbc:oracle:thin:@h:1521/svc?password={SECRET}",
+                "jdbc:oracle:thin:@h:1521/svc?password=***",
+            ),
+            (
+                f"jdbc:h2:tcp:h/db?password={SECRET}",
+                "jdbc:h2:tcp:h/db?password=***",
+            ),
+            (
+                f"jdbc:sqlite:/x.db?key={SECRET}",
+                "jdbc:sqlite:/x.db?key=***",
+            ),
+            (
+                f"conn jdbc:oracle:thin:@h:1521/svc?password={SECRET} and https://x/",
+                "conn jdbc:oracle:thin:@h:1521/svc?password=*** and https://x/",
+            ),
+        ],
+    )
+    def test_jdbc_url_without_scheme_separator_masked(self, text, expected):
+        assert redact_sensitive_text(text) == expected
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "jdbc:oracle:thin:@h:1521/svc?oracle.jdbc.driverType=thin",
+            "jdbc:sqlite:/x.db?mode=ro",
+        ],
+    )
+    def test_jdbc_url_without_scheme_non_secret_kept(self, text):
+        assert redact_sensitive_text(text) == text
+
+    def test_query_pass_ignores_text_without_a_db_scheme(self):
+        """Only DB and JDBC schemes are covered; prose is not."""
+        text = f"see docs?password={SECRET}"
+        assert _redact_db_url_query_params(text) == text
+
+
+class TestEscapedQuerySeparators:
+    """RIG-11725 M2: ``&amp;`` and JSON ``\\u0026`` also separate params."""
+
+    @pytest.mark.parametrize(
+        ("text", "expected"),
+        [
+            (
+                '<property name="url" value="jdbc:mysql://h:3306/app?'
+                f'useSSL=true&amp;password={SECRET}"/>',
+                '<property name="url" value="jdbc:mysql://h:3306/app?'
+                'useSSL=true&amp;password=***"/>',
+            ),
+            (
+                r'{"value":"jdbc:postgresql://db:5432/app?sslmode=require\u0026'
+                f'password={SECRET}"}}',
+                r'{"value":"jdbc:postgresql://db:5432/app?sslmode=require\u0026'
+                'password=***"}',
+            ),
+        ],
+    )
+    def test_escaped_separator_secret_masked(self, text, expected):
+        assert redact_sensitive_text(text) == expected
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            f"https://idp/cb?user=a&amp;token={SECRET}",
+            r"https://idp/cb?user=a\u0026token=" + SECRET,
+        ],
+    )
+    def test_web_url_escaped_separator_passes_through_by_default(self, text):
+        assert redact_sensitive_text(text) == text
+
+
 class TestDbUrlQueryScaling:
     """The pass must stay linear: a 10x larger input may take at most 25x as long."""
 

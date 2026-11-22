@@ -1475,7 +1475,6 @@ def _redact_url_credentials(text: str, code_file: bool) -> str:
         return f"{m.group(1)}***{m.group(3)}"
     text = _DB_CONNSTR_RE.sub(_redact_db, text)
     text = _URL_BARE_TOKEN_RE.sub(lambda m: f"{m.group(1)}{_mask_token(m.group(2))}{m.group(3)}", text)
-    text = _redact_db_url_query_params(text)
     return _redact_userinfo_passwords(text)
 
 
@@ -1509,24 +1508,27 @@ _DB_URL_SECRET_KEYS = frozenset(
 )
 
 
+# Query separators: ``&``, HTML ``&amp;`` (XML and Spring config) and the JSON escape for ``&``.
+# The capture group keeps each separator in the split list, so ``"".join`` restores the text exactly.
+_DB_URL_PARAM_SEP_RE = re.compile(r"(&amp;|&|\\u0026)")
+
+
 def _mask_db_url_run(run: str) -> str:
     head, sep, rest = run.partition("?")
     if not sep or _DB_URL_SCHEME_RE.search(head) is None:
         return run
     query, frag_sep, fragment = rest.partition("#")
-    pairs = []
-    for pair in query.split("&"):
-        key, eq, value = pair.partition("=")
+    parts = _DB_URL_PARAM_SEP_RE.split(query)
+    for i in range(0, len(parts), 2):  # odd indices hold the captured separators
+        key, eq, value = parts[i].partition("=")
         if (
             eq
             and value
             and not _is_userinfo_placeholder(value)
             and _canonical_url_param_name(key) in _DB_URL_SECRET_KEYS
         ):
-            pairs.append(f"{key}=***")
-        else:
-            pairs.append(pair)
-    return f"{head}?{'&'.join(pairs)}{frag_sep}{fragment}"
+            parts[i] = f"{key}=***"
+    return f"{head}?{''.join(parts)}{frag_sep}{fragment}"
 
 
 def _redact_db_url_query_params(text: str) -> str:
@@ -1658,6 +1660,8 @@ def redact_sensitive_text(text: str, *, force: bool = False, code_file: bool = F
     # #33801.
     if "://" in text:
         text = _redact_url_credentials(text, code_file)
+    # JDBC URLs have no "://" (``jdbc:h2:tcp:h/db?password=``), so this pass must not sit under that gate.
+    text = _redact_db_url_query_params(text)
     if force and "//" in text:
         text = _NETWORK_PATH_USERINFO_RE.sub(_mask_network_path_userinfo, text)
 

@@ -6058,11 +6058,10 @@ class DiscordAdapter(DiscordAuthorizationMixin, DiscordMediaMixin, DiscordThread
                     result = await asyncio.wait_for(self._send_exec_approval_card(prompt, replacement), window)
                 except TimeoutError:
                     # Known limit: Discord may have posted the card before the cancel; its buttons then stay live.
-                    # Treat it as maybe delivered and never post a second card.
+                    # Treat it as maybe delivered and never post a second card. The never-shown mark stays: delivery is unconfirmed.
                     logger.warning("[%s] approval card re-post %d not confirmed in time: request_id=%s",
                                    self.name, attempt + 1, request_id)
                     replacement.undelivered = False
-                    clear_gateway_approval_undelivered(prompt.session_key, request_id)
                     break
                 if result.success:
                     # The card is delivered now: it, not the text prompt's deadline, ends the wait.

@@ -2283,3 +2283,84 @@ async def test_undelivered_approval_shown_by_a_later_repost_is_withdrawn_as_a_pl
     assert "approval was withdrawn before the user answered (Stop requested)" in result["message"]
     assert "never shown" not in result["message"]
     assert session_key not in mod._denial_tally
+
+
+@pytest.mark.asyncio
+async def test_in_flight_repost_whose_fallback_then_fails_is_named_never_shown(monkeypatch):
+    # The card fails and its text fallback is in flight. A reconnect repost starts and its card send is still in
+    # flight when the fallback fails. Neither surface has shown the prompt yet, so the request is marked never
+    # shown. When the repost then fails too, the mark must stay: /stop must not read as a plain withdrawal.
+    from gateway.platforms.base import SendResult
+
+    adapter = DiscordAdapter(PlatformConfig(enabled=True, token="test-token",
+                                            extra={"approval_card_confirm_timeout": 5}))
+    created: list[_FakeBot] = []
+    await _connect(adapter, monkeypatch, created)
+    monkeypatch.setattr(adapter, "_EXEC_APPROVAL_REPOST_BACKOFF", (0.0,))
+    started, release = _gated_text_fallback(monkeypatch, adapter)
+    card_calls = []
+    repost_card_started, release_repost_card = asyncio.Event(), asyncio.Event()
+
+    async def card(_prompt, _view):
+        card_calls.append(1)
+        if len(card_calls) == 1:
+            return SendResult(success=False, error="Not connected")  # the card
+        repost_card_started.set()
+        await release_repost_card.wait()
+        return SendResult(success=False, error="down")  # the repost
+    monkeypatch.setattr(adapter, "_send_exec_approval_card", card)
+    session = "agent:other:discord:555"
+    request_id = uuid.uuid4().hex
+    entry = _queue_entry(monkeypatch, session, request_id)
+
+    prompt_task = asyncio.create_task(adapter._send_exec_approval_prompt(_undelivered_prompt(session, request_id)))
+    await asyncio.wait_for(started.wait(), 5)
+    repost_task = asyncio.create_task(adapter._repost_undelivered_exec_approval_cards())
+    await asyncio.wait_for(repost_card_started.wait(), 5)
+    release.set()
+    await asyncio.wait_for(prompt_task, 5)
+    assert entry.undelivered == "Not connected, then send_path_degraded"
+    release_repost_card.set()
+    await asyncio.wait_for(repost_task, 5)
+
+    assert card_calls == [1, 1]
+    assert entry.undelivered is not None
+    assert entry.shown is False
+    await adapter.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_repost_that_times_out_leaves_the_request_never_shown(monkeypatch):
+    # The card and its text fallback fail, so the request is marked never shown before any repost. The reconnect
+    # repost's card send then hangs past the window. The card may or may not have reached Matt, so the repost
+    # cannot prove it was shown: the never-shown mark must stay, and /stop must not read as a plain withdrawal.
+    from gateway.platforms.base import SendResult
+
+    adapter = DiscordAdapter(PlatformConfig(enabled=True, token="test-token",
+                                            extra={"approval_card_confirm_timeout": 0.2}))
+    created: list[_FakeBot] = []
+    await _connect(adapter, monkeypatch, created)
+    monkeypatch.setattr(adapter, "_EXEC_APPROVAL_REPOST_BACKOFF", (0.0,))
+    monkeypatch.setattr(adapter, "_send_exec_approval_text_fallback", AsyncMock(return_value="send_path_degraded"))
+    card_calls = []
+
+    async def card(_prompt, _view):
+        card_calls.append(1)
+        if len(card_calls) == 1:
+            return SendResult(success=False, error="Not connected")  # the card
+        await asyncio.Event().wait()  # the repost hangs past the window
+    monkeypatch.setattr(adapter, "_send_exec_approval_card", card)
+    session = "agent:other:discord:555"
+    request_id = uuid.uuid4().hex
+    entry = _queue_entry(monkeypatch, session, request_id)
+
+    await adapter._send_exec_approval_prompt(_undelivered_prompt(session, request_id))
+    assert entry.undelivered == "Not connected, then send_path_degraded"
+    # The card-failure withdrawal shares the window and would fire mid-repost. This test pins the repost timeout.
+    adapter._exec_approval_views[request_id].undelivered_withdrawal.cancel()
+    await asyncio.wait_for(adapter._repost_undelivered_exec_approval_cards(), 5)
+
+    assert card_calls == [1, 1]
+    assert entry.undelivered is not None
+    assert entry.shown is False
+    await adapter.disconnect()

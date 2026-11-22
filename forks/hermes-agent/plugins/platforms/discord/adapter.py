@@ -5986,8 +5986,9 @@ class DiscordAdapter(DiscordAuthorizationMixin, DiscordMediaMixin, DiscordThread
         task.add_done_callback(self._background_tasks.discard)
         task.add_done_callback(_consume_background_task_result)
         text_failure = await self._send_exec_approval_text_fallback(prompt)
-        if text_failure is not None:
-            # Card and text fallback both failed: no surface shows the prompt, so a /stop must say so.
+        if text_failure is not None and view.undelivered:
+            # Card and text fallback both failed: no surface shows the prompt, so a /stop must say so. A reconnect
+            # repost that showed the card while this fallback was in flight has already cleared ``undelivered``.
             from tools.approval import mark_gateway_approval_undelivered
             mark_gateway_approval_undelivered(prompt.session_key, view.request_id, f"{result.error}, then {text_failure}")
         return SendResult(success=False, error=result.error, raw_response={"approval_text_fallback_posted": True})
@@ -6025,7 +6026,10 @@ class DiscordAdapter(DiscordAuthorizationMixin, DiscordMediaMixin, DiscordThread
 
     async def _repost_undelivered_exec_approval_cards(self) -> None:
         """After a reconnect, post each still-pending card that never reached Discord again in its own thread."""
-        from tools.approval import list_gateway_approval_authority
+        from tools.approval import (
+            clear_gateway_approval_undelivered,
+            list_gateway_approval_authority,
+        )
         window = _read_approval_card_confirm_timeout(getattr(self.config, "extra", None))
         for request_id, view in list(self._exec_approval_views.items()):
             prompt = getattr(view, "prompt", None)
@@ -6054,6 +6058,8 @@ class DiscordAdapter(DiscordAuthorizationMixin, DiscordMediaMixin, DiscordThread
                     withdrawal = getattr(view, "undelivered_withdrawal", None)
                     if withdrawal is not None:
                         withdrawal.cancel()
+                    view.undelivered = False
+                    clear_gateway_approval_undelivered(prompt.session_key, request_id)
                     break
                 # The replacement is the registered view now: keep it retryable on a later reconnect.
                 replacement.undelivered = True

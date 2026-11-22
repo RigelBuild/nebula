@@ -254,6 +254,17 @@ def mark_gateway_approval_undelivered(session_key: str, request_id: str, reason:
     return True
 
 
+def clear_gateway_approval_undelivered(session_key: str, request_id: str) -> bool:
+    """Record that a reconnect repost showed pending approval *request_id* after all, so it is no longer undelivered.
+    A later /stop then names the withdrawal, not a failed delivery. False when it is no longer pending."""
+    with _lock:
+        entry = next((e for e in _gateway_queues.get(session_key, []) if e.data.get("request_id") == request_id), None)
+        if entry is None:
+            return False
+        entry.undelivered = None
+    return True
+
+
 def withdraw_gateway_approval(session_key: str, request_id: str, cause: str) -> bool:
     """Withdraw one pending approval nobody can answer (the only attached client cannot render it).
     The waiter wakes at once with ``cancelled=cause`` — a withdrawal, never a user deny — instead of

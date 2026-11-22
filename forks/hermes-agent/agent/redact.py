@@ -1822,10 +1822,21 @@ def _mentions_kubectl(command: str | None) -> bool:
     return _KUBECTL_MENTION_RE.search(command) is not None
 
 
+_SHORT_FLAG_CLUSTER_RE = re.compile(r"-[A-Za-z]{2,}")
+
+
+def _is_short_flag_cluster(tok: str) -> bool:
+    """True for a single-dash token that starts with two or more ASCII letters: ``-Ao``,
+    ``-wo``, ``-Aojson``, and ``-Ao=jsonpath={...}`` once a value is attached. kubectl reads
+    each letter as a short flag, so an ``o`` inside the run may be an output flag."""
+    return _SHORT_FLAG_CLUSTER_RE.match(tok) is not None
+
+
 def _kubectl_outputs_structured(args: list[str]) -> bool:
     """True if every output-format flag in ``args`` names a structured format. All occurrences
     count, so the first-vs-last flag does not matter: ``-o X``, ``-oX``, ``-o=X``, ``--output X``,
-    ``--output=X``, and the same forms of ``--template``. A missing value fails."""
+    ``--output=X``, and the same forms of ``--template``. A missing value fails. A short-flag
+    cluster that does not start with ``o`` (``-Ao``, ``-wo``) fails closed: its ``o`` is hidden."""
     for i, tok in enumerate(args):
         if tok in ("-o", "--output", "--template"):
             value = args[i + 1] if i + 1 < len(args) else None
@@ -1833,6 +1844,8 @@ def _kubectl_outputs_structured(args: list[str]) -> bool:
             value = tok.split("=", 1)[1]
         elif tok.startswith("-o") and not tok.startswith("--"):
             value = tok[2:].removeprefix("=")
+        elif _is_short_flag_cluster(tok):
+            return False
         else:
             continue
         if value not in _KUBECTL_STRUCTURED_FORMATS:

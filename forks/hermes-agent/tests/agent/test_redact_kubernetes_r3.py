@@ -54,11 +54,12 @@ def test_h1_go_template_attached_flag():
         assert V not in out, out
 
 
-def test_h1_jsonpath_pods_kept():
+def test_h1_jsonpath_pods_intended_over_mask():
     text = "web-1\n"
     command = "kubectl get pods -o jsonpath='{.items[*].metadata.name}'"
+    # intended over-mask: option A masks any -o jsonpath read.
     for out in _terminal(text, command):
-        assert "web-1" in out, out
+        assert out == "***", out
 
 
 # --- H2: kubectl set env --list prints NAME=value ----------------------------------------------

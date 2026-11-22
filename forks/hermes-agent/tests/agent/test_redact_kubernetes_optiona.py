@@ -2,7 +2,8 @@
 clean, every output-format flag is structured, and it is not ``set env --list``.
 
 Bypass rows: shapes that the per-line Secret pass cannot see (wrapper, substitution,
-pipe-to-filter, mixed ``-o``, Windows path, manifest input, ``set env --list``, ``oc``).
+pipe-to-filter, mixed ``-o``, Windows path, manifest input, short-flag cluster,
+``set env --list``, ``oc``).
 Keep rows: clean structured or table reads that must still show their content.
 """
 
@@ -73,6 +74,18 @@ F8_OC = [
     ("oc-secret-jsonpath", "oc get secret s -o jsonpath='{.data.k}'"),
 ]
 
+# F9: a short-flag cluster hides an ``o`` output flag (``-Ao``, ``-wo``, ``-oA``, ``-Aojson``).
+F9_SHORT_CLUSTER = [
+    ("Ao-jsonpath", "kubectl get secret s -Ao jsonpath='{.data.k}'"),
+    ("wo-jsonpath", "kubectl get secret s -wo jsonpath='{.data.k}'"),
+    ("oA-jsonpath", "kubectl get secret s -oA jsonpath='{.data.k}'"),
+    ("Aojson", "kubectl get secret s -Aojson"),
+    ("Aojsonpath-brace", "kubectl get secret s -Aojsonpath={.data.k}"),
+    ("Ao-eq-jsonpath", "kubectl get secret s -Ao=jsonpath={.data.k}"),
+    ("wo-quoted", "kubectl get secret s -wo'jsonpath={.data.k}'"),
+    ("Aogo-template", "kubectl get secret s -Aogo-template={{.data.k}}"),
+]
+
 
 @pytest.mark.parametrize("command", [c for _, c in F1_WRAPPER], ids=[i for i, _ in F1_WRAPPER])
 def test_f1_wrapper_masks_whole_output(command):
@@ -140,6 +153,14 @@ def test_f8_oc_masks_whole_output(command):
         assert out == "***", out
 
 
+@pytest.mark.parametrize("command", [c for _, c in F9_SHORT_CLUSTER], ids=[i for i, _ in F9_SHORT_CLUSTER])
+def test_f9_short_flag_cluster_masks_whole_output(command):
+    text = V + "\n"
+    for out in _terminal(text, command):
+        assert V not in out, out
+        assert out == "***", out
+
+
 # F7 (low, accepted over-mask by design): ``k`` as a standalone word in a non-kubectl command
 # masks the output. Baseline already masks it; Option A keeps it that way.
 def test_f7_standalone_k_word_in_grep_masks_accepted_over_mask():
@@ -150,6 +171,14 @@ def test_f7_standalone_k_word_in_grep_masks_accepted_over_mask():
 
 
 # --- Keep rows: a clean read shows its content --------------------------------------------------
+
+
+def test_keep_get_pods_all_namespaces_short_flag():
+    text = "NAME READY STATUS\napi-7f9 1/1 Running " + K + "\n"
+    for out in _terminal(text, "kubectl get pods -A"):
+        assert out != "***", out
+        assert K in out, out
+
 
 def test_keep_get_pods_table():
     text = "NAME READY STATUS\napi-7f9 1/1 Running " + K + "\n"

@@ -1816,10 +1816,11 @@ def _binary_base(token: str) -> str:
 
 
 def _mentions_kubectl(command: str | None) -> bool:
-    """True if ``command`` names kubectl, oc or k as a standalone word anywhere."""
+    """True if ``command`` names kubectl, oc or k as a standalone word anywhere. Quotes and
+    backslashes are removed first, because the shell joins ``kube''ctl`` and ``k\\ubectl`` into one word."""
     if not command or not isinstance(command, str):
         return False
-    return _KUBECTL_MENTION_RE.search(command) is not None
+    return _KUBECTL_MENTION_RE.search(re.sub(r"[\"'\\\\]", "", command)) is not None
 
 
 _SHORT_FLAG_CLUSTER_RE = re.compile(r"-[A-Za-z]{2,}")
@@ -1873,6 +1874,9 @@ def _is_structured_kubectl_read(command: str) -> bool:
     while tokens and _ENV_ASSIGNMENT_RE.match(tokens[0]):
         tokens = tokens[1:]
     if not tokens or _binary_base(tokens[0]) not in _KUBECTL_NAMES:
+        return False
+    raw_words = [w for w in command.split() if not _ENV_ASSIGNMENT_RE.match(w)]
+    if not raw_words or any(ch in raw_words[0] for ch in "\"'\\\\"):
         return False
     args = tokens[1:]
     if "set" in args and "env" in args and any(

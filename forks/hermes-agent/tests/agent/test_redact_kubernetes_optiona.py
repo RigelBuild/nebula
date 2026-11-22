@@ -92,10 +92,26 @@ F10_BRACE = [
     ("brace-oyaml-ojsonpath", "kubectl get secret x {-oyaml,-ojsonpath={.data}}"),
     ("glob-bracket-ojsonpath", "kubectl get secret x -o yaml [-]ojsonpath=.data.password"),
     ("glob-star-ojsonpath", "kubectl get secret x -o yaml *ojsonpath=.data.password"),
+    ("split-empty-quotes", "kube''ctl get pods -o yaml"),
+    ("split-double-quotes", "\"kube\"ctl config view --raw"),
+    ("split-backslash", "kube\\ctl exec web -- env"),
+    ("split-double-empty", "kube\"\"ctl get secret s -o yaml"),
 ]
 
 
-@pytest.mark.parametrize("command", [c for _, c in F10_BRACE], ids=[i for i, _ in F10_BRACE])
+# F11: quoting or escaping the kubectl name splits it from the mention check.
+F11_SPLIT_NAME = [row for row in F10_BRACE if row[0].startswith("split-")]
+PLAIN = "plainvalue-hunter2"
+
+
+@pytest.mark.parametrize("command", [c for _, c in F11_SPLIT_NAME], ids=[i for i, _ in F11_SPLIT_NAME])
+def test_f11_split_kubectl_name_masks_whole_output(command):
+    text = PLAIN + "\n"
+    for out in _terminal(text, command):
+        assert PLAIN not in out, out
+        assert out == "***", out
+
+@pytest.mark.parametrize("command", [c for n, c in F10_BRACE if not n.startswith("split-")], ids=[n for n, _ in F10_BRACE if not n.startswith("split-")])
 def test_f10_brace_expansion_masks_whole_output(command):
     text = V + "\n"
     for out in _terminal(text, command):

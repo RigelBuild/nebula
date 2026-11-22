@@ -2881,8 +2881,14 @@ mod tests {
 		r.set_role(Role::Sender);
 		r.link_writer(w);
 		let flag = Arc::clone(&cancel);
+		let bytes = Arc::clone(&sink.bytes);
 		let t = thread::spawn(move || {
-			thread::sleep(Duration::from_millis(2300));
+			// Cancel once two keepalive frames (4 bytes each, empty payload) are
+			// written. The deadline only bounds a regression so the read cannot hang.
+			let deadline = Instant::now() + Duration::from_secs(5);
+			while lock(&bytes).len() < 8 && Instant::now() < deadline {
+				thread::sleep(Duration::from_millis(5));
+			}
 			flag.store(true, Ordering::Relaxed);
 		});
 		let err = r.read(&mut [0u8; 1]).unwrap_err();

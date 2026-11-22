@@ -252,7 +252,7 @@ func idleCandidates(root *os.Root, now time.Time, maxIdle time.Duration) ([]stri
 				continue
 			}
 			rel := filepath.Join(seat, workspace.Name())
-			idle, err := idleLongerThan(root, rel, workspace, now, maxIdle)
+			idle, err := idleLongerThan(root, rel, now, maxIdle)
 			if err != nil {
 				return nil, err
 			}
@@ -264,23 +264,13 @@ func idleCandidates(root *os.Root, now time.Time, maxIdle time.Duration) ([]stri
 	return out, nil
 }
 
-// idleLongerThan checks every entry in the workspace without following symlinks.
-func idleLongerThan(root *os.Root, rel string, _ fs.DirEntry, now time.Time, maxIdle time.Duration) (bool, error) {
-	idle := true
-	err := fs.WalkDir(root.FS(), filepath.ToSlash(rel), func(path string, entry fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		info, err := entry.Info()
-		if err != nil {
-			return err
-		}
-		if now.Sub(info.ModTime()) <= maxIdle {
-			idle = false
-			return fs.SkipAll
-		}
-		return nil
-	})
+// idleLongerThan checks the entire tree and keeps it when the walk is bounded.
+func idleLongerThan(root *os.Root, rel string, now time.Time, maxIdle time.Duration) (bool, error) {
+	scan := homeScan{root: root, now: now, maxIdle: maxIdle, budget: defaultWalkBudget, clock: time.Now, out: &printer{w: io.Discard}}
+	idle, err := scan.treeIdle(rel)
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
 	return idle, err
 }
 
@@ -302,7 +292,7 @@ func stagedLeftovers(root *os.Root, now time.Time, maxIdle time.Duration) ([]str
 				continue
 			}
 			rel := filepath.Join(seat, workspace.Name())
-			idle, err := idleLongerThan(root, rel, workspace, now, maxIdle)
+			idle, err := idleLongerThan(root, rel, now, maxIdle)
 			if err != nil {
 				return nil, err
 			}

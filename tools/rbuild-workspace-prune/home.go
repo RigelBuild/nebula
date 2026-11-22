@@ -43,7 +43,7 @@ type homeWalk struct {
 	clock  func() time.Time
 }
 
-// homeScan selects home candidates. A walk past its bound falls back to top-level mtimes.
+// homeScan selects home candidates and keeps trees whose walks exceed their bounds.
 type homeScan struct {
 	root    *os.Root
 	now     time.Time
@@ -75,14 +75,14 @@ func selectCandidates(root *os.Root, now time.Time, opts options, out *printer) 
 			return nil, nil, err
 		}
 		for _, rel := range matches {
-			info, err := root.Lstat(rel)
+			ok, err := safeGlobPath(root, rel, false)
 			if err != nil {
 				return nil, nil, err
 			}
-			if !info.IsDir() || strings.HasPrefix(filepath.Base(rel), pruneStagePrefix) {
+			if !ok {
 				continue
 			}
-			idle, err := idleLongerThan(root, rel, nil, now, opts.maxIdle)
+			idle, err := idleLongerThan(root, rel, now, opts.maxIdle)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -96,14 +96,14 @@ func selectCandidates(root *os.Root, now time.Time, opts options, out *printer) 
 			return nil, nil, err
 		}
 		for _, rel := range staged {
-			info, err := root.Lstat(rel)
+			ok, err := safeGlobPath(root, rel, true)
 			if err != nil {
 				return nil, nil, err
 			}
-			if !info.IsDir() {
+			if !ok {
 				continue
 			}
-			idle, err := idleLongerThan(root, rel, nil, now, opts.maxIdle)
+			idle, err := idleLongerThan(root, rel, now, opts.maxIdle)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -118,6 +118,29 @@ func selectCandidates(root *os.Root, now time.Time, opts options, out *printer) 
 	}
 	leftovers, err = stagedLeftovers(root, now, opts.maxIdle)
 	return candidates, leftovers, err
+}
+
+// safeGlobPath refuses hidden components, bare caches and symlinked paths.
+func safeGlobPath(root *os.Root, rel string, staged bool) (bool, error) {
+	parts := strings.Split(filepath.ToSlash(rel), "/")
+	path := ""
+	for i, part := range parts {
+		if strings.HasSuffix(part, ".git") || (strings.HasPrefix(part, ".") && !(staged && i == len(parts)-1 && strings.HasPrefix(part, pruneStagePrefix))) {
+			return false, nil
+		}
+		path = filepath.Join(path, part)
+		info, err := root.Lstat(path)
+		if errors.Is(err, fs.ErrNotExist) {
+			return false, nil
+		}
+		if err != nil {
+			return false, err
+		}
+		if !info.IsDir() || info.Mode()&fs.ModeSymlink != 0 {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 // candidates returns the home entries idle longer than maxIdle: top-level entries

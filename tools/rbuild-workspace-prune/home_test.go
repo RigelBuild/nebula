@@ -147,9 +147,8 @@ func steppingClock() func() time.Time {
 	}
 }
 
-// TestHomeIdleWalkBoundFallsBackToTopLevel judges a tree past the time or depth bound
-// by its top-level entries: idle ones are pruned, one fresh top-level entry keeps it.
-func TestHomeIdleWalkBoundFallsBackToTopLevel(t *testing.T) {
+// TestHomeIdleWalkBoundKeepsTree keeps trees whose walk exceeds its bounds.
+func TestHomeIdleWalkBoundKeepsTree(t *testing.T) {
 	deep := "harness/job"
 	for range idleWalkMaxDepth + 1 {
 		deep += "/d"
@@ -157,24 +156,17 @@ func TestHomeIdleWalkBoundFallsBackToTopLevel(t *testing.T) {
 	cases := []struct {
 		name      string
 		tree      string
-		freshTop  bool
 		timeBound bool
 		removed   bool
 	}{
-		{"time bound idle", "harness/job/a", false, true, false},
-		{"time bound fresh top-level entry", "harness/job/a", true, true, false},
-		{"depth bound idle", deep, false, false, false},
-		{"depth bound fresh top-level entry", deep, true, false, false},
+		{"time bound idle", "harness/job/a", true, false},
+		{"depth bound idle", deep, false, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			home := t.TempDir()
 			idleTree(t, home, tc.tree)
 			job := filepath.Join(home, "harness", "job")
-			if tc.freshTop {
-				touchAt(t, filepath.Join(job, "out.log"), testNow.Add(-time.Hour))
-				setMtime(t, job, homeOld)
-			}
 			opts := homeOpts(t, home, makeProcTable(t))
 			if tc.timeBound {
 				opts.walk = homeWalk{budget: time.Nanosecond, clock: steppingClock()}

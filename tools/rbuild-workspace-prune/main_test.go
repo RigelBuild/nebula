@@ -476,8 +476,8 @@ func TestGlobPrune(t *testing.T) {
 		{"live cwd", "workspaces/*/*", "workspaces/seat/ws", "cwd", false, false, false},
 		{"open fd", "workspaces/*/*", "workspaces/seat/ws", "fd", false, false, false},
 		{"held slot", "workspaces/*/*", "workspaces/seat/ws", "", false, true, true},
-		{"shared bare cache", "RigelBuild/*/w[0-9]*", "RigelBuild/x.git", "", false, false, false},
-		{"shared tools", "RigelBuild/*/w[0-9]*", "tools/cache", "", false, false, false},
+		{"shared bare cache", "RigelBuild/*/w[0-9]*", "RigelBuild/x.git/w0", "", false, false, false},
+		{"hidden directory", "workspaces/*/*", "workspaces/.cotal/auth", "", false, false, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -513,6 +513,78 @@ func TestGlobPrune(t *testing.T) {
 			_, err := os.Stat(path)
 			if gone := errors.Is(err, fs.ErrNotExist); gone != tc.removed {
 				t.Fatalf("removed=%v want %v: %v", gone, tc.removed, err)
+			}
+		})
+	}
+}
+
+func TestGlobRejectsSymlinkedParent(t *testing.T) {
+	root := t.TempDir()
+	live := idleTree(t, root, "rigel/clones/ws")
+	if err := os.MkdirAll(filepath.Join(root, "workspaces"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("../rigel/clones", filepath.Join(root, "workspaces", "seat")); err != nil {
+		t.Fatal(err)
+	}
+	proc := makeProcTable(t, "100")
+	linkCwd(t, proc, "100", resolvedRoot(t, live))
+	var out strings.Builder
+	if err := prune(options{root: resolvedRoot(t, root), pattern: "workspaces/*/*", maxIdle: 24 * time.Hour, procDir: proc, readCwd: os.Readlink}, testNow, &out); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(live); err != nil {
+		t.Fatalf("live tree removed: %v", err)
+	}
+}
+
+func TestIdleLongerThanDepthBound(t *testing.T) {
+	root := t.TempDir()
+	deep := "seat/ws" + strings.Repeat("/d", idleWalkMaxDepth+1)
+	idleTree(t, root, deep)
+	idle, err := idleLongerThan(openRootForTest(t, root), "seat/ws", testNow, 24*time.Hour)
+	if err != nil || idle {
+		t.Fatalf("idle=%v err=%v; want bounded tree kept", idle, err)
+	}
+}
+
+func TestPruneRescanSafety(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		staged, busy bool
+	}{
+		{"leftover rescan error", true, false},
+		{"leftover busy at rescan", true, true},
+		{"candidate rescan error restores", false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			name := "ws"
+			if tc.staged {
+				name = ".prune-ws-123"
+			}
+			path := setWorkspace(t, root, "seat", name, homeOld)
+			proc := makeProcTable(t, "100")
+			reader := func(string) (string, error) {
+				if tc.busy {
+					return path, nil
+				}
+				return "", syscall.EACCES
+			}
+			opts := options{root: resolvedRoot(t, root), procDir: proc, readCwd: reader}
+			var out strings.Builder
+			rel := filepath.Join("seat", name)
+			var err error
+			if tc.staged {
+				err = pruneStaged(openRootForTest(t, root), rel, nil, opts, &printer{w: &out})
+			} else {
+				err = pruneCandidate(openRootForTest(t, root), rel, nil, opts, testNow, &printer{w: &out})
+			}
+			if (err != nil) == tc.busy {
+				t.Fatalf("rescan error=%v busy=%v", err, tc.busy)
+			}
+			if _, err := os.Stat(path); err != nil {
+				t.Fatalf("tree not kept: %v", err)
 			}
 		})
 	}

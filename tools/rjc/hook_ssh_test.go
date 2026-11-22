@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -103,9 +104,18 @@ shift "$last"
 exec "$@"
 `
 
+// Gate hosts are the RJC_HOOK_SSH list (hookRunner in hook_ssh.go). They run the remote scripts, which need Linux-only setsid, GNU tail --pid and /proc/loadavg, so only Linux runs them.
+func requireGateHostShell(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS != "linux" {
+		t.Skip("remote gate scripts need Linux-only tools: setsid, GNU tail --pid, /proc/loadavg")
+	}
+}
+
 // sshGateFixture returns a fixture whose ssh runner drives fake ssh and hk on this machine, with no devenv.
 func sshGateFixture(t *testing.T) (*fixture, sshHookRunner) {
 	t.Helper()
+	requireGateHostShell(t)
 	f := fixtureRepo(t)
 	f.repo.profile.HookReports = true
 	bin := filepath.Join(os.Getenv("HOME"), "bin")
@@ -119,7 +129,19 @@ func sshGateFixture(t *testing.T) (*fixture, sshHookRunner) {
 	writeTestFile(t, filepath.Join(f.repo.root, "devenv.nix"), "{}\n")
 	t.Setenv("RJC_TEST_NIX_LOG", filepath.Join(t.TempDir(), "nix-log"))
 	t.Setenv("RJC_TEST_SSH_ARGS", filepath.Join(t.TempDir(), "ssh-args"))
-	return f, sshHookRunner{repo: f.repo, host: "gate@fixture.invalid"}
+	// The sourced nix-daemon profile prepends the real nix to PATH and would shadow the fake tools above.
+	t.Setenv("__ETC_PROFILE_NIX_SOURCED", "1")
+	// Fixture hosts report fixtureFreeGiB, so a fixture host never fails on the test host's disk.
+	runner := sshHookRunner{repo: f.repo, host: "gate@fixture.invalid", freeGiB: fixedFreeGiB(fixtureFreeGiB)}
+	return f, runner
+}
+
+// fixtureFreeGiB is the free space the gate fixture hosts report. It is above minHostFreeGiB, so a fixture host never fails on the test host's disk.
+const fixtureFreeGiB = 100
+
+// fixedFreeGiB returns a freeGiB seam that reports freeGiB for every probed host.
+func fixedFreeGiB(freeGiB float64) func(hostStatus) float64 {
+	return func(hostStatus) float64 { return freeGiB }
 }
 
 func writeFakeTool(t *testing.T, path, body string) {
@@ -657,6 +679,7 @@ func TestSSHHookRunnerDeadlineReleasesSlot(t *testing.T) {
 }
 
 func TestSSHHookWorktreeLockRetries(t *testing.T) {
+	requireGateHostShell(t)
 	home := t.TempDir()
 	root := filepath.Join(home, "pool")
 	if err := os.MkdirAll(root, 0o755); err != nil {
@@ -685,6 +708,7 @@ func TestSSHHookWorktreeLockRetries(t *testing.T) {
 }
 
 func TestSSHHookConcurrentWorktrees(t *testing.T) {
+	requireGateHostShell(t)
 	home := t.TempDir()
 	root := filepath.Join(home, "pool")
 	bin := filepath.Join(home, "bin")
@@ -862,6 +886,16 @@ func TestPickHostSkipsUnreachable(t *testing.T) {
 	}
 	if pick.chosen != "up@b" {
 		t.Fatalf("chosen = %q, want up@b: down@a is unreachable", pick.chosen)
+	}
+}
+
+// TestPickHostRefusesHostBelowMinFree: an injected low free space is refused by the real minimum, not by the host disk.
+func TestPickHostRefusesHostBelowMinFree(t *testing.T) {
+	hosts := []string{"low@a"}
+	probe := fakeProbe(t, map[string]hostStatus{"low@a": {nproc: 4, load1: 0.1, freeGiB: minHostFreeGiB - 1, freeSlots: 1}}, nil)
+	_, err := pickHost(t.Context(), hosts, probe)
+	if err == nil || !strings.Contains(err.Error(), "no host qualifies") {
+		t.Fatalf("pickHost err = %v, want no host qualifies for a host below minHostFreeGiB", err)
 	}
 }
 
@@ -1316,6 +1350,7 @@ func TestRunDirFailureExitsBeforeLock(t *testing.T) {
 }
 
 func TestSSHHookReleasesLocksWithDaemon(t *testing.T) {
+	requireGateHostShell(t)
 	home := t.TempDir()
 	bin := filepath.Join(home, "bin")
 	if err := os.MkdirAll(bin, 0o755); err != nil {
@@ -1379,6 +1414,7 @@ func TestSSHHookReleasesLocksWithDaemon(t *testing.T) {
 
 // TestTmpReaperKeepsLiveRunDir proves a reaper cannot delete a locked run directory.
 func TestTmpReaperKeepsLiveRunDir(t *testing.T) {
+	requireGateHostShell(t)
 	root := t.TempDir()
 	live := filepath.Join(root, "rjc-hook.live")
 	stale := filepath.Join(root, "rjc-hook.stale")

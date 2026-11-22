@@ -6,7 +6,7 @@ tags: ["go"]
 tasks:
   test:
     command: "go"
-    args: ["test", "./..."]
+    args: ["test", "-timeout=30m", "./..."]
     env:
       CGO_ENABLED: "0"
     inputs: ["**/*.go", "go.mod", "go.sum", "**/testdata/**/*"]

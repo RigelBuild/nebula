@@ -8,11 +8,22 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
 
+// requireLinuxFetchHost skips the fetch tests off Linux. They run a fake uname and nix as shell scripts and use the
+// Linux hk archive, so only Linux exercises them.
+func requireLinuxFetchHost(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS != "linux" {
+		t.Skip("fetch tests need Linux: they run a fake uname and nix as shell scripts and use the Linux hk archive")
+	}
+}
+
 func TestFetch(t *testing.T) {
+	requireLinuxFetchHost(t)
 	for _, tc := range []struct {
 		name, mode, warning string
 		wantHK              bool

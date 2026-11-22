@@ -1,5 +1,5 @@
 {
   "extends": "./tsconfig.json",
   "compilerOptions": { "noEmit": true, "rootDir": "../.." },
-  "include": ["*.types.ts"]
+  "include": ["*.types.ts", "holder.smoke.ts", "holder-darwin.smoke.ts"]
 }

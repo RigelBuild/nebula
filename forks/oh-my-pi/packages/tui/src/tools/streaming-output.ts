@@ -34,7 +34,7 @@ const ELLIPSIS = "…";
 // =============================================================================
 
 /** First failed artifact I/O operation; safe to persist without exposing filesystem errors. */
-export type OutputArtifactError = "open" | "write" | "flush" | "end";
+export type OutputArtifactError = "open" | "write" | "flush" | "end" | "redact";
 
 /** Captured output with inline truncation and artifact storage metadata. */
 export interface OutputSummary {
@@ -113,6 +113,12 @@ export interface OutputSinkOptions {
 	 * `artifactMaxBytes`; clamped to `[0, artifactMaxBytes]`.
 	 */
 	artifactHeadBytes?: number;
+	/**
+	 * Applied to the whole spill file once it is closed, before its id is
+	 * advertised: the returned text replaces the file contents. A throw removes
+	 * the file and records `redact` as the artifact error.
+	 */
+	redactArtifactText?: (text: string) => Promise<string>;
 }
 
 /** Retained text and measurements describing a truncated output window. */
@@ -974,6 +980,7 @@ export class OutputSink {
 	readonly #spillThreshold: number;
 	readonly #headLimit: number;
 	readonly #onChunk?: (chunk: string) => void;
+	readonly #redactArtifactText?: (text: string) => Promise<string>;
 	readonly #chunkThrottleMs: number;
 	readonly #maxColumns: number;
 
@@ -1006,9 +1013,11 @@ export class OutputSink {
 			chunkThrottleMs = 0,
 			artifactMaxBytes = ARTIFACT_DEFAULT_MAX_BYTES,
 			artifactHeadBytes,
+			redactArtifactText,
 		} = options ?? {};
 		this.#artifactPath = artifactPath;
 		this.#artifactId = artifactId;
+		this.#redactArtifactText = redactArtifactText;
 		this.#spillThreshold = spillThreshold;
 		this.#headLimit = Math.max(0, Math.min(headBytes, Math.floor(spillThreshold / 2)));
 		this.#maxColumns = Math.max(0, maxColumns);
@@ -1726,6 +1735,24 @@ export class OutputSink {
 			} catch {
 				this.#recordArtifactError("end");
 			}
+		}
+		await this.#redactSpillFile(file.path);
+	}
+
+	/**
+	 * Redact the closed spill file in place. A throw removes the file and records
+	 * `redact`, so the unredacted capture is never advertised.
+	 */
+	async #redactSpillFile(filePath: string): Promise<void> {
+		const redact = this.#redactArtifactText;
+		if (!redact) return;
+		try {
+			const raw = await fs.promises.readFile(filePath, "utf8");
+			const redacted = await redact(raw);
+			if (redacted !== raw) await fs.promises.writeFile(filePath, redacted);
+		} catch {
+			await fs.promises.rm(filePath, { force: true }).catch(() => {});
+			this.#recordArtifactError("redact");
 		}
 	}
 

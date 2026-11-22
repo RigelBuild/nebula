@@ -26,6 +26,7 @@ export async function runInteractiveBashPty(
 		env?: Record<string, string>;
 		artifactPath?: string;
 		artifactId?: string;
+		redactArtifactText?: (text: string) => Promise<string>;
 	},
 ): Promise<BashInteractiveResult> {
 	const settings = await Settings.init();
@@ -43,6 +44,7 @@ export async function runInteractiveBashPty(
 	const sink = new OutputSink({
 		artifactPath: options.artifactPath,
 		artifactId: options.artifactId,
+		redactArtifactText: options.redactArtifactText,
 		headBytes: resolveOutputSinkHeadBytes(settings),
 		artifactMaxBytes: resolveOutputSinkArtifactMaxBytes(settings),
 		maxColumns: resolveOutputMaxColumns(settings),

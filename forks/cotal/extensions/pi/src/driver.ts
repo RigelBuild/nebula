@@ -277,9 +277,10 @@ export class PiDriver {
     this.enqueuePresence("working", this.activity("thinking"));
   }
 
-  /** Mirror whether the session has running background work onto its presence card. Called on the
-   *  host's `background_work_changed` event, or on the fallback read at turn boundaries and tool ends.
-   *  Queued on the presence chain like every other publish, so writes never overlap. */
+  /** Mirror whether the session has running background work onto its presence card: `running` while
+   *  jobs or subagents run, `idle` otherwise. Called on the host's `background_work_changed` event, or
+   *  on the fallback read at session start, agent start, turn boundaries and tool ends. Queued on the
+   *  presence chain like every other publish, so writes never overlap. */
   onBackgroundWork(jobs: number, agents: number): void {
     if (this._state === "shuttingDown") return;
     const running = jobs + agents > 0;

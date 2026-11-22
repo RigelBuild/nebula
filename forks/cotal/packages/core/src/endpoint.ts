@@ -3487,14 +3487,14 @@ export class CotalEndpoint extends EventEmitter {
   }
 
   /** Overlay whether this session has running background work (a subagent or a background job) onto
-   *  the card's display-only `meta.background`, then republish presence. `true` writes the key as
-   *  `"running"`; `false` removes it, so an idle card carries no key at all. Advisory display data:
-   *  no routing or access decision reads it. An unchanged value writes nothing. */
+   *  the card's display-only `meta.background`, then republish presence. `true` writes `"running"`;
+   *  `false` writes `"idle"`. A seat with the publisher always carries one of the two, so an idle
+   *  seat is told apart from an older host that never publishes the key. Advisory display data: no
+   *  routing or access decision reads it. An unchanged value writes nothing. */
   async setCardBackground(running: boolean): Promise<void> {
     const meta: Record<string, unknown> = { ...(this.card.meta ?? {}) };
     const was = meta.background;
-    if (running) meta.background = "running";
-    else delete meta.background;
+    meta.background = running ? "running" : "idle";
     if (was === meta.background) return;
     this.card.meta = meta;
     await this.publishPresence();

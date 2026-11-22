@@ -1,8 +1,9 @@
 /**
  * Presence background-work test (no runner). `setCardBackground` overlays `meta.background` on the
- * card and republishes presence. It sets `"running"` while work runs, removes the key when none
- * runs, and writes nothing when the value is unchanged. Reads the RAW presence KV record, so the
- * assertion is on what a wire consumer sees, not on the local card object.
+ * card and republishes presence. It sets `"running"` while work runs and `"idle"` when none runs,
+ * writes nothing when the value is unchanged, and a fresh seat with no work reads `"idle"`. An
+ * offline record drops the key. Reads the RAW presence KV record, so the assertion is on what a
+ * wire consumer sees, not on the local card object.
  * Run: tsx smoke/presence-background.smoke.ts
  */
 import { strict as assert } from "node:assert";
@@ -48,6 +49,9 @@ try {
     };
 
     await seat.setCardCwd("/work/bg");
+    await seat.setCardBackground(false);
+    const fresh = await read();
+    check("a seat with the publisher and no work reads background idle", fresh.card.meta?.background === "idle");
     await seat.setCardBackground(true);
     const running = await read();
     check("true sets meta.background to running on the wire", running.card.meta?.background === "running");
@@ -57,12 +61,12 @@ try {
 
     await seat.setCardBackground(false);
     const idle = await read();
-    check("false removes the meta.background key on the wire", !("background" in (idle.card.meta ?? {})));
-    check("removing the key keeps other card meta", idle.card.meta?.cwd === "/work/bg");
+    check("false sets meta.background to idle on the wire", idle.card.meta?.background === "idle");
+    check("setting idle keeps other card meta", idle.card.meta?.cwd === "/work/bg");
 
     const cleared = (await kv.get(key))!.revision;
     await seat.setCardBackground(false);
-    check("clearing an already-clear card writes nothing", (await kv.get(key))!.revision === cleared);
+    check("an unchanged idle writes no new revision", (await kv.get(key))!.revision === cleared);
     await seat.setCardBackground(true);
     await seat.setStatus("offline");
     const gone = await read();

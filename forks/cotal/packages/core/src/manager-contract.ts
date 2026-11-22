@@ -85,9 +85,10 @@ export const AGENT_ROW_SCHEMA = deepFreeze({
     variant: { type: "string" },
     // The connector-reported provider from presence (#785): absent when the connector reported none.
     provider: { type: "string" },
-    // The seat's `meta.background` (SPEC §6): `running` while it has background jobs or subagents.
-    // Optional: absent when it reports none, and on rows from managers that predate it.
-    background: { type: "string", enum: ["running"] },
+    // The seat's `meta.background` (SPEC §6): `running` while it has background jobs or subagents, `idle`
+    // when it has none. Optional: absent for a seat without the publisher, and on rows from managers that
+    // predate it.
+    background: { type: "string", enum: ["running", "idle"] },
     cwd: { type: "string" },
     pid: { type: "integer", minimum: 1 },
     spawner: { type: "string" },

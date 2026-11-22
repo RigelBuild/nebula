@@ -74,8 +74,10 @@ function subscribeBackgroundWork(pi: ExtensionAPI, handler: (context: ExtensionC
   onHostEvent.call(pi, "background_work_changed", (_payload, context) => handler(context));
 }
 
-/** Read the host's background count when it exposes one. A host without `getBackgroundWork` reports
- *  nothing, and the presence key then follows only the `background_work_changed` event. */
+/** Read the host's background count when it exposes one, and publish it: `running` while work runs,
+ *  `idle` when none does. The read at session start is the seat's startup write, so a seat with the
+ *  publisher shows `idle` before any event. A host without `getBackgroundWork` has no publisher and
+ *  never writes the key. */
 function reportBackgroundWork(runtime: PiRuntime, context: ExtensionContext): void {
   if (!isBackgroundWorkHost(context)) return;
   const { jobs, agents } = context.getBackgroundWork();

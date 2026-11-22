@@ -1,0 +1,203 @@
+"""Option A for RIG-11965: a kubectl/oc read masks the whole output unless the command is
+clean, every output-format flag is structured, and it is not ``set env --list``.
+
+Bypass rows: shapes that the per-line Secret pass cannot see (wrapper, substitution,
+pipe-to-filter, mixed ``-o``, Windows path, manifest input, ``set env --list``, ``oc``).
+Keep rows: clean structured or table reads that must still show their content.
+"""
+
+import pytest
+
+from agent.redact import redact_terminal_output
+
+V = "zzqq" + "-fixture-leak-value-A11965"
+K = "keep-visible-a11965"
+
+
+@pytest.fixture(autouse=True)
+def _ensure_redaction_enabled(monkeypatch):
+    monkeypatch.delenv("HERMES_REDACT_SECRETS", raising=False)
+    monkeypatch.setattr("agent.redact._REDACT_ENABLED", True)
+
+
+def _terminal(text, command):
+    return [redact_terminal_output(text, command, force=True), redact_terminal_output(text, command)]
+
+
+# --- Bypass rows: the whole output is masked ---------------------------------------------------
+
+# F1: a shell wrapper or runner hides the kubectl word from the first-token check.
+F1_WRAPPER = [
+    ("bash-lc", "bash -lc \"kubectl get secret s -o jsonpath='{.data.k}'\""),
+    ("sh-ec", "sh -ec \"kubectl get secret s -o jsonpath='{.data.k}'\""),
+    ("bash-login-c", "bash --login -c \"kubectl get secret s -o jsonpath='{.data.k}'\""),
+    ("watch", "watch 'kubectl get secret s -o jsonpath={.data.k}'"),
+    ("ssh", "ssh host \"kubectl get secret s -o jsonpath='{.data.k}'\""),
+    ("eval", "eval \"kubectl get secret s -o jsonpath='{.data.k}'\""),
+    ("sudo-bash-c", "sudo -u k bash -c \"kubectl get secret s -o jsonpath='{.data.password}'\""),
+]
+
+# F1b: a command substitution or subshell wraps the kubectl read.
+F1B_SUBSTITUTION = [
+    ("dollar-subst", "echo $(kubectl get secret s -o jsonpath='{.data.k}' | base64 -d)"),
+    ("backtick-subst", "echo `kubectl get secret s -o jsonpath='{.data.k}'` | base64 -d"),
+    ("subshell", "(kubectl get secret s -o jsonpath='{.data.k}')"),
+]
+
+# F2: a pipe to a filter after a structured read still exposes the value to the filter.
+F2_PIPE = [
+    ("json-to-jq", "kubectl get secret s -o json | jq -r .data.password"),
+    ("yaml-to-grep", "kubectl get secret s -o yaml | grep password"),
+]
+
+# F3: a second -o flag can be unstructured while the first one is structured.
+F3_MIXED_OUTPUT = [
+    ("yaml-then-jsonpath", "kubectl get secret s -o yaml -o jsonpath='{.data.password}'"),
+    ("global-yaml-then-jsonpath", "kubectl -o yaml get secret s -o jsonpath='{.data.password}'"),
+]
+
+# F4: a Windows binary path or a quoted path hides the kubectl basename.
+F4_WINDOWS_PATH = [
+    ("unquoted-exe", "C:\\tools\\kubectl.exe get secret s -o jsonpath='{.data.k}'"),
+    ("quoted-exe", "'C:\\tools\\kubectl.exe' get secret s -o jsonpath='{.data.k}'"),
+]
+
+# F5: a manifest or kustomize input has no Secret resource token to match on.
+F5_MANIFEST = [
+    ("filename", "kubectl get -f manifests/ -o jsonpath='{.items[*].data}'"),
+    ("kustomize", "kubectl get -k overlays/prod -o jsonpath='{.items[*].data}'"),
+]
+
+# F8: the oc binary is a kubectl name too.
+F8_OC = [
+    ("oc-secret-jsonpath", "oc get secret s -o jsonpath='{.data.k}'"),
+]
+
+
+@pytest.mark.parametrize("command", [c for _, c in F1_WRAPPER], ids=[i for i, _ in F1_WRAPPER])
+def test_f1_wrapper_masks_whole_output(command):
+    text = V + "\n"
+    for out in _terminal(text, command):
+        assert V not in out, out
+        assert out == "***", out
+
+
+@pytest.mark.parametrize("command", [c for _, c in F1B_SUBSTITUTION], ids=[i for i, _ in F1B_SUBSTITUTION])
+def test_f1b_substitution_masks_whole_output(command):
+    text = V + "\n"
+    for out in _terminal(text, command):
+        assert V not in out, out
+        assert out == "***", out
+
+
+@pytest.mark.parametrize("command, text", [
+    ("kubectl get secret s -o json | jq -r .data.password", V + "\n"),
+    ("kubectl get secret s -o yaml | grep password", "  password: " + V + "\n"),
+])
+def test_f2_pipe_to_filter_masks_whole_output(command, text):
+    for out in _terminal(text, command):
+        assert V not in out, out
+        assert out == "***", out
+
+
+@pytest.mark.parametrize("command", [c for _, c in F3_MIXED_OUTPUT], ids=[i for i, _ in F3_MIXED_OUTPUT])
+def test_f3_mixed_output_flags_mask_whole_output(command):
+    text = V + "\n"
+    for out in _terminal(text, command):
+        assert V not in out, out
+        assert out == "***", out
+
+
+@pytest.mark.parametrize("command", [c for _, c in F4_WINDOWS_PATH], ids=[i for i, _ in F4_WINDOWS_PATH])
+def test_f4_windows_path_masks_whole_output(command):
+    text = V + "\n"
+    for out in _terminal(text, command):
+        assert V not in out, out
+        assert out == "***", out
+
+
+@pytest.mark.parametrize("command", [c for _, c in F5_MANIFEST], ids=[i for i, _ in F5_MANIFEST])
+def test_f5_manifest_input_masks_whole_output(command):
+    text = V + "\n"
+    for out in _terminal(text, command):
+        assert V not in out, out
+        assert out == "***", out
+
+
+@pytest.mark.parametrize("command", ["kubectl set env deploy/w --list --resolve"])
+def test_f6_set_env_list_masks_whole_output(command):
+    text = "TLS_KEY=-----BEGIN-----\n" + V + "\n-----END-----\n"
+    for out in _terminal(text, command):
+        assert V not in out, out
+        assert out == "***", out
+
+
+@pytest.mark.parametrize("command", [c for _, c in F8_OC], ids=[i for i, _ in F8_OC])
+def test_f8_oc_masks_whole_output(command):
+    text = V + "\n"
+    for out in _terminal(text, command):
+        assert V not in out, out
+        assert out == "***", out
+
+
+# F7 (low, accepted over-mask by design): ``k`` as a standalone word in a non-kubectl command
+# masks the output. Baseline already masks it; Option A keeps it that way.
+def test_f7_standalone_k_word_in_grep_masks_accepted_over_mask():
+    text = V + "\n"
+    for out in _terminal(text, "grep k secrets.txt -o"):
+        assert V not in out, out
+        assert out == "***", out
+
+
+# --- Keep rows: a clean read shows its content --------------------------------------------------
+
+def test_keep_get_pods_table():
+    text = "NAME READY STATUS\napi-7f9 1/1 Running " + K + "\n"
+    for out in _terminal(text, "kubectl get pods"):
+        assert out != "***", out
+        assert K in out, out
+
+
+def test_keep_get_pods_wide_table():
+    text = ("NAME READY STATUS RESTARTS AGE IP NODE\n"
+            "api-7f9 1/1 Running 0 2d 10.0.0.1 " + K + "\n")
+    for out in _terminal(text, "kubectl get pods -o wide"):
+        assert out != "***", out
+        assert K in out, out
+
+
+def test_keep_describe_configmap():
+    text = "Name:  cm\nData\n====\nkey:\n----\n" + K + "\n"
+    for out in _terminal(text, "kubectl describe configmap cm"):
+        assert out != "***", out
+        assert K in out, out
+
+
+def test_keep_get_deploy_yaml():
+    text = (
+        "apiVersion: apps/v1\n"
+        "kind: Deployment\n"
+        "metadata:\n"
+        "  name: web\n"
+        "spec:\n"
+        "  replicas: 2\n"
+        "  template:\n"
+        "    spec:\n"
+        "      containers:\n"
+        "      - name: app\n"
+        "        image: " + K + "-image\n"
+        "        env:\n"
+        "        - name: DB_PASSWORD\n"
+        "          value: " + V + "\n"
+    )
+    for out in _terminal(text, "kubectl get deploy web -o yaml"):
+        assert V not in out, out
+        assert K in out, out
+        assert "replicas: 2" in out, out
+
+
+def test_keep_logs():
+    text = "INFO started " + K + "\n"
+    for out in _terminal(text, "kubectl logs pod -c app"):
+        assert out != "***", out
+        assert K in out, out

@@ -1864,7 +1864,7 @@ def _is_structured_kubectl_read(command: str) -> bool:
         return False
     if len(_command_segments(command)) != 1:
         return False
-    if "$" in command or "`" in command or "(" in command or ")" in command:
+    if any(ch in command for ch in "$`(){}*?[]~"):
         return False
     try:
         tokens = shlex.split(command)

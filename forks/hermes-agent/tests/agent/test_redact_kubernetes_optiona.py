@@ -86,6 +86,22 @@ F9_SHORT_CLUSTER = [
     ("Aogo-template", "kubectl get secret s -Aogo-template={{.data.k}}"),
 ]
 
+# F10: bash brace expansion turns ``{-o,jsonpath=...}`` into ``-o jsonpath=...``; shlex keeps it one token.
+F10_BRACE = [
+    ("brace-o-jsonpath", "kubectl get secret x {-o,jsonpath={.data.password}}"),
+    ("brace-oyaml-ojsonpath", "kubectl get secret x {-oyaml,-ojsonpath={.data}}"),
+    ("glob-bracket-ojsonpath", "kubectl get secret x -o yaml [-]ojsonpath=.data.password"),
+    ("glob-star-ojsonpath", "kubectl get secret x -o yaml *ojsonpath=.data.password"),
+]
+
+
+@pytest.mark.parametrize("command", [c for _, c in F10_BRACE], ids=[i for i, _ in F10_BRACE])
+def test_f10_brace_expansion_masks_whole_output(command):
+    text = V + "\n"
+    for out in _terminal(text, command):
+        assert V not in out, out
+        assert out == "***", out
+
 
 @pytest.mark.parametrize("command", [c for _, c in F1_WRAPPER], ids=[i for i, _ in F1_WRAPPER])
 def test_f1_wrapper_masks_whole_output(command):

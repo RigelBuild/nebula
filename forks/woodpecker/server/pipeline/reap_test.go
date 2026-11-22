@@ -1305,6 +1305,32 @@ func TestReapPendingTimeoutNextPass(t *testing.T) {
 		assert.Equal(t, model.StatusKilled, workflow.Children[0].State)
 	})
 
+	t.Run("live success runs_on with a skipped dependency writes killed steps", func(t *testing.T) {
+		storeMock, schedulerMock, managerMock := setup(t)
+		pipeline := &model.Pipeline{ID: 100, RepoID: repo.ID, Number: 13, Status: model.StatusPending, Created: nowUnix - 7*3600}
+		workflows := []*model.Workflow{
+			{ID: 40, State: model.StatusSkipped, Finished: nowUnix},
+			{ID: 41, State: model.StatusPending, Children: []*model.Step{{ID: 411, State: model.StatusPending}}},
+		}
+		dependent := linuxTask("41", "40")
+		dependent.RunOn = []string{string(model.StatusSuccess)}
+		storeMock.On("GetPipelineQueue").Return([]*model.Feed{{ID: pipeline.ID}}, nil).Once()
+		storeMock.On("TaskList").Return([]*model.Task{}, nil).Once()
+		storeMock.On("GetPipeline", pipeline.ID).Return(pipeline, nil).Once()
+		storeMock.On("GetRepo", repo.ID).Return(repo, nil).Once()
+		storeMock.On("WorkflowGetTree", pipeline).Return(workflows, nil).Once()
+		schedulerMock.On("Info", mock.Anything).Return(queue.InfoT{WaitingOnDeps: []*model.Task{dependent}}).Once()
+		storeMock.On("WorkflowUpdateIfState", isState(41, model.StatusSkipped), model.StatusPending, isStep(411, model.StatusKilled)).Return(nil).Once()
+		schedulerMock.On("CancelWorkflows", mock.Anything, []string{"41"}).Return(nil).Maybe()
+		storeMock.On("UpdatePipelineIfStatus", mock.Anything, model.StatusPending).Return(nil).Maybe()
+		storeMock.On("GetUser", repo.UserID).Return(user, nil).Maybe()
+		managerMock.On("ForgeFromRepo", repo).Return(nil, nil).Maybe()
+		schedulerMock.On("PublishPipelineEvent", mock.Anything, repo, mock.Anything).Return(nil).Maybe()
+		require.NoError(t, ReapOrphanedWorkflows(t.Context(), storeMock, now, grace, pendingTimeout, 0))
+		assert.Equal(t, model.StatusSkipped, workflows[1].State)
+		assert.Equal(t, model.StatusKilled, workflows[1].Children[0].State)
+	})
+
 	t.Run("pending timeout conflict leaves concurrent workflow queued", func(t *testing.T) {
 		storeMock, schedulerMock, _ := setup(t)
 		pipeline := &model.Pipeline{ID: 100, RepoID: repo.ID, Number: 13, Status: model.StatusPending, Created: nowUnix - 7*3600}

@@ -73,3 +73,40 @@ def test_g3_kuberc_default_output_masks_whole_output(command):
     for out in _terminal(text, command):
         assert V not in out, out
         assert out == "***", out
+
+
+# G4 (medium, found by the fix-forward review): kubectl reads its kuberc path from the KUBERC
+# env var, not KUBECTL_KUBERC (the feature gate). The gate denies KUBECTL_KUBERC= only, so a
+# KUBERC= prefix passes and a kuberc default output stays unread.
+G4_KUBERC_ENV = [
+    ("kuberc-env-real", "KUBERC=/tmp/k kubectl get secret s"),
+]
+
+
+@pytest.mark.xfail(strict=True, reason="RIG-11984 gap G4: KUBERC= env prefix not denied")
+@pytest.mark.parametrize("command", [c for _, c in G4_KUBERC_ENV], ids=[i for i, _ in G4_KUBERC_ENV])
+def test_g4_kuberc_env_prefix_masks_whole_output(command):
+    text = V + "\n"
+    for out in _terminal(text, command):
+        assert V not in out, out
+        assert out == "***", out
+
+
+# G5 (medium, found by the fix-forward review): --vmodule sets per-file klog levels, so
+# round_trippers=8 logs the response body. The verbosity parser reads only -v, --v and
+# --loglevel, and the --vmodule=... token is skipped as a global flag.
+G5_VMODULE = [
+    ("vmodule-eq-get", "kubectl get secret s -o name --vmodule=round_trippers=8"),
+    ("vmodule-eq-leading", "kubectl --vmodule=round_trippers=8 get secret s -o name"),
+]
+
+
+@pytest.mark.xfail(strict=True, reason="RIG-11984 gap G5: --vmodule round_trippers level not parsed")
+@pytest.mark.parametrize("command", [c for _, c in G5_VMODULE], ids=[i for i, _ in G5_VMODULE])
+def test_g5_vmodule_verbose_body_masks_value(command):
+    text = (
+        'I0101 12:00:00.000000 1 round_trippers.go:553] Response Body: '
+        '"{\\"kind\\":\\"Secret\\",\\"data\\":{\\"k\\":\\"' + V + '\\"}}"\n'
+    )
+    for out in _terminal(text, command):
+        assert V not in out, out

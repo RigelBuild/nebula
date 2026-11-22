@@ -97,6 +97,7 @@ Each builtin runs inside the shell process (no `fork`/`exec`) against the `pi-bu
 - `PI_DISABLE_UUTILS_BUILTINS` disables the whole utility set (bare names resolve to system binaries again),
 - `PI_DISABLE_UUTILS_DESTRUCTIVE` disables the destructive shadows together: `rm`, `mv`, `cp`, `dd`, `rsync` and `tar`, which overwrite or delete files, and `ln`, which can clobber via `-f`,
 - `PI_DISABLE_RM_BUILTIN` / `PI_DISABLE_MV_BUILTIN` disable `rm`/`mv` individually.
+- `PI_ENABLE_RG_BUILTIN` offers `rg`; it is off by default, so `rg` is the system's unless this is set.
 
 Builtin switches are read from `sessionEnv` first, then the process environment, during session creation. Values are truthy when present and not empty, `"0"`, or case-insensitive `"false"`; command-scoped `env` does not change registration.
 

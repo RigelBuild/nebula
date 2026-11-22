@@ -30,8 +30,8 @@
 //! shell: `PI_DISABLE_UUTILS_BUILTINS` hands every utility to `PATH`,
 //! `PI_DISABLE_UUTILS_DESTRUCTIVE` the ones that overwrite or delete (`rm`,
 //! `mv`, `cp`, `ln`, `dd`, `rsync`, `tar`), and `PI_DISABLE_RM_BUILTIN` /
-//! `PI_DISABLE_MV_BUILTIN` one each. Process builtins (`ps`, `sleep`, …) are
-//! not gated.
+//! `PI_DISABLE_MV_BUILTIN` one each. `PI_ENABLE_RG_BUILTIN` offers `rg`, which
+//! is off otherwise. Process builtins (`ps`, `sleep`, …) are not gated.
 //!
 //! **Descriptors.** An engine fd object with an OS handle (a host file or
 //! pipe, the session's streams) reaches the extra as a duplicate of that
@@ -88,7 +88,7 @@ pub fn native_name(cmd: NativeRef) -> Option<&'static str> {
 
 /// Which of pi's extras a shell offers (see the module docs).
 ///
-/// The default offers every extra.
+/// The default offers every extra but `rg`, which is opt-in.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ExtrasGate {
 	/// `PI_DISABLE_UUTILS_BUILTINS`: no utility is an extra.
@@ -100,6 +100,8 @@ pub struct ExtrasGate {
 	pub rm_off:          bool,
 	/// `PI_DISABLE_MV_BUILTIN`: `mv` is the system's.
 	pub mv_off:          bool,
+	/// `PI_ENABLE_RG_BUILTIN`: `rg` is offered (off by default).
+	pub rg_on:           bool,
 }
 
 impl ExtrasGate {
@@ -111,6 +113,7 @@ impl ExtrasGate {
 			destructive_off: on("PI_DISABLE_UUTILS_DESTRUCTIVE"),
 			rm_off:          on("PI_DISABLE_RM_BUILTIN"),
 			mv_off:          on("PI_DISABLE_MV_BUILTIN"),
+			rg_on:           on("PI_ENABLE_RG_BUILTIN"),
 		}
 	}
 
@@ -122,6 +125,7 @@ impl ExtrasGate {
 					&& match name {
 						"rm" => !(self.destructive_off || self.rm_off),
 						"mv" => !(self.destructive_off || self.mv_off),
+						"rg" => self.rg_on,
 						// cp, dd (`of=`), rsync and tar -x overwrite files (rsync
 						// also deletes with --delete), ln -f clobbers them.
 						"cp" | "ln" | "dd" | "rsync" | "tar" => !self.destructive_off,
@@ -506,6 +510,20 @@ mod tests {
 		let rm = gate(&[("PI_DISABLE_RM_BUILTIN", "1"), ("PI_DISABLE_MV_BUILTIN", "0")]);
 		assert!(rm.native("rm".into()).is_none());
 		assert!(rm.native("mv".into()).is_some());
+
+		// `rg` is opt-in: a default session leaves it to PATH, the grep utility
+		// stays, and the switch that hands every utility to PATH wins.
+		assert!(all.native("rg".into()).is_none(), "rg is off by default");
+		assert!(all.native("grep".into()).is_some());
+		assert!(all.runs_commands("find".into()), "find is a command runner (a tool)");
+		let rg_on = gate(&[("PI_ENABLE_RG_BUILTIN", "1")]);
+		assert!(rg_on.native("rg".into()).is_some(), "PI_ENABLE_RG_BUILTIN opts rg in");
+		assert!(rg_on.native("grep".into()).is_some());
+		let rg_and_all_off = gate(&[
+			("PI_ENABLE_RG_BUILTIN", "1"),
+			("PI_DISABLE_UUTILS_BUILTINS", "1"),
+		]);
+		assert!(rg_and_all_off.native("rg".into()).is_none(), "the kill-switch wins over the opt-in");
 	}
 
 	#[test]

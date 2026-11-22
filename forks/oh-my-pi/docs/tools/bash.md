@@ -63,6 +63,7 @@ Gates are read once, from the environment the session starts with; a set, nonemp
 | `PI_DISABLE_UUTILS_DESTRUCTIVE` | `rm`, `mv`, `cp`, `ln`, `dd`, `rsync`, and `tar` resolve to the system's.  |
 | `PI_DISABLE_RM_BUILTIN`         | `rm` resolves to the system's.                                             |
 | `PI_DISABLE_MV_BUILTIN`         | `mv` resolves to the system's.                                             |
+| `PI_ENABLE_RG_BUILTIN`          | `rg` resolves to pi's utility when set; otherwise to the `PATH` binary.   |
 
 A path (`/usr/bin/jq`) always runs the system program for that one command, even with the utilities enabled. The bundled `jq` behaves like jq 1.8.2; its divergence list is in [bash-tool-runtime.md](../bash-tool-runtime.md).
 

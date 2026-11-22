@@ -606,10 +606,13 @@ mod tests {
 			.map(|(name, _)| name)
 			.chain(["timeout", "nohup"])
 			.collect();
-		for pairs in [&[][..], &[("PI_DISABLE_UUTILS_BUILTINS", "1"), (NOHUP_OFF, "true")], &[
-			("PI_DISABLE_UUTILS_DESTRUCTIVE", "1"),
-			("PI_DISABLE_MV_BUILTIN", "0"),
-		]] {
+		for pairs in [
+			&[][..],
+			&[("PI_DISABLE_UUTILS_BUILTINS", "1"), (NOHUP_OFF, "true")],
+			&[("PI_DISABLE_UUTILS_DESTRUCTIVE", "1"), ("PI_DISABLE_MV_BUILTIN", "0")],
+			&[("PI_ENABLE_RG_BUILTIN", "1"), (NOHUP_OFF, "true")],
+			&[("PI_ENABLE_RG_BUILTIN", "1"), ("PI_DISABLE_UUTILS_BUILTINS", "1")],
+		] {
 			let env: Vec<(BString, BString)> =
 				pairs.iter().map(|&(k, v)| (k.into(), v.into())).collect();
 			let config = ToolConfig::from_env(&env, None, runtime.handle().clone());

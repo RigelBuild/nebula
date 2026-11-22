@@ -296,8 +296,10 @@ async fn every_utility_builtin_is_registered_under_its_own_name() {
 	let _ = std::fs::remove_dir_all(&tmp);
 	std::fs::create_dir_all(&tmp).expect("temp dir");
 
+	// `rg` is opt-in: the session turns it on so `type -t rg` names pi's builtin
+	// rather than whatever system rg the host carries.
 	let config = ShellConfig {
-		session_env:   None,
+		session_env:   Some(HashMap::from([("PI_ENABLE_RG_BUILTIN".to_string(), "1".to_string())])),
 		snapshot_path: None,
 		minimizer:     None,
 		filesystem:    Fs::native(),
@@ -843,7 +845,7 @@ async fn rg_builtin_uses_ripgrep_defaults() {
 	let tmp_str = tmp.to_str().expect("utf8");
 
 	let config = ShellConfig {
-		session_env:   None,
+		session_env:   Some(HashMap::from([("PI_ENABLE_RG_BUILTIN".to_string(), "1".to_string())])),
 		snapshot_path: None,
 		minimizer:     None,
 		filesystem:    Fs::native(),
@@ -1022,7 +1024,7 @@ async fn rg_builtin_defaults_to_cwd_unless_stdin_is_pipeline() {
 	let tmp_str = tmp.to_str().expect("utf8");
 
 	let config = ShellConfig {
-		session_env:   None,
+		session_env:   Some(HashMap::from([("PI_ENABLE_RG_BUILTIN".to_string(), "1".to_string())])),
 		snapshot_path: None,
 		minimizer:     None,
 		filesystem:    Fs::native(),
@@ -1846,9 +1848,10 @@ async fn uutils_builtins_respect_disable_env() {
 	})
 	.await
 	.expect("create_session");
-	for name in ["head", "rg", "rm", "mv"] {
+	for name in ["head", "rm", "mv", "grep"] {
 		assert!(is_session_builtin(&mut default, name).await, "{name} registered by default");
 	}
+	assert!(!is_session_builtin(&mut default, "rg").await, "rg is opt-in: off by default");
 
 	let mut all_off = create_session(&session_with(&[("PI_DISABLE_UUTILS_BUILTINS", "1")]))
 		.await
@@ -1863,6 +1866,17 @@ async fn uutils_builtins_respect_disable_env() {
 	assert!(!is_session_builtin(&mut rm_off, "rm").await, "rm disabled individually");
 	assert!(is_session_builtin(&mut rm_off, "mv").await, "mv stays enabled");
 	assert!(is_session_builtin(&mut rm_off, "head").await, "head stays enabled");
+	let mut rg_on = create_session(&session_with(&[("PI_ENABLE_RG_BUILTIN", "1")]))
+		.await
+		.expect("create_session");
+	assert!(is_session_builtin(&mut rg_on, "rg").await, "PI_ENABLE_RG_BUILTIN opts rg in");
+	let mut rg_and_all_off = create_session(&session_with(&[
+		("PI_ENABLE_RG_BUILTIN", "1"),
+		("PI_DISABLE_UUTILS_BUILTINS", "1"),
+	]))
+	.await
+	.expect("create_session");
+	assert!(!is_session_builtin(&mut rg_and_all_off, "rg").await, "kill-switch wins over opt-in");
 }
 
 /// Whether `name` resolves in `session` as a builtin (`type -t`), searched

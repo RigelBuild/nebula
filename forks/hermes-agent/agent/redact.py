@@ -1926,6 +1926,28 @@ def _kubectl_outputs_structured(args: list[str]) -> bool:
     return True
 
 
+# At or above this klog level the output can carry API response bodies, which for a Secret is its full data.
+_KUBECTL_BODY_LOG_LEVEL = 6
+
+
+def _kubectl_verbosity_logs_bodies(args: list[str]) -> bool:
+    """True if a verbosity flag in ``args`` reaches ``_KUBECTL_BODY_LOG_LEVEL``. A value that is
+    not a plain number, or a flag with no value, fails closed. Forms: ``-v N``, ``-vN``, ``-v=N``,
+    ``--v N``, ``--v=N``, ``--loglevel N`` and ``--loglevel=N``."""
+    for i, tok in enumerate(args):
+        if tok in ("-v", "--v", "--loglevel"):
+            value = args[i + 1] if i + 1 < len(args) else None
+        elif tok.startswith(("--v=", "--loglevel=")):
+            value = tok.split("=", 1)[1]
+        elif tok.startswith("-v") and not tok.startswith("--"):
+            value = tok[2:].removeprefix("=")
+        else:
+            continue
+        if value is None or not value.isdecimal() or int(value) >= _KUBECTL_BODY_LOG_LEVEL:
+            return True
+    return False
+
+
 # Built-in kubectl and oc verbs. Any other verb, a plugin verb included, is masked whole. ``set``
 # stays because ``set env`` without ``--list`` was unmasked before (its ``--list`` is denied above).
 # ``whoami`` is an oc read; its token flags are denied above.
@@ -1970,8 +1992,9 @@ def _is_structured_kubectl_read(command: str) -> bool:
     """True only for a kubectl/oc/k read that stays unmasked: one pipeline segment on one line,
     no ``$``, backtick, or parenthesis, shlex-parseable, the binary first after ``NAME=value``
     prefixes, not ``set env --list``, no ``exec``/``attach``/``debug``/``run``/``cp``/``rsh``/
-    ``extract`` token, not ``create token``, no ``--raw`` flag, not ``config view`` with
-    ``--flatten``, not ``oc whoami`` with a token flag, a built-in read verb as the first verb, and
+    ``extract`` token, not ``create token``, no ``--raw`` or ``--kuberc`` flag, no ``KUBECTL_KUBERC=``
+    assignment, not ``config view`` with ``--flatten``, not ``oc whoami`` with a token flag, a
+    built-in read verb as the first verb, no verbosity at klog level 6 or higher, and
     every output format structured. Anything else is masked whole, so a wrapper, substitution,
     pipe or plugin cannot hide a Secret value from the per-line pass."""
     stripped = command.strip()
@@ -1986,6 +2009,9 @@ def _is_structured_kubectl_read(command: str) -> bool:
     except ValueError:
         return False
     while tokens and _ENV_ASSIGNMENT_RE.match(tokens[0]):
+        # A KUBECTL_KUBERC= assignment is the env form of --kuberc, which the gate cannot read.
+        if tokens[0].startswith("KUBECTL_KUBERC="):
+            return False
         tokens = tokens[1:]
     # A kubectl-<name> plugin binary is not in _KUBECTL_NAMES, so it is masked here.
     if not tokens or _binary_base(tokens[0]) not in _KUBECTL_NAMES:
@@ -2003,13 +2029,21 @@ def _is_structured_kubectl_read(command: str) -> bool:
         return False
     if any(tok == "--raw" or tok.startswith("--raw=") for tok in args):
         return False
+    # kuberc can set defaults, such as the output format, that this gate cannot read.
+    if any(tok == "--kuberc" or tok.startswith("--kuberc=") for tok in args):
+        return False
     if "config" in args and "view" in args and any(
             tok in ("--raw", "--flatten") or tok.startswith(("--raw=", "--flatten=")) for tok in args):
         return False
     verb = _kubectl_verb(args)
-    if verb == "whoami" and any(tok in ("-t", "--show-token") or tok.startswith("--show-token=") for tok in args):
+    # -t, -t=VALUE and -tVALUE all set the token flag; so does --show-token, bare or with a value.
+    if verb == "whoami" and any(
+            tok == "--show-token" or tok.startswith("--show-token=")
+            or (tok.startswith("-t") and not tok.startswith("--")) for tok in args):
         return False
     if verb not in _KUBECTL_READ_VERBS:
+        return False
+    if _kubectl_verbosity_logs_bodies(args):
         return False
     return _kubectl_outputs_structured(args)
 

@@ -31,7 +31,6 @@ G1_WHOAMI_TOKEN_INLINE = [
 ]
 
 
-@pytest.mark.xfail(strict=True, reason="RIG-11984 gap G1: -t=VALUE not denied on oc whoami")
 @pytest.mark.parametrize("command", [c for _, c in G1_WHOAMI_TOKEN_INLINE], ids=[i for i, _ in G1_WHOAMI_TOKEN_INLINE])
 def test_g1_oc_whoami_inline_token_flag_masks_whole_output(command):
     text = TOKEN + "\n"
@@ -50,7 +49,6 @@ G2_VERBOSE_BODY = [
 ]
 
 
-@pytest.mark.xfail(strict=True, reason="RIG-11984 gap G2: verbosity logs the Secret body")
 @pytest.mark.parametrize("command", [c for _, c in G2_VERBOSE_BODY], ids=[i for i, _ in G2_VERBOSE_BODY])
 def test_g2_verbose_secret_body_masks_value(command):
     text = (
@@ -69,7 +67,6 @@ G3_KUBERC = [
 ]
 
 
-@pytest.mark.xfail(strict=True, reason="RIG-11984 gap G3: kuberc default output not read")
 @pytest.mark.parametrize("command", [c for _, c in G3_KUBERC], ids=[i for i, _ in G3_KUBERC])
 def test_g3_kuberc_default_output_masks_whole_output(command):
     text = V + "\n"

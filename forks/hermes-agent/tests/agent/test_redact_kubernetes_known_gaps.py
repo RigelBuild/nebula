@@ -79,6 +79,7 @@ def test_g3_kuberc_default_output_masks_whole_output(command):
 G4_KUBERC_ENV = [
     ("kuberc-env-real", "KUBERC=/tmp/k kubectl get secret s"),
     ("kuberc-env-after-other", "FOO=1 KUBERC=/tmp/k kubectl get secret s"),
+    ("kuberc-home-prefix", "HOME=/tmp/x kubectl get secret s -o name"),
 ]
 
 
@@ -120,3 +121,11 @@ def test_vmodule_low_level_stays_readable():
     text = "apiVersion: v1\nkind: Secret\n"
     for out in _terminal(text, command):
         assert out == text
+
+
+# Residual (RIG-11984 review): persisted KUBERC env is not visible to the gate.
+@pytest.mark.xfail(strict=True, reason="RIG-11984 residual: KUBERC exported by an earlier call persists; the gate reads one command string")
+def test_persisted_kuberc_env_known_gap():
+    text = V + "\n"
+    for out in _terminal(text, "kubectl get secret s"):
+        assert V not in out

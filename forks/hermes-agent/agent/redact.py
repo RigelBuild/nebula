@@ -2015,7 +2015,7 @@ def _is_structured_kubectl_read(command: str) -> bool:
     """True only for a kubectl/oc/k read that stays unmasked: one pipeline segment on one line,
     no ``$``, backtick, or parenthesis, shlex-parseable, the binary first after ``NAME=value``
     prefixes, not ``set env --list``, no ``exec``/``attach``/``debug``/``run``/``cp``/``rsh``/
-    ``extract`` token, not ``create token``, no ``--raw`` or ``--kuberc`` flag, no ``KUBECTL_KUBERC=`` or ``KUBERC=``
+    ``extract`` token, not ``create token``, no ``--raw`` or ``--kuberc`` flag, no ``KUBECTL_KUBERC=``, ``KUBERC=`` or ``HOME=``
     assignment, not ``config view`` with ``--flatten``, not ``oc whoami`` with a token flag, a
     built-in read verb as the first verb, no verbosity at klog level 6 or higher, and
     every output format structured. Anything else is masked whole, so a wrapper, substitution,
@@ -2032,8 +2032,9 @@ def _is_structured_kubectl_read(command: str) -> bool:
     except ValueError:
         return False
     while tokens and _ENV_ASSIGNMENT_RE.match(tokens[0]):
-        # A KUBECTL_KUBERC= or KUBERC= assignment is the env form of --kuberc, which the gate cannot read.
-        if tokens[0].startswith(("KUBECTL_KUBERC=", "KUBERC=")):
+        # KUBECTL_KUBERC= and KUBERC= are env forms of --kuberc. HOME= moves the default kuberc path.
+        # The gate cannot read any of them, so each one is masked whole.
+        if tokens[0].startswith(("KUBECTL_KUBERC=", "KUBERC=", "HOME=")):
             return False
         tokens = tokens[1:]
     # A kubectl-<name> plugin binary is not in _KUBECTL_NAMES, so it is masked here.

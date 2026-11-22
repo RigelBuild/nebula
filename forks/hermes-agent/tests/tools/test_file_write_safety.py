@@ -918,6 +918,43 @@ class TestProtectedInstructionFiles:
 
         assert rendered["choices"] == ["once", "deny"]
 
+    def test_withdrawn_protected_write_names_the_cause_and_ends_the_sentence_with_a_period(self):
+        """A withdrawn protected-write prompt closes its reason with a period, whether the cause is a plain
+        interrupt or a prompt no surface showed. Both read as one sentence before the NOT-consented line."""
+        import tools.approval as A
+        from tools import approval_context
+        from tools.file_tools_write_guards import _request_protected_instruction_approval
+        from tools.interrupt import set_interrupt
+        session_key = "protected-files-withdrawn-session"
+
+        def run(notify):
+            A.register_gateway_notify(session_key, notify)
+            try:
+                return _request_protected_instruction_approval(["AGENTS.md"])
+            finally:
+                A.unregister_gateway_notify(session_key)
+                set_interrupt(False)
+
+        def stop_requested(_data):
+            set_interrupt(True, reason="Stop requested")
+
+        def stop_on_undelivered_prompt(data):
+            with A._lock:
+                entry = next(e for e in A._gateway_queues[session_key] if e.data["request_id"] == data["request_id"])
+                entry.undelivered = "send_path_degraded"
+            set_interrupt(True, reason="Stop requested")
+
+        token = approval_context.set_current_session_key(session_key)
+        try:
+            plain = run(stop_requested)
+            never_shown = run(stop_on_undelivered_prompt)
+        finally:
+            approval_context.reset_current_session_key(token)
+
+        assert "approval was withdrawn before the user answered (Stop requested). The user has NOT consented" in plain
+        assert ("approval was never shown to Matt (delivery failed: send_path_degraded); withdrawn (Stop requested). "
+                "The user has NOT consented") in never_shown
+
 
 class TestProfileHomeExemptsHermesRoot:
     """issue #60: under ``hermes -p <name>`` (``HERMES_HOME=<root>/profiles/<name>``)

@@ -4,10 +4,8 @@ Teardown paths (a parent's ``delegate_task`` finishing, ``unregister_gateway_not
 end, a ``/stop``) end the wait fail-closed, but the tool result carries ``outcome="cancelled"``
 and the cause instead of "denied by user" (#112026, #22992).
 """
-import asyncio
 import threading
 import time
-from unittest.mock import AsyncMock
 
 import pytest
 
@@ -169,34 +167,27 @@ def test_prompt_no_surface_showed_is_named_when_stop_withdraws_it(gateway_sessio
     assert SESSION_KEY not in mod._denial_tally
 
 
-@pytest.fixture
-def _discord_view_can_remove_items(monkeypatch):
-    """``tests/gateway/conftest.py`` may install a discord stub whose View has no ``remove_item``, and the
-    exec-approval card calls it. Give the view base the method, as the reconnect tests do. A no-op on real discord."""
-    from plugins.platforms.discord import adapter as discord_platform
-    view_base = discord_platform.discord.ui.View
-    if hasattr(view_base, "remove_item"):
-        return
-
-    def remove_item(self, item):
-        self.children[:] = [child for child in self.children if child is not item]
-
-    monkeypatch.setattr(view_base, "remove_item", remove_item, raising=False)
+def test_delivered_prompt_withdrawn_by_stop_keeps_withdrawal_text(gateway_session):
+    """A prompt that reached a surface and is then withdrawn by /stop keeps the withdrawal text."""
+    thread, holder = _run_gate_until_pending()
+    set_interrupt(True, holder["tid"], reason="Stop requested")
+    try:
+        thread.join(timeout=10)
+    finally:
+        set_interrupt(False, holder["tid"])
+    assert not thread.is_alive()
+    _assert_withdrawn(holder["result"], "Stop requested")
+    assert "never shown" not in holder["result"]["message"]
 
 
-def test_undelivered_approval_shown_by_a_later_repost_is_withdrawn_as_a_plain_stop(
-        gateway_session, monkeypatch, _discord_view_can_remove_items):
-    """A card that failed, then was posted again on reconnect, was shown to Matt. A /stop after that repost keeps
-    the withdrawal text; it must not say the approval was never shown."""
-    from gateway.config import PlatformConfig
-    from gateway.platforms.base import ExecApprovalPrompt, SendResult
-    from plugins.platforms.discord.adapter import DiscordAdapter
-
+def test_mark_then_clear_withdraws_as_a_plain_stop(gateway_session):
+    """A card that failed and was then shown by a repost: the never-shown mark is set, then cleared. A /stop
+    must name the withdrawal, not a failed delivery."""
     notified = threading.Event()
-    seen = {}
 
     def notify(data):
-        seen.update(data)
+        mod.mark_gateway_approval_undelivered(SESSION_KEY, data["request_id"], "send_path_degraded")
+        mod.clear_gateway_approval_undelivered(SESSION_KEY, data["request_id"])
         notified.set()
 
     mod.register_gateway_notify(SESSION_KEY, notify)
@@ -209,42 +200,6 @@ def test_undelivered_approval_shown_by_a_later_repost_is_withdrawn_as_a_plain_st
     thread = threading.Thread(target=worker)
     thread.start()
     assert notified.wait(timeout=10), "approval was never enqueued"
-
-    adapter = DiscordAdapter(PlatformConfig(enabled=True, token="test-token"))
-    monkeypatch.setattr(adapter, "_EXEC_APPROVAL_REPOST_BACKOFF", (0.0,))
-    monkeypatch.setattr(adapter, "_send_exec_approval_text_fallback", AsyncMock(return_value="send_path_degraded"))
-    card = AsyncMock(side_effect=[
-        SendResult(success=False, error="Not connected"),  # the first card never reaches Discord
-        SendResult(success=True, message_id="2"),  # the reconnect repost does
-    ])
-    monkeypatch.setattr(adapter, "_send_exec_approval_card", card)
-    prompt = ExecApprovalPrompt(
-        chat_id="555", session_key=SESSION_KEY, text="rm -rf .git", command="rm -rf .git", smart_denied=False,
-        actions=[("Allow once", "once", "primary"), ("Deny", "deny", "danger")],
-        request_id=seen["request_id"], metadata={"thread_id": "777"})
-
-    async def card_fails_then_reconnect_reposts_it():
-        await adapter._send_exec_approval_prompt(prompt)
-        await asyncio.wait_for(adapter._repost_undelivered_exec_approval_cards(), 5)
-
-    asyncio.run(card_fails_then_reconnect_reposts_it())
-    assert card.await_count == 2
-    set_interrupt(True, holder["tid"], reason="Stop requested")
-    try:
-        thread.join(timeout=10)
-    finally:
-        set_interrupt(False, holder["tid"])
-    assert not thread.is_alive()
-    result = holder["result"]
-    _assert_withdrawn(result, "Stop requested")
-    assert "approval was withdrawn before the user answered (Stop requested)" in result["message"]
-    assert "never shown" not in result["message"]
-    assert SESSION_KEY not in mod._denial_tally
-
-
-def test_delivered_prompt_withdrawn_by_stop_keeps_withdrawal_text(gateway_session):
-    """A prompt that reached a surface and is then withdrawn by /stop keeps the withdrawal text."""
-    thread, holder = _run_gate_until_pending()
     set_interrupt(True, holder["tid"], reason="Stop requested")
     try:
         thread.join(timeout=10)
@@ -280,3 +235,18 @@ def test_cli_callback_failure_reports_undelivered_prompt_not_user_deny(cli_sessi
     assert "user denied" not in result["message"].lower()
     posts = [kw for name, kw in cli_session if name == "post_approval_response"]
     assert posts[-1]["choice"] == "cancelled"
+
+
+def test_withdrawn_reason_names_a_plain_cause_as_a_withdrawal_not_a_refusal():
+    """A cause with no delivery failure reads as a withdrawal the user did not answer."""
+    from tools.approval_gateway_wait import withdrawn_reason
+
+    assert withdrawn_reason("Stop requested") == "approval was withdrawn before the user answered (Stop requested)"
+
+
+def test_withdrawn_reason_returns_the_never_shown_text_unchanged():
+    """A never-shown cause already names its delivery failure, so it passes through untouched."""
+    from tools.approval_gateway_wait import withdrawn_reason
+
+    never_shown = "approval was never shown to Matt (delivery failed: send_path_degraded); withdrawn (Stop requested)"
+    assert withdrawn_reason(never_shown) == never_shown

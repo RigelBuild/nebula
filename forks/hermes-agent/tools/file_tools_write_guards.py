@@ -338,7 +338,7 @@ def _request_protected_instruction_approval(reasons: list[str], task_id: str = "
         if decision.get("notify_failed"):
             return blocked.format(why="requires approval but the approval request could not be delivered.")
         if decision.get("cancelled"):
-            return blocked.format(why=withdrawn_reason(decision["cancelled"]))
+            return blocked.format(why=withdrawn_reason(decision["cancelled"]) + ".")
         choice, timed = decision.get("choice"), not decision.get("resolved")
     else:
         # CLI surface: per-thread approval callback (prompt_toolkit panel).

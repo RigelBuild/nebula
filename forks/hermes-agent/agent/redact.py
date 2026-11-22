@@ -1925,7 +1925,8 @@ def _kubectl_outputs_structured(args: list[str]) -> bool:
 def _is_structured_kubectl_read(command: str) -> bool:
     """True only for a kubectl/oc/k read that stays unmasked: one pipeline segment on one line,
     no ``$``, backtick, or parenthesis, shlex-parseable, the binary first after ``NAME=value``
-    prefixes, not ``set env --list``, and every output format structured. Anything else is
+    prefixes, not ``set env --list``, not ``exec`` with a command after ``--``, not ``config view``
+    with ``--raw`` or ``--flatten``, and every output format structured. Anything else is
     masked whole, so a wrapper, substitution or pipe cannot hide a Secret value from the
     per-line pass."""
     stripped = command.strip()
@@ -1949,6 +1950,11 @@ def _is_structured_kubectl_read(command: str) -> bool:
     args = tokens[1:]
     if "set" in args and "env" in args and any(
             tok in ("-l", "--list") or tok.startswith("--list=") for tok in args):
+        return False
+    if "exec" in args and "--" in args[:-1]:
+        return False
+    if "config" in args and "view" in args and any(
+            tok in ("--raw", "--flatten") or tok.startswith(("--raw=", "--flatten=")) for tok in args):
         return False
     return _kubectl_outputs_structured(args)
 

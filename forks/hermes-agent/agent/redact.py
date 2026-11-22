@@ -1868,6 +1868,9 @@ _KUBECTL_MENTION_RE = re.compile(r"(?<![A-Za-z0-9_-])(?:kubectl|oc|k)(?![A-Za-z0
 # Output formats that print a Secret with its keys (``data:``/``stringData:``), so the
 # Kubernetes pass can find and mask the values. Any other format masks the whole output.
 _KUBECTL_STRUCTURED_FORMATS = frozenset({"yaml", "json", "name", "wide"})
+# Subcommands that print what a process or the API returns: exec, attach, debug and run stream
+# container output, and cp can copy a file to stdout. Token match, so it over-masks by design.
+_KUBECTL_RAW_SUBCOMMANDS = frozenset({"exec", "attach", "debug", "run", "cp"})
 # A leading ``NAME=value`` token, as in ``KUBECONFIG=/tmp/c kubectl get ...``.
 _ENV_ASSIGNMENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
 # The first word of a read must be plain text: any other character lets the shell build the name.
@@ -1925,10 +1928,10 @@ def _kubectl_outputs_structured(args: list[str]) -> bool:
 def _is_structured_kubectl_read(command: str) -> bool:
     """True only for a kubectl/oc/k read that stays unmasked: one pipeline segment on one line,
     no ``$``, backtick, or parenthesis, shlex-parseable, the binary first after ``NAME=value``
-    prefixes, not ``set env --list``, not ``exec`` with a command after ``--``, not ``config view``
-    with ``--raw`` or ``--flatten``, and every output format structured. Anything else is
-    masked whole, so a wrapper, substitution or pipe cannot hide a Secret value from the
-    per-line pass."""
+    prefixes, not ``set env --list``, no ``exec``/``attach``/``debug``/``run``/``cp`` token, not
+    ``create token``, no ``--raw`` flag, not ``config view`` with ``--flatten``, and every output
+    format structured. Anything else is masked whole, so a wrapper, substitution or pipe cannot
+    hide a Secret value from the per-line pass."""
     stripped = command.strip()
     if "\n" in command or "\r" in command or stripped[:1] in ("|", ";", "&") or stripped[-1:] in ("|", ";", "&"):
         return False
@@ -1951,7 +1954,11 @@ def _is_structured_kubectl_read(command: str) -> bool:
     if "set" in args and "env" in args and any(
             tok in ("-l", "--list") or tok.startswith("--list=") for tok in args):
         return False
-    if "exec" in args and "--" in args[:-1]:
+    if any(tok in _KUBECTL_RAW_SUBCOMMANDS for tok in args):
+        return False
+    if "create" in args and "token" in args:
+        return False
+    if any(tok == "--raw" or tok.startswith("--raw=") for tok in args):
         return False
     if "config" in args and "view" in args and any(
             tok in ("--raw", "--flatten") or tok.startswith(("--raw=", "--flatten=")) for tok in args):

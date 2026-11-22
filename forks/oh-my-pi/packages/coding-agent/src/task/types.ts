@@ -303,6 +303,8 @@ export interface AgentDefinition {
 	/** `true` = task spawns keep this agent's `output` schema, and with it the `yield` tool, even when `task.structured` is off. */
 	structured?: boolean;
 	autoloadSkills?: string[];
+	/** Advertised skill allowlist: absent = full session roster; `[]` = advertise none. Autoload still resolves against the full roster. */
+	skills?: string[];
 	/** When `false`, the agent's `read` tool returns verbatim file content instead of structural summaries. */
 	readSummarize?: boolean;
 	/** Prewalk hand-off for the spawned session: `true` = switch to the default prewalk target at the first edit/write, string = custom target model pattern. */

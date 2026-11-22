@@ -304,6 +304,8 @@ export interface ParsedAgentFields {
 	output?: unknown;
 	thinkingLevel?: ConfiguredThinkingLevel;
 	autoloadSkills?: string[];
+	/** Advertised skill allowlist: absent = full session roster; `[]` = advertise none. */
+	skills?: string[];
 	readSummarize?: boolean;
 	blocking?: boolean;
 	/** `true` = keep the output schema (and with it `yield`) when `task.structured` is off. */
@@ -399,6 +401,15 @@ export function parseAgentFields(frontmatter: Record<string, unknown>): ParsedAg
 	const autoloadSkills = parseArrayOrCSV(frontmatter.autoloadSkills)
 		?.map(s => s.trim())
 		.filter(Boolean);
+	// Only absent or null leaves the advertised roster unrestricted; a malformed or empty
+	// allowlist must advertise none rather than widen access.
+	const rawSkills = frontmatter.skills;
+	const skills =
+		rawSkills == null
+			? undefined
+			: (parseArrayOrCSV(rawSkills)
+					?.map(s => s.trim())
+					.filter(Boolean) ?? []);
 	return {
 		name,
 		description,
@@ -410,6 +421,7 @@ export function parseAgentFields(frontmatter: Record<string, unknown>): ParsedAg
 		blocking,
 		structured,
 		autoloadSkills,
+		skills,
 		readSummarize,
 		prewalk,
 		advisor,

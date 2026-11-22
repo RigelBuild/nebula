@@ -17,6 +17,7 @@ import (
 
 // holdQueueFile holds a slot flock in a child process until the test ends.
 func holdQueueFile(t *testing.T, path string) {
+	skipUnlessLinux(t)
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
@@ -60,6 +61,7 @@ func createQueueTicket(t *testing.T, path string) {
 // runQueueGate runs the real remote run script for one ticket. The ticket travels in RJC_HOOK_TICKET, as the
 // client sends it on the remote command line. It returns the exit status, so a slot-busy refusal (77) is visible.
 func runQueueGate(t *testing.T, home, ticket, orderPath string) (int, string) {
+	skipUnlessLinux(t)
 	t.Helper()
 	dir := t.TempDir()
 	// Simulate the real slot script handoff after flock acquires the slot.
@@ -81,6 +83,7 @@ func runQueueGate(t *testing.T, home, ticket, orderPath string) (int, string) {
 
 // TestSSHHookScriptsRespectHostSlotLimit verifies both the remote run and host-probe scripts.
 func TestSSHHookScriptsRespectHostSlotLimit(t *testing.T) {
+	skipUnlessLinux(t)
 	tests := []struct {
 		name            string
 		hostSlots       string
@@ -175,6 +178,7 @@ func TestSSHHookScriptsRespectHostSlotLimit(t *testing.T) {
 
 // TestSSHHookGateRunsQueuedTicketsInArrivalOrder: three tickets wait in arrival order, and each run gets the slot in that order.
 func TestSSHHookGateRunsQueuedTicketsInArrivalOrder(t *testing.T) {
+	skipUnlessLinux(t)
 	home := t.TempDir()
 	queue := filepath.Join(home, "rjc-hook", "queue")
 	orderPath := filepath.Join(home, "order")
@@ -206,6 +210,7 @@ func TestSSHHookGateRunsQueuedTicketsInArrivalOrder(t *testing.T) {
 
 // TestSSHHookGateRemovesDeadTickets checks expiry by heartbeat age.
 func TestSSHHookGateRemovesDeadTickets(t *testing.T) {
+	skipUnlessLinux(t)
 	home := t.TempDir()
 	queue := filepath.Join(home, "rjc-hook", "queue")
 	if err := os.MkdirAll(queue, 0o755); err != nil {
@@ -231,6 +236,7 @@ func TestSSHHookGateRemovesDeadTickets(t *testing.T) {
 }
 
 func TestSSHHookGateRefreshesOwnStaleTicket(t *testing.T) {
+	skipUnlessLinux(t)
 	home := t.TempDir()
 	path := filepath.Join(home, "rjc-hook", "queue", "00000000000000000001-first")
 	createQueueTicket(t, path)
@@ -246,6 +252,7 @@ func TestSSHHookGateRefreshesOwnStaleTicket(t *testing.T) {
 }
 
 func TestSSHHookSlotKeepsTicketOnMissingBundle(t *testing.T) {
+	skipUnlessLinux(t)
 	home := t.TempDir()
 	queue := filepath.Join(home, "rjc-hook", "queue")
 	first := filepath.Join(queue, "00000000000000000001-first")
@@ -269,6 +276,7 @@ func TestSSHHookSlotKeepsTicketOnMissingBundle(t *testing.T) {
 
 // A new client without a matching ticket cannot bypass a live queue.
 func TestSSHHookGateRefusesTicketlessRunWithQueue(t *testing.T) {
+	skipUnlessLinux(t)
 	home := t.TempDir()
 	ticket := filepath.Join(home, "rjc-hook", "queue", "00000000000000000001-live")
 	createQueueTicket(t, ticket)
@@ -279,6 +287,7 @@ func TestSSHHookGateRefusesTicketlessRunWithQueue(t *testing.T) {
 }
 
 func TestSSHProbeAssignsHostArrivalOrder(t *testing.T) {
+	skipUnlessLinux(t)
 	home := t.TempDir()
 	holdQueueFile(t, filepath.Join(home, "rjc-hook", "slots", "s1"))
 	ids := []string{"z-client", "a-client", "m-client"}
@@ -306,6 +315,7 @@ func TestSSHProbeAssignsHostArrivalOrder(t *testing.T) {
 }
 
 func TestSSHHookFailedUploadStopsHeartbeat(t *testing.T) {
+	skipUnlessLinux(t)
 	home := t.TempDir()
 	ticket := filepath.Join(home, "rjc-hook", "queue", "00000000000000000001-first")
 	createQueueTicket(t, ticket)
@@ -349,6 +359,7 @@ func TestSSHHookFailedUploadStopsHeartbeat(t *testing.T) {
 }
 
 func TestSSHHookProbeDuringBundleCheck(t *testing.T) {
+	skipUnlessLinux(t)
 	home := t.TempDir()
 	bin := filepath.Join(home, "bin")
 	if err := os.MkdirAll(bin, 0o700); err != nil {
@@ -406,6 +417,7 @@ func TestSSHHookProbeDuringBundleCheck(t *testing.T) {
 }
 
 func TestSSHHookSlotKeepsPlaceWhenBundleCheckOutlastsExpiry(t *testing.T) {
+	skipUnlessLinux(t)
 	home := t.TempDir()
 	queue := filepath.Join(home, "rjc-hook", "queue")
 	first := filepath.Join(queue, "00000000000000000001-first")

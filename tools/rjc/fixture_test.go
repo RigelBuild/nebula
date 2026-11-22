@@ -424,7 +424,12 @@ func (f *fixture) new(t *testing.T, issue, title, on string) string {
 }
 func (f *fixture) commit(t *testing.T, path string) {
 	t.Helper()
-	writeTestFile(t, filepath.Join(f.repo.root, path), "committed\n")
+	f.commitFile(t, path, "committed\n")
+}
+
+func (f *fixture) commitFile(t *testing.T, path, body string) {
+	t.Helper()
+	writeTestFile(t, filepath.Join(f.repo.root, path), body)
 	jjTest(t, f.repo, "commit", "-m", "fix: committed test work")
 }
 

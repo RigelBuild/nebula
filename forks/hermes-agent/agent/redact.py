@@ -2012,13 +2012,12 @@ def _kubectl_verb(args: list[str]) -> str | None:
 
 
 def _is_structured_kubectl_read(command: str) -> bool:
-    """True only for a kubectl/oc/k read that stays unmasked: one pipeline segment on one line,
-    no ``$``, backtick, or parenthesis, shlex-parseable, the binary first after ``NAME=value``
-    prefixes, not ``set env --list``, no ``exec``/``attach``/``debug``/``run``/``cp``/``rsh``/
-    ``extract`` token, not ``create token``, no ``--raw`` or ``--kuberc`` flag, no ``KUBECTL_KUBERC=``, ``KUBERC=`` or ``HOME=``
-    assignment, not ``config view`` with ``--flatten``, not ``oc whoami`` with a token flag, a
-    built-in read verb as the first verb, no verbosity at klog level 6 or higher, and
-    every output format structured. Anything else is masked whole, so a wrapper, substitution,
+    """True only for a kubectl/oc/k read that stays unmasked: one pipeline segment on one line, no ``$``, backtick, or
+    parenthesis, shlex-parseable, the binary first after ``NAME=value`` prefixes, not ``set env --list``, no
+    ``exec``/``attach``/``debug``/``run``/``cp``/``rsh``/``extract`` token, not ``create token``, no ``--raw`` or
+    ``--kuberc`` flag, no ``KUBECTL_KUBERC=``, ``KUBERC=`` or ``HOME=`` assignment, not ``config view`` with
+    ``--flatten``, not ``oc whoami`` with a token flag, a built-in read verb as the first verb, no verbosity at klog
+    level 6 or higher, and every output format structured. Anything else is masked whole, so a wrapper, substitution,
     pipe or plugin cannot hide a Secret value from the per-line pass."""
     stripped = command.strip()
     if "\n" in command or "\r" in command or stripped[:1] in ("|", ";", "&") or stripped[-1:] in ("|", ";", "&"):

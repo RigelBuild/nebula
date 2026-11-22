@@ -1,6 +1,7 @@
-"""RIG-11984 bypasses found by the PR 226 review, closed by this change.
+"""RIG-11984 bypasses found by the PR 226/232 reviews.
 
-Each row pins one of those bypasses, so a regression fails the suite.
+The rows pin those bypasses, so a regression fails the suite. G4 and G5 are closed here.
+The residual and Windows rows are open and marked xfail.
 """
 
 import pytest
@@ -74,8 +75,9 @@ def test_g3_kuberc_default_output_masks_whole_output(command):
 
 
 # G4 (medium, found by the fix-forward review): kubectl reads its kuberc path from the KUBERC
-# env var, not KUBECTL_KUBERC (the feature gate). The gate denies KUBECTL_KUBERC= only, so a
-# KUBERC= prefix passes and a kuberc default output stays unread.
+# env var, not KUBECTL_KUBERC (the feature gate), and HOME= moves the default kuberc path. The
+# gate denies KUBECTL_KUBERC= only, so a KUBERC= or HOME= prefix passes and a kuberc default
+# output stays unread.
 G4_KUBERC_ENV = [
     ("kuberc-env-real", "KUBERC=/tmp/k kubectl get secret s"),
     ("kuberc-env-after-other", "FOO=1 KUBERC=/tmp/k kubectl get secret s"),
@@ -124,8 +126,32 @@ def test_vmodule_low_level_stays_readable():
 
 
 # Residual (RIG-11984 review): persisted KUBERC env is not visible to the gate.
-@pytest.mark.xfail(strict=True, reason="RIG-11984 residual: KUBERC exported by an earlier call persists; the gate reads one command string")
+# Proxy row. Plain get is unmasked today because it has no -o. It flips only when default get
+# output is masked, so it does not track the persisted-env fix. Remove the marker when the gate
+# reads persisted kuberc env.
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "RIG-11984 residual: kuberc-relevant env (KUBERC, KUBECTL_KUBERC, HOME) exported by an "
+        "earlier call persists; the gate reads one command string and cannot see it. This row "
+        "stands in for it with a plain get."
+    ),
+)
 def test_persisted_kuberc_env_known_gap():
     text = V + "\n"
     for out in _terminal(text, "kubectl get secret s"):
+        assert V not in out
+
+
+# Windows gap (RIG-11984): the gate denies HOME= only. Pinned open, not fixed here.
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "RIG-11984 Windows gap: kubectl takes its home from USERPROFILE or HOMEDRIVE+HOMEPATH; "
+        "the gate denies HOME= only"
+    ),
+)
+def test_windows_home_env_prefix_known_gap():
+    text = V + "\n"
+    for out in _terminal(text, "USERPROFILE=/tmp/x kubectl get secret s -o name"):
         assert V not in out

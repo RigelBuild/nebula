@@ -112,7 +112,7 @@ describe("BashTool full-output spill artifact redaction", () => {
 		);
 
 		expect(result.details?.meta?.truncation?.artifactId).toBe("1");
-		expect(result.details?.meta?.truncation?.artifactError).toBeUndefined();
+		expect(result.details?.meta?.artifactError).toBeUndefined();
 		expect(written).not.toContain(secret);
 		expect(written).toContain("[REDACTED:TOKEN]");
 	});
@@ -123,7 +123,7 @@ describe("BashTool full-output spill artifact redaction", () => {
 		expect(spillExists).toBe(false);
 		expect(written).not.toContain(secret);
 		expect(result.details?.meta?.truncation?.artifactId).toBeUndefined();
-		expect(result.details?.meta?.truncation?.artifactError).toBe("redact");
+		expect(result.details?.meta?.artifactError).toBe("redact");
 	});
 
 	it("withholds the spill when the artifact_text handler times out", async () => {
@@ -133,6 +133,6 @@ describe("BashTool full-output spill artifact redaction", () => {
 		expect(spillExists).toBe(false);
 		expect(written).not.toContain(secret);
 		expect(result.details?.meta?.truncation?.artifactId).toBeUndefined();
-		expect(result.details?.meta?.truncation?.artifactError).toBe("redact");
+		expect(result.details?.meta?.artifactError).toBe("redact");
 	});
 });

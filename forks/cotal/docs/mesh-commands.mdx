@@ -26,7 +26,7 @@ The output schemas below describe successful command results, not the protocol e
 
 ## manager
 
-Cluster `ai.cotal.manager`, revision 53. 47 commands.
+Cluster `ai.cotal.manager`, revision 54. 47 commands.
 
 | Command                                                   | Capability          | Class     | Target modes |
 | --------------------------------------------------------- | ------------------- | --------- | ------------ |
@@ -710,7 +710,7 @@ Registered declaration:
   "targeted": false,
   "capability": "manager.read",
   "inputDigest": "sha256:1db0472aaee8e6b9d8d3d430ee021a1b6efc559ab7c0b99186898c972c53dd2d",
-  "outputDigest": "sha256:9e43370721b975a1365904460155be0e78ee88c4a3ecf21a0eaf114446fa1cd2"
+  "outputDigest": "sha256:daccff62ecd085fa03416feb47eecaf16f550755561a79be8ea4bee2130e0402"
 }
 ```
 
@@ -856,7 +856,8 @@ Output schema:
       "background": {
         "type": "string",
         "enum": [
-          "running"
+          "running",
+          "idle"
         ]
       },
       "cwd": {
@@ -915,7 +916,7 @@ Registered declaration:
   "targeted": false,
   "capability": "manager.read",
   "inputDigest": "sha256:c74bfe6c0426cf31f56796a48992639eb08a46c36f7dd7205b497cf2c83a8382",
-  "outputDigest": "sha256:604b7aa5c12184073b18c769e714bc92ba9f67a891583a849ee382f146eccf3b"
+  "outputDigest": "sha256:4c1f731078f0ae180839ccd83eb5916818788b1dc631898e0b287f128be6c739"
 }
 ```
 
@@ -1069,7 +1070,8 @@ Output schema:
     "background": {
       "type": "string",
       "enum": [
-        "running"
+        "running",
+        "idle"
       ]
     },
     "cwd": {

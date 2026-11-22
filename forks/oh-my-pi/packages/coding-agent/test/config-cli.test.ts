@@ -374,3 +374,47 @@ describe("config list --scope", () => {
 		expect(exitSpy).toHaveBeenCalledWith(1);
 	});
 });
+
+describe("config --config overlays", () => {
+	it("get reads a value that a --config overlay sets", async () => {
+		if (!testAgentDir) throw new Error("Test agent directory was not initialized");
+		const overlayPath = path.join(testAgentDir.path(), "overlay.yml");
+		await Bun.write(overlayPath, "modelRoles:\n  default: overlay-model\n");
+		const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+		await runConfigCommand({ action: "get", key: "modelRoles", flags: { json: true, config: [overlayPath] } });
+
+		expect(JSON.parse(String(logSpy.mock.calls.at(-1)?.[0]))).toMatchObject({
+			key: "modelRoles",
+			value: { default: "overlay-model" },
+		});
+	});
+
+	it("list shows a value that a --config overlay sets", async () => {
+		if (!testAgentDir) throw new Error("Test agent directory was not initialized");
+		const overlayPath = path.join(testAgentDir.path(), "overlay.yml");
+		await Bun.write(overlayPath, "modelRoles:\n  default: overlay-model\n");
+		const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+		await runConfigCommand({ action: "list", flags: { config: [overlayPath] } });
+
+		const modelRolesLine = logSpy.mock.calls
+			.map(call => Bun.stripANSI(String(call[0] ?? "")))
+			.find(line => line.includes("modelRoles ="));
+		expect(modelRolesLine).toContain("overlay-model");
+	});
+
+	it("`--config <overlay> config get` reads the overlay through the CLI", async () => {
+		if (!testAgentDir) throw new Error("Test agent directory was not initialized");
+		const overlayPath = path.join(testAgentDir.path(), "overlay.yml");
+		await Bun.write(overlayPath, "modelRoles:\n  default: overlay-model\n");
+		const { exitCode, output, error } = await runCliProcess(
+			["--config", overlayPath, "config", "get", "modelRoles", "--json"],
+			{ PI_CODING_AGENT_DIR: testAgentDir.path() },
+		);
+
+		expect(error).toBe("");
+		expect(exitCode).toBe(0);
+		expect(JSON.parse(output)).toMatchObject({ key: "modelRoles", value: { default: "overlay-model" } });
+	});
+});

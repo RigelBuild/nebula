@@ -127,6 +127,22 @@ def test_f12_built_command_name_masks_whole_output(command):
         assert out == "***", out
 
 
+# Nemo condition (RIG-11965): describe on deployments masks env values; logs still goes
+# through the value redactor.
+def test_describe_deploy_env_value_masked():
+    text = "Containers:\n  app:\n    Environment:\n      DB_PASSWORD:  " + V + "\n      LOG_LEVEL:  info\n"
+    for out in _terminal(text, "kubectl describe deploy web"):
+        assert V not in out, out
+        assert "LOG_LEVEL:  info" in out, out
+
+
+def test_logs_still_runs_value_redactor():
+    token = "ghp_" + "a" * 36
+    text = "INFO fetched with " + token + "\n"
+    for out in _terminal(text, "kubectl logs web -c app"):
+        assert token not in out, out
+
+
 def test_keep_plain_kubectl_name_stays_unmasked():
     text = "web 1/1 Running " + K + "\n"
     for out in _terminal(text, "kubectl get pods -o yaml"):

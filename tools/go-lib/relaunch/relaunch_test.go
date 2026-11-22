@@ -226,20 +226,22 @@ func TestPicksByMtimeNotFilenameAndSkipsBurnedSessionIDs(t *testing.T) {
 	}
 }
 
-func TestRecognizesOnlyALiveDevboxZellijSession(t *testing.T) {
+func TestRecognizesOnlyALiveNamedZellijSession(t *testing.T) {
 	cases := []struct {
-		name string
-		text string
-		want bool
+		name    string
+		session string
+		text    string
+		want    bool
 	}{
-		{name: "live devbox", text: "devbox [Created 1h ago]\nother", want: true},
-		{name: "exited devbox", text: "devbox [EXITED]\nother"},
-		{name: "prefix sibling", text: "devbox-old [Created]"},
+		{name: "live configured session", session: "viewer", text: "viewer [Created 1h ago]\nother", want: true},
+		{name: "exited configured session", session: "viewer", text: "viewer [EXITED]\nother"},
+		{name: "prefix sibling of configured session", session: "viewer", text: "viewer-old [Created]"},
+		{name: "other session is not the configured one", session: "viewer", text: "devbox [Created 1h ago]"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := DevboxLive(tc.text); got != tc.want {
-				t.Fatalf("DevboxLive() = %t, want %t", got, tc.want)
+			if got := SessionLive(tc.text, tc.session); got != tc.want {
+				t.Fatalf("SessionLive(%q) = %t, want %t", tc.session, got, tc.want)
 			}
 		})
 	}

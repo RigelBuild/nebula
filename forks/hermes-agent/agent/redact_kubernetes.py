@@ -399,6 +399,11 @@ _GO_NAME_RE = re.compile(r"(?:^| )name:([^\s\]]+)")
 _GO_VALUE_RE = re.compile(r"(?:^| )value:")
 _DESCRIBE_NAME_RE = re.compile(r"([A-Za-z_][\w.\-]*):(?:[ \t]+|$)")
 _DESCRIBE_REF_RE = re.compile(r"<set to the key |<none>|.*\(v1:")
+# An inline ``Command:  argv`` or ``Args:  argv`` header line: the value after the header.
+_DESCRIBE_ARGV_RE = re.compile(r"(?:Command|Args):[ \t]+")
+# A ``kubectl describe`` header: a column-zero ``Name:`` or ``Namespace:`` line. Python source and
+# docstrings never print one at column zero, so the Command/Args/Spec rules need it.
+_DESCRIBE_HEADER_RE = re.compile(r"^(?:Name|Namespace):[ \t]", re.MULTILINE)
 
 
 def _flow_spans(text: str) -> list:
@@ -430,32 +435,61 @@ def _flow_spans(text: str) -> list:
 
 
 def _describe_spans(text: str) -> list:
-    """``NAME:  value`` lines inside an ``Environment:`` block. A value that runs over several
-    lines (a PEM key, a multi-line string) masks every following line up to the next
-    ``NAME:`` line or the end of the block."""
-    spans, pos, env_indent, in_value = [], 0, -1, False
+    """Values in ``kubectl describe`` output that must not reach the model.
+
+    ``Environment:``: a ``NAME:  value`` line is masked when NAME is secret-named. A value that
+    runs over several lines (a PEM key) masks every following line up to the next ``NAME:``.
+    ``Command:`` / ``Args:``: every line under the header is masked. Argv carries literal
+    values with no name to match on (``--db-pass=<value>``, a bare token).
+    ``Spec:`` (CRD describe): every ``key:  value`` scalar under the header is masked, so a
+    credential under a neutral key (``adminPassword``, a HelmRelease ``values``) stays hidden.
+    A ``<set to the key ...>`` reference is not a value. Other sections (``Status:``, ``Name:``)
+    are not touched.
+    """
+    describe = _DESCRIBE_HEADER_RE.search(text) is not None
+    spans, pos = [], 0
+    env_indent, in_value = -1, False
+    block_indent, block_kind = -1, ""
     for line in text.split("\n"):
         body = line.removesuffix("\r")
         stripped = body.lstrip(" \t")
         lead = len(body) - len(stripped)
         indent = len(body[:lead].expandtabs(8))
-        if env_indent >= 0 and stripped:
-            if indent <= env_indent:
+        if stripped:
+            if block_indent >= 0 and indent <= block_indent:
+                block_indent, block_kind = -1, ""
+            if env_indent >= 0 and indent <= env_indent:
                 env_indent, in_value = -1, False
+        if block_indent >= 0 and stripped and not stripped.startswith("#") and describe:
+            m = _DESCRIBE_NAME_RE.match(stripped)
+            if block_kind == "Spec" and m is not None:
+                value = stripped[m.end():].rstrip()
+                if value and not _DESCRIBE_REF_RE.match(value):
+                    s = pos + lead + m.end()
+                    spans.append((s, s + len(value), None))
+            elif block_kind != "Spec" or not stripped.endswith(":"):
+                spans.append((pos + lead, pos + len(body), None))
+        if env_indent >= 0 and stripped:
+            m = _DESCRIBE_NAME_RE.match(stripped)
+            if m is None:
+                if in_value:
+                    spans.append((pos + lead, pos + len(body), None))
             else:
-                m = _DESCRIBE_NAME_RE.match(stripped)
-                if m is None:
-                    if in_value:
-                        spans.append((pos + lead, pos + len(body), None))
-                else:
-                    value = stripped[m.end():].rstrip()
-                    in_value = bool(value) and _secret_name(m.group(1), value) \
-                        and not _DESCRIBE_REF_RE.match(value)
-                    if in_value:
-                        s = pos + lead + m.end()
-                        spans.append((s, s + len(value), None))
+                value = stripped[m.end():].rstrip()
+                in_value = bool(value) and _secret_name(m.group(1), value) \
+                    and not _DESCRIBE_REF_RE.match(value)
+                if in_value:
+                    s = pos + lead + m.end()
+                    spans.append((s, s + len(value), None))
         if stripped.rstrip() == "Environment:":
             env_indent, in_value = indent, False
+        elif describe and stripped.rstrip() in ("Command:", "Args:", "Spec:") and block_indent < 0:
+            block_indent, block_kind = indent, stripped.rstrip()[:-1]
+        else:
+            m = _DESCRIBE_ARGV_RE.match(stripped) if describe else None
+            if m is not None and m.end() < len(stripped):
+                s = pos + lead + m.end()
+                spans.append((s, pos + len(body.rstrip()), None))
         pos += len(line) + 1
     return spans
 
@@ -469,6 +503,6 @@ def redact_kubernetes(text: str, mask: str = "***") -> str:
         spans += _yaml_spans(text, mask)
     if "value:" in text:
         spans += _flow_spans(text)
-    if "Environment:" in text:
+    if "Environment:" in text or "Command:" in text or "Args:" in text or "Spec:" in text:
         spans += _describe_spans(text)
     return _apply(text, spans, mask)

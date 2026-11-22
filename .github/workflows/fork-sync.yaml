@@ -64,13 +64,17 @@ jobs:
     permissions:
       contents: read
     steps:
-      # Fails the run when the App variable is unset, so a missing App cannot pass as a sync (RIG-11975).
+      # Fails the run when a required App input is unset, so a missing App cannot pass as a sync (RIG-11975).
       - name: Require automation App credentials
         env:
           CLIENT_ID: ${{ vars.AUTOMATION_APP_CLIENT_ID }}
+          PRIVATE_KEY: ${{ secrets.AUTOMATION_APP_PRIVATE_KEY }}
         run: |
-          if [ -z "$CLIENT_ID" ]; then
-            echo "::error::fork sync needs vars.AUTOMATION_APP_CLIENT_ID in the main environment (RIG-10145, RIG-11071)"
+          missing=''
+          if [ -z "$CLIENT_ID" ]; then missing="$missing vars.AUTOMATION_APP_CLIENT_ID"; fi
+          if [ -z "$PRIVATE_KEY" ]; then missing="$missing secrets.AUTOMATION_APP_PRIVATE_KEY"; fi
+          if [ -n "$missing" ]; then
+            echo "::error::fork sync needs$missing in the main environment (RIG-10145, RIG-11071)"
             exit 1
           fi
       - name: Mint automation App token

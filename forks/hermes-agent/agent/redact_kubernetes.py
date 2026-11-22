@@ -398,9 +398,11 @@ _GO_MAP_RE = re.compile(r"map\[(?:(?!map\[(?=name:|value:))[^\r\n])*")
 _GO_NAME_RE = re.compile(r"(?:^| )name:([^\s\]]+)")
 _GO_VALUE_RE = re.compile(r"(?:^| )value:")
 _DESCRIBE_NAME_RE = re.compile(r"([A-Za-z_][\w.\-]*):(?:[ \t]+|$)")
-_DESCRIBE_REF_RE = re.compile(r"<set to the key |<none>|.*\(v1:")
+_DESCRIBE_REF_RE = re.compile(r"<set to the key [^>]*>(?:\s+Optional: \w+)?\s*$|<none>\s*$")
 # An inline ``Command:  argv`` or ``Args:  argv`` header line: the value after the header.
 _DESCRIBE_ARGV_RE = re.compile(r"(?:Command|Args):[ \t]+")
+# A bare ``Key:`` sub-header in a Spec block (``Chart:``, ``Values:``): no value on the line.
+_DESCRIBE_KEY_LINE_RE = re.compile(r"[A-Za-z_][\w.\-]*:")
 # A ``kubectl describe`` header: a column-zero ``Name:`` or ``Namespace:`` line. Python source and
 # docstrings never print one at column zero, so the Command/Args/Spec rules need it.
 _DESCRIBE_HEADER_RE = re.compile(r"^(?:Name|Namespace):[ \t]", re.MULTILINE)
@@ -449,7 +451,7 @@ def _describe_spans(text: str) -> list:
     describe = _DESCRIBE_HEADER_RE.search(text) is not None
     spans, pos = [], 0
     env_indent, in_value = -1, False
-    block_indent, block_kind = -1, ""
+    block_indent, block_kind, key_indent = -1, "", -1
     for line in text.split("\n"):
         body = line.removesuffix("\r")
         stripped = body.lstrip(" \t")
@@ -457,17 +459,24 @@ def _describe_spans(text: str) -> list:
         indent = len(body[:lead].expandtabs(8))
         if stripped:
             if block_indent >= 0 and indent <= block_indent:
-                block_indent, block_kind = -1, ""
+                block_indent, block_kind, key_indent = -1, "", -1
             if env_indent >= 0 and indent <= env_indent:
                 env_indent, in_value = -1, False
-        if block_indent >= 0 and stripped and not stripped.startswith("#") and describe:
+        if block_indent >= 0 and stripped and not stripped.startswith("#"):
             m = _DESCRIBE_NAME_RE.match(stripped)
-            if block_kind == "Spec" and m is not None:
-                value = stripped[m.end():].rstrip()
-                if value and not _DESCRIBE_REF_RE.match(value):
-                    s = pos + lead + m.end()
-                    spans.append((s, s + len(value), None))
-            elif block_kind != "Spec" or not stripped.endswith(":"):
+            if block_kind == "Spec" and m is not None and (key_indent < 0 or indent <= key_indent):
+                if key_indent < 0:
+                    key_indent = indent  # the first key under the header sets the key column
+                if _DESCRIBE_KEY_LINE_RE.fullmatch(stripped):
+                    key_indent = indent  # a bare sub-header: its value lines are deeper
+                else:
+                    value = stripped[m.end():].rstrip()
+                    if value and not _DESCRIBE_REF_RE.match(value):
+                        s = pos + lead + m.end()
+                        spans.append((s, s + len(value), None))
+            elif block_kind == "Spec" and indent > key_indent >= 0:
+                spans.append((pos + lead, pos + len(body), None))  # block-scalar continuation
+            elif block_kind != "Spec":
                 spans.append((pos + lead, pos + len(body), None))
         if env_indent >= 0 and stripped:
             m = _DESCRIBE_NAME_RE.match(stripped)
@@ -483,8 +492,9 @@ def _describe_spans(text: str) -> list:
                     spans.append((s, s + len(value), None))
         if stripped.rstrip() == "Environment:":
             env_indent, in_value = indent, False
-        elif describe and stripped.rstrip() in ("Command:", "Args:", "Spec:") and block_indent < 0:
-            block_indent, block_kind = indent, stripped.rstrip()[:-1]
+        elif block_indent < 0 and stripped.rstrip() in ("Command:", "Args:", "Spec:") and (
+                describe or (indent == 0 and stripped.rstrip() == "Spec:")):
+            block_indent, block_kind, key_indent = indent, stripped.rstrip()[:-1], -1
         else:
             m = _DESCRIBE_ARGV_RE.match(stripped) if describe else None
             if m is not None and m.end() < len(stripped):

@@ -155,3 +155,12 @@ def test_keep_namespace_describe_unmasked():
     for out in _terminal(text, "kubectl describe namespace team"):
         assert out != "***", out
         assert K in out, out
+
+
+# --- Known gaps pinned as xfail (RIG-12026 review, low) -----------------------------------------
+
+@pytest.mark.xfail(reason="known gap: an indented Name: header disables the describe gate", strict=True)
+def test_known_gap_indented_name_header_spec_value():
+    text = "  Name: web\n  Spec:\n    adminPassword: " + V + "\n"
+    for out in _terminal(text, "kubectl describe crd foo"):
+        assert V not in out, out

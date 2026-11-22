@@ -1,5 +1,5 @@
-// release-pending is the release gate's config. checkReleaseGate in
-// tools/cd/components.go reads it.
+// release-pending is the release gate's config. checkReleaseGate and
+// loadGateConfig in tools/cd/release_gate_test.go read it.
 //
 // pending lists components that ship no release, images or published form yet.
 // The gate allows each listed project and fails any other component that ships
@@ -14,11 +14,11 @@ pending: [=~"^(tools|forks)/[a-z0-9-]+$"]: {
 }
 
 pending: {
-	"forks/cla-github-action": issue:                  "RIG-12302"
+	"forks/cla-github-action": issue:                  "RIG-12303"
 	"forks/hermes-agent": issue:                       "RIG-12299"
-	"forks/terraform-provider-googleworkspace": issue: "RIG-12302"
-	"forks/virtual": issue:                            "RIG-12302"
-	"forks/wails": issue:                              "RIG-12302"
+	"forks/terraform-provider-googleworkspace": issue: "RIG-12303"
+	"forks/virtual": issue:                            "RIG-12303"
+	"forks/wails": issue:                              "RIG-12303"
 }
 
 sidePaths: [=~"^(tools|forks)/[a-z0-9-]+$"]: {

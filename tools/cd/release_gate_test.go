@@ -103,7 +103,7 @@ func componentShips(data []byte) (bool, error) {
 }
 
 // checkReleaseGate fails each component.cue under repo that ships nothing, unless
-// its project is pending or on a side path. It also fails a pending project that
+// its project is pending or on a side path. It also fails a listed project that
 // now ships, a listed project with no component.cue, and a project listed as both
 // pending and on a side path. It reports every offender.
 func checkReleaseGate(repo string, cfg gateConfig) error {
@@ -122,7 +122,7 @@ func checkReleaseGate(repo string, cfg gateConfig) error {
 			if err != nil {
 				return err
 			}
-			ships, err := componentShips(data)
+			shipsNow, err := componentShips(data)
 			if err != nil {
 				errs = append(errs, fmt.Errorf("%s: %w", file, err))
 				continue
@@ -130,9 +130,9 @@ func checkReleaseGate(repo string, cfg gateConfig) error {
 			_, pending := cfg.Pending[project]
 			_, side := cfg.SidePaths[project]
 			switch {
-			case ships && pending:
+			case shipsNow && (pending || side):
 				errs = append(errs, fmt.Errorf("%s: ships now; remove %s from %s", file, project, gateConfigFile))
-			case !ships && !pending && !side:
+			case !shipsNow && !pending && !side:
 				errs = append(errs, fmt.Errorf("%s: ships no release, images or published form; add one, or list %s in %s", file, project, gateConfigFile))
 			}
 		}
@@ -280,6 +280,12 @@ func TestReleaseGate(t *testing.T) {
 			name:       "sidePath publishes cotal",
 			components: map[string]string{"forks/cotal": `id: "cotal"`},
 			config:     `pending: {}` + "\n" + `sidePaths: {"forks/cotal": {kind: "runtime-tarball", ref: "cd.yaml runtime job"}}` + "\n",
+		},
+		{
+			name:       "stale sidePath entry that now ships",
+			components: map[string]string{"forks/cotal": `published: {kind: "github-action", ref: "owner/action@v1"}`},
+			config:     `pending: {}` + "\n" + `sidePaths: {"forks/cotal": {kind: "runtime-tarball", ref: "cd.yaml runtime job"}}` + "\n",
+			wantErr:    []string{"forks/cotal/component.cue: ships now", "remove forks/cotal from release-pending.cue"},
 		},
 		{
 			name:       "sidePath with an unknown kind fails",

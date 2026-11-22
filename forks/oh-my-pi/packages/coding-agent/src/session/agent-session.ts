@@ -15717,10 +15717,11 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	}
 	/**
 	 * Ask before spending resets whose governing window is unset and return the
-	 * confirmed actions. The answer is saved to every governing window key still
-	 * unset (both chat windows when the window is unknown). A host that cannot
-	 * prompt (no extension UI, or one whose prompts cannot reach a human) spends
-	 * nothing and gets a one-shot notice instead.
+	 * confirmed actions. The answer is saved to the governing window keys of the
+	 * offered actions still unset (both chat windows when the offered window is
+	 * unknown). An action no operator approval can match is never offered, so its
+	 * window is not saved. A host that cannot prompt (no extension UI, or one whose
+	 * prompts cannot reach a human) spends nothing and gets a one-shot notice instead.
 	 */
 	async #confirmAutoRedeem(
 		provider: "openai-codex" | "anthropic",

@@ -29,6 +29,8 @@ import { __resetDirsFromEnvForTests, logger, setAgentDir, TempDir } from "@oh-my
 import { mockSchedulerWaitWithClock } from "./helpers/mock-scheduler-clock";
 
 import {
+	cfgClaudeResetsAutoRedeem5h,
+	cfgClaudeResetsAutoRedeemWeekly,
 	cfgClaudeResetsApprovedRedeems,
 	type ClaudeResetApproval,
 	resetWindowModes,
@@ -1138,5 +1140,67 @@ describe("Claude saved-reset trigger integration", () => {
 		await coordinator.sweepPromise;
 		expect(questions).toEqual([]);
 		expect(targets).toEqual([]);
+	});
+
+	it("a Yes answer saves only the window key of the offered restore, not an unmatchable salvage's weekly key", async () => {
+		// The pooled account is blocked on its 5h window only, so its restore is governed by the 5h key. The
+		// outside account holds an expiring weekly Cedar grant that no approval can match, so it is never offered.
+		const questions: string[] = [];
+		const status = claudeStatus(true);
+		const pooled = status.credits[0]!;
+		pooled.clears = ["anthropic:5h"];
+		pooled.blocking = ["anthropic:5h"];
+		pooled.usedFractions = { "anthropic:5h": 1 };
+		const report = claudeReport(0.5);
+		for (const limit of report.limits) {
+			if (limit.id === "anthropic:5h" && limit.amount) limit.amount.usedFraction = 1;
+		}
+		status.report = report;
+		const { session, targets } = buildSession({
+			report: null,
+			status,
+			streamErrorFirst: true,
+			autoRedeem: "unset",
+			approvals: [
+				{
+					accountId: ACCOUNT_ID,
+					approvedBy: "matt",
+					ref: "RIG-12027",
+					expiresAt: new Date(Date.now() + 24 * HOUR).toISOString(),
+					windowResetsAt: new Date(Date.now() + 2 * HOUR).toISOString(),
+					creditsLeft: 1,
+				},
+			],
+			consent: async question => {
+				questions.push(question);
+				return "Yes";
+			},
+		});
+		// `autoRedeem: "unset"` migrates into runtime overrides that pin both window keys; clear them so the
+		// consent save is observable.
+		cfgClaudeResetsAutoRedeem5h.clearOverride(session.settings);
+		cfgClaudeResetsAutoRedeemWeekly.clearOverride(session.settings);
+		const outsideReport = claudeReport(0.5);
+		outsideReport.metadata = { accountId: "claude-excluded", email: "excluded@example.com", orgId: "org-excluded" };
+		const outside: ResetCreditAccountStatus = {
+			...claudeStatus(false),
+			credentialId: 8,
+			accountId: "claude-excluded",
+			email: "excluded@example.com",
+			orgId: "org-excluded",
+			active: false,
+			report: outsideReport,
+		};
+		vi.spyOn(authStorage.resets, "list").mockImplementation(async request =>
+			request?.provider === "anthropic" ? [status, outside] : [],
+		);
+		mockSchedulerWaitWithClock();
+
+		await session.prompt("ask about the 5h restore while a weekly salvage is planned");
+		await session.waitForIdle();
+
+		expect(questions).toHaveLength(1);
+		expect(resetWindowModes("anthropic", session.settings)).toMatchObject({ "5h": "yes", weekly: "unset" });
+		expect(targets.map(target => target.credentialId)).toEqual([CREDENTIAL_ID]);
 	});
 });

@@ -92,6 +92,131 @@ def test_start_session_cli_records_created_forum_thread(tmp_path, monkeypatch):
     assert result.value.code == 0
     assert "700" in json.loads((tmp_path / "registry.json").read_text())["threads"]
 
+@pytest.fixture
+def discord_forum(monkeypatch):
+    """Route ``hermes send --to discord:...`` through the real Discord standalone sender with only the
+    Discord REST calls faked. Returns a state whose ``posts`` lists the recorded ``(url, json)`` POSTs;
+    set ``thread_id`` to send to an existing thread instead of a forum channel."""
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    import aiohttp
+
+    from gateway.config import PlatformConfig
+    from gateway.platforms.send_targets import StandaloneSendPolicy
+    from plugins.platforms.discord import adapter as discord_adapter
+    from tools import send_message_tool as sender
+    from hermes_cli.plugins import discover_plugins
+    discover_plugins()  # registers Discord so chunking sees its 2000-character limit
+
+    state = SimpleNamespace(posts=[], thread_id=None)
+
+    class Response:
+        status = 200
+        headers = {}
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+        async def json(self, **_kwargs):
+            return {"id": "700", "message": {"id": "700"}}
+
+    class Session:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+        def post(self, url, **kwargs):
+            state.posts.append((url, kwargs.get("json")))
+            return Response()
+
+    monkeypatch.setattr(send_cmd, "_load_hermes_env", lambda: None)
+    monkeypatch.setattr("gateway.config.load_gateway_config", lambda: None)
+    monkeypatch.setattr(sender, "_resolve_tool_target", lambda _target: ("discord", "42", state.thread_id, None))
+    monkeypatch.setattr(sender, "_standalone_send_policy", lambda _name: StandaloneSendPolicy(all_sends=True))
+    monkeypatch.setattr(sender, "_plugin_standalone_sender", lambda *_a, **_k: (discord_adapter._standalone_send, None))
+    monkeypatch.setattr(sender, "_resolve_platform_config", lambda *_a: (
+        SimpleNamespace(value="discord"), PlatformConfig(enabled=True, token="fake"), None, None))
+    monkeypatch.setattr(sender, "_authorize_relay_target", lambda *_a, **_k: None)
+    monkeypatch.setattr(sender, "_mirror_sent_message", lambda *_a: False)
+    monkeypatch.setattr(discord_adapter, "_standalone_is_forum", AsyncMock(return_value=True))
+    monkeypatch.setattr("gateway.platforms.base.resolve_proxy_url", lambda **_kwargs: None)
+    monkeypatch.setattr("gateway.platforms.base.proxy_kwargs_for_aiohttp", lambda _proxy: ({}, {}))
+    monkeypatch.setattr(aiohttp, "ClientSession", Session)
+    return state
+
+def test_forum_post_refuses_ping_in_title(discord_forum, capsys):
+    """A new forum post whose line 1 holds a ping exits 2 before any Discord call."""
+    with pytest.raises(SystemExit) as exc:
+        send_cmd.cmd_send(_parse(["--to", "discord:42", "<@123> nemo kickoff\nplease start"]))
+    assert exc.value.code == 2
+    assert "line 2" in capsys.readouterr().err
+    assert discord_forum.posts == []
+
+def test_forum_post_refuses_title_over_60_chars(discord_forum, capsys):
+    """A new forum post whose line 1 is 61 plain characters exits 2 before any Discord call."""
+    with pytest.raises(SystemExit) as exc:
+        send_cmd.cmd_send(_parse(["--to", "discord:42", "A" * 61 + "\nplease start"]))
+    assert exc.value.code == 2
+    assert "line 2" in capsys.readouterr().err
+    assert discord_forum.posts == []
+
+def test_forum_post_with_short_title_and_ping_on_line_2_posts(discord_forum):
+    """A short plain line 1 with the ping on line 2 creates the post and keeps the ping in the body."""
+    with pytest.raises(SystemExit) as exc:
+        send_cmd.cmd_send(_parse(["--to", "discord:42", "Nemo kickoff\n<@123> please start"]))
+    assert exc.value.code == 0
+    [(url, body)] = discord_forum.posts
+    assert url.endswith("/channels/42/threads")
+    assert body["name"] == "Nemo kickoff"
+    assert body["message"]["content"] == "Nemo kickoff\n<@123> please start"
+
+def test_send_to_existing_thread_with_ping_on_line_1_still_sends(discord_forum):
+    """Sends into an existing thread are not title-checked."""
+    discord_forum.thread_id = "700"
+    with pytest.raises(SystemExit) as exc:
+        send_cmd.cmd_send(_parse(["--to", "discord:42:700", "<@123> reply in thread"]))
+    assert exc.value.code == 0
+    [(url, body)] = discord_forum.posts
+    assert url.endswith("/channels/700/messages")
+    assert body == {"content": "<@123> reply in thread"}
+
+def test_long_forum_message_makes_one_post_and_later_chunks_join_thread(discord_forum):
+    """A message over 2000 characters makes one forum post, and its later chunks go into that thread."""
+    body = "Short title\n" + "word " * 600
+    with pytest.raises(SystemExit) as exc:
+        send_cmd.cmd_send(_parse(["--to", "discord:42", body]))
+    assert exc.value.code == 0
+    [(first_url, first_body), *later] = discord_forum.posts
+    assert first_url.endswith("/channels/42/threads")
+    assert first_body["name"] == "Short title"
+    assert later, "the message was not split into chunks"
+    assert all(url.endswith("/channels/700/messages") for url, _ in later)
+
+def test_plain_text_channel_sends_pinged_long_line_1_unchanged(discord_forum, monkeypatch):
+    """Only forum posts get the title check, so a plain text channel sends a pinged, long line 1 as-is."""
+    from unittest.mock import AsyncMock
+
+    from plugins.platforms.discord import adapter as discord_adapter
+
+    monkeypatch.setattr(discord_adapter, "_standalone_is_forum", AsyncMock(return_value=False))
+    message = "<@123> " + "A" * 70 + "\nplease start"
+    with pytest.raises(SystemExit) as exc:
+        send_cmd.cmd_send(_parse(["--to", "discord:42", message]))
+    assert exc.value.code == 0
+    [(url, body)] = discord_forum.posts
+    assert url.endswith("/channels/42/messages")
+    assert body == {"content": message}
+
+
 class _FakeTool:
     """Replacement for ``tools.send_message_tool.send_message_tool``."""
 

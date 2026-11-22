@@ -7364,6 +7364,11 @@ if DISCORD_AVAILABLE:
 _DISCORD_CHANNEL_TYPE_PROBE_CACHE: dict[str, bool] = {}
 _DISCORD_STANDALONE_JSON_BODY_LIMIT_BYTES = 1 * 1024 * 1024
 _DISCORD_STANDALONE_ERROR_BODY_LIMIT_BYTES = 8 * 1024
+_FORUM_TITLE_MAX_CHARS = 60
+_FORUM_TITLE_REFUSAL = (
+    f"Forum post title must be {_FORUM_TITLE_MAX_CHARS} characters or fewer and must not contain <@ or <# mentions. "
+    "Put a short plain title on line 1 and the ping on line 2."
+)
 
 
 def _remember_channel_is_forum(chat_id: str, is_forum: bool) -> None:
@@ -7528,6 +7533,9 @@ async def _standalone_send(
             # Forum channels (type 15) reject POST /messages — create a thread post.
             if await _standalone_is_forum(aiohttp, chat_id, json_headers, _sess_kw, _req_kw):
                 thread_name = _derive_forum_thread_name(caption or message)
+                if "<@" in thread_name or "<#" in thread_name or len(thread_name) > _FORUM_TITLE_MAX_CHARS:
+                    # ``usage_error`` is read only by hermes send (exit 2); gateway and cron get an error dict.
+                    return {**send_error(_FORUM_TITLE_REFUSAL), "usage_error": True}
                 thread_url = f"https://discord.com/api/v10/channels/{chat_id}/threads"
                 # Filter readable media first to pick JSON vs multipart before opening a session.
                 valid_media = []

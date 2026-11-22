@@ -668,11 +668,18 @@ async def _send_plugin_standalone(platform_name, pconfig, chat_id, message, chun
             return await sender(pconfig, chat_id, "", thread_id=thread_id, media_files=media_files,
                                 caption=caption, **extra, **first_only)
 
-    def send_one(chunk, is_last):
+    target_thread_id = thread_id
+
+    async def send_one(chunk, is_last):
+        nonlocal target_thread_id
         kwargs = {**extra, **first_only}
         first_only.clear()
-        return sender(pconfig, chat_id, chunk, thread_id=thread_id,
-                      media_files=media_files if is_last else empty_media, **kwargs)
+        result = await sender(pconfig, chat_id, chunk, thread_id=target_thread_id,
+                              media_files=media_files if is_last else empty_media, **kwargs)
+        # Later chunks join the thread that the first chunk created, so one message makes one post.
+        if target_thread_id is None and isinstance(result, dict) and result.get("thread_id"):
+            target_thread_id = result["thread_id"]
+        return result
     return await _send_chunks(chunks, send_one)
 
 

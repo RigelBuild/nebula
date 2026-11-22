@@ -80,6 +80,8 @@ def _emit_result(result_json: str, *, json_mode: bool, quiet: bool) -> int:
             print(json.dumps(payload, indent=2))  # unknown shape — dump it, drop nothing
     if not payload.get("error") and (payload.get("skipped") or payload.get("success")):
         return _SUCCESS_EXIT
+    if payload.get("usage_error"):  # refused input, not a delivery failure
+        return _USAGE_EXIT
     return _FAILURE_EXIT
 
 

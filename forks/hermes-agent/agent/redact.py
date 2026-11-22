@@ -1798,6 +1798,55 @@ def is_env_dump_command(command: str | None) -> bool:
     return False
 
 
+# kubectl's own name: the binary or its ``k`` alias.
+_KUBECTL_NAMES = frozenset({"kubectl", "k"})
+_SECRET_RESOURCES = frozenset({"secret", "secrets"})
+# The ``NAME=value`` lines ``kubectl set env --list`` prints. The value is masked whatever the name.
+_KUBECTL_ENV_VALUE_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_.\-]*=)[^\r\n]*", re.MULTILINE)
+
+
+def _kubectl_argvs(command: str | None) -> list[list[str]]:
+    """Token lists of the pipeline segments that run kubectl."""
+    if not command or not isinstance(command, str):
+        return []
+    argvs = []
+    for seg in _command_segments(command):
+        try:
+            tokens = shlex.split(seg)
+        except ValueError:
+            tokens = seg.split()
+        if tokens and tokens[0].rsplit("/", 1)[-1].lower() in _KUBECTL_NAMES:
+            argvs.append(tokens)
+    return argvs
+
+
+def _is_secret_template_read(command: str | None) -> bool:
+    """True for a kubectl read of Secrets through ``-o go-template`` or ``-o jsonpath``. Those
+    templates print Secret data without the ``data:`` keys the redaction pass looks for."""
+    for tokens in _kubectl_argvs(command):
+        if not any(part.lower() in _SECRET_RESOURCES or part.lower().startswith(("secret/", "secrets/"))
+                   for tok in tokens[1:] for part in tok.split(",")):
+            continue
+        for i, tok in enumerate(tokens):
+            if tok in ("-o", "--output") and i + 1 < len(tokens):
+                fmt = tokens[i + 1]
+            elif tok.startswith("--output="):
+                fmt = tok[len("--output="):]
+            elif tok.startswith("-o"):
+                fmt = tok[2:].removeprefix("=")
+            else:
+                continue
+            if fmt.lstrip("\"'").lower().startswith(("go-template", "jsonpath")):
+                return True
+    return False
+
+
+def _is_kubectl_env_list(command: str | None) -> bool:
+    """True for ``kubectl set env --list`` (``-l``), which prints ``NAME=value`` lines."""
+    return any("set" in tokens and "env" in tokens and ("--list" in tokens or "-l" in tokens)
+               for tokens in _kubectl_argvs(command))
+
+
 REDACTION_UNAVAILABLE = "[redaction-unavailable]"
 # The opaque branch needs a 20-char floor (the floor the gateway/A2A sweeps always had): without it the
 # English word "bearer" turns "the bearer of bad news" into "Bearer [redacted] bad news" on every chat
@@ -1827,6 +1876,11 @@ def redact_terminal_output(output: str, command: str | None = None, *, force: bo
     source/config dumps."""
     if not output:
         return output
+    if force or _redact_enabled():
+        if _is_secret_template_read(command):
+            return "***"
+        if _is_kubectl_env_list(command):
+            output = _KUBECTL_ENV_VALUE_RE.sub(r"\1***", output)
     code_file = not (is_env_dump_command(command) or _command_reads_secret_file(command))
     redacted = redact_sensitive_text(output, force=force, code_file=code_file)
     # Source-preserving output still gets the Python-repr pass on high-confidence

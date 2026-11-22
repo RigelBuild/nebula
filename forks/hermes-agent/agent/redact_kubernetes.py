@@ -86,7 +86,7 @@ def _redact_last_applied(encoded: str, mask: str):
 # string parity of the object below it. A string cut off by a newline or the end of the text is
 # read as an unterminated string and masks to its end.
 _JSON_TOKEN_RE = re.compile(r'"(?:[^"\\\n]|\\[^\n])*"?|[{}\[\]:,\n]')
-# Deeper nesting is read as the end of the text. Kubernetes objects are far shallower.
+# Deeper nesting masks the rest of the text. Kubernetes objects are far shallower.
 _MAX_DEPTH = 512
 # The text before a top-level env entry on its line: nothing, or one word followed by blanks or
 # ``=``/``:`` (jsonpath ``web\t[{...}]``, ``env=[{...}]``). Code (``const opts = [``) or an
@@ -163,6 +163,7 @@ def _json_spans(text: str, mask: str) -> list:
         top = stack[-1] if stack else None
         if c == "{" or c == "[":
             if len(stack) >= _MAX_DEPTH:
+                spans.append((m.start(), len(text), None))
                 break
             if top is None:
                 env_ctx = _ENV_PREFIX_RE.fullmatch(text, seg_start, m.start()) is not None
@@ -391,10 +392,9 @@ _FLOW_SCALAR = r"""("(?:[^"\\\n]|\\.)*"|'(?:[^'\n]|'')*'|[^,}\]\n]*)"""
 _FLOW_ENV_RE = re.compile(
     r"\{[ \t]*name:[ \t]*([\"']?)([\w.\-]+)\1[ \t]*,[ \t]*value:[ \t]*" + _FLOW_SCALAR
     + r"|\{[ \t]*value:[ \t]*" + _FLOW_SCALAR + r",[ \t]*name:[ \t]*([\"']?)([\w.\-]+)\5")
-_GO_MAP_RE = re.compile(r"map\[([^\[\]\n]*)\]")
-_GO_NAME_RE = re.compile(r"(?:^| )name:(\S+)")
+_GO_MAP_RE = re.compile(r"map\[(?:(?!map\[)[^\r\n])*")
+_GO_NAME_RE = re.compile(r"(?:^| )name:([^\s\]]+)")
 _GO_VALUE_RE = re.compile(r"(?:^| )value:")
-_GO_NEXT_KEY_RE = re.compile(r" [A-Za-z]+:")
 _DESCRIBE_NAME_RE = re.compile(r"([A-Za-z_][\w.\-]*):(?:[ \t]+|$)")
 _DESCRIBE_REF_RE = re.compile(r"<set to the key |<none>|.*\(v1:")
 
@@ -416,16 +416,14 @@ def _flow_spans(text: str) -> list:
                     spans.append((s, s + len(value), None))
     if "map[" in text:
         for m in _GO_MAP_RE.finditer(text):
-            inner = m.group(1)
-            nm = _GO_NAME_RE.search(inner)
-            vm = _GO_VALUE_RE.search(inner)
-            if not nm or not vm:
+            seg = m.group()[4:]
+            nm = _GO_NAME_RE.search(seg)
+            vm = _GO_VALUE_RE.search(seg)
+            if nm is None or vm is None or vm.end() == len(seg):
                 continue
-            vs = vm.end()
-            nk = _GO_NEXT_KEY_RE.search(inner, vs)
-            ve = nk.start() if nk else len(inner)
-            if ve > vs and _secret_name(nm.group(1), inner[vs:ve]):
-                spans.append((m.start(1) + vs, m.start(1) + ve, None))
+            vs = m.start() + 4 + vm.end()
+            if _secret_name(nm.group(1), text[vs:m.end()]):
+                spans.append((vs, m.end(), None))
     return spans
 
 

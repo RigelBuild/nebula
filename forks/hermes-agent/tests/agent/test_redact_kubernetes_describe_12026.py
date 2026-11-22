@@ -164,3 +164,21 @@ def test_known_gap_indented_name_header_spec_value():
     text = "  Name: web\n  Spec:\n    adminPassword: " + V + "\n"
     for out in _terminal(text, "kubectl describe crd foo"):
         assert V not in out, out
+
+
+# --- Round-2 regressions (interdiff review of 295215dd): Spec shapes the key rule misses ---------
+
+ROUND2_SPEC_SHAPES = [
+    ("dotted-key", "Name: foo\nSpec:\n  example.com/api-key: " + V + "\n"),
+    ("space-key", "Name: foo\nSpec:\n  Admin Password: " + V + "\n"),
+    ("list-under-key", "Name: foo\nSpec:\n  args:\n  - " + V + "\n"),
+    ("list-under-spec", "Name: foo\nSpec:\n  - " + V + "\n"),
+    ("bare-key-column-line", "Name: foo\nSpec:\n  a: 1\n  " + V + "\n"),
+    ("command-key-in-spec", "Name: foo\nSpec:\n  Command:\n  /bin/sh -c " + V + "\n"),
+]
+
+
+@pytest.mark.parametrize("name,text", ROUND2_SPEC_SHAPES, ids=[n for n, _ in ROUND2_SPEC_SHAPES])
+def test_round2_spec_shape_masked(name, text):
+    for out in _terminal(text, "kubectl describe crd foo"):
+        assert V not in out, out

@@ -403,6 +403,8 @@ _DESCRIBE_REF_RE = re.compile(r"<set to the key [^>]*>(?:\s+Optional: \w+)?\s*$|
 _DESCRIBE_ARGV_RE = re.compile(r"(?:Command|Args):[ \t]+")
 # A bare ``Key:`` sub-header in a Spec block (``Chart:``, ``Values:``): no value on the line.
 _DESCRIBE_KEY_LINE_RE = re.compile(r"[A-Za-z_][\w.\-]*:")
+# A plain Spec key (no ``/``, space, ``$``): anything else is masked whole.
+_DESCRIBE_PLAIN_KEY_RE = re.compile(r"[A-Za-z_][\w\-]*")
 # A ``kubectl describe`` header: a column-zero ``Name:`` or ``Namespace:`` line. Python source and
 # docstrings never print one at column zero, so the Command/Args/Spec rules need it.
 _DESCRIBE_HEADER_RE = re.compile(r"^(?:Name|Namespace):[ \t]", re.MULTILINE)
@@ -464,7 +466,8 @@ def _describe_spans(text: str) -> list:
                 env_indent, in_value = -1, False
         if block_indent >= 0 and stripped and not stripped.startswith("#"):
             m = _DESCRIBE_NAME_RE.match(stripped)
-            if block_kind == "Spec" and m is not None and (key_indent < 0 or indent <= key_indent):
+            if block_kind == "Spec" and m is not None and (key_indent < 0 or indent <= key_indent) \
+                    and _DESCRIBE_PLAIN_KEY_RE.fullmatch(m.group(1)):
                 if key_indent < 0:
                     key_indent = indent  # the first key under the header sets the key column
                 if _DESCRIBE_KEY_LINE_RE.fullmatch(stripped):
@@ -476,6 +479,8 @@ def _describe_spans(text: str) -> list:
                         spans.append((s, s + len(value), None))
             elif block_kind == "Spec" and indent > key_indent >= 0:
                 spans.append((pos + lead, pos + len(body), None))  # block-scalar continuation
+            elif block_kind == "Spec" and key_indent < 0 or block_kind == "Spec" and indent <= key_indent:
+                spans.append((pos + lead, pos + len(body), None))  # not a plain key: mask whole
             elif block_kind != "Spec":
                 spans.append((pos + lead, pos + len(body), None))
         if env_indent >= 0 and stripped:

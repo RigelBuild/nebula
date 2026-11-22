@@ -28,12 +28,13 @@ func TestSSHHookHKFetchSelection(t *testing.T) {
 			t.Setenv("RJC_TEST_NIX_BUILD_FAIL", "1")
 			f.commit(t, "hk.pkl")
 			base, head := sshRange(t, f)
-			if _, _, err := runner.Run(f.ctx, base, head, nil, io.Discard); err == nil {
+			_, _, runErr := runner.Run(f.ctx, base, head, nil, io.Discard)
+			if runErr == nil {
 				t.Fatal("missing hk must fail")
 			}
 			log, err := os.ReadFile(os.Getenv("RJC_TEST_NIX_LOG"))
 			if err != nil {
-				t.Fatal(err)
+				t.Fatalf("read nix log: %v (run error: %v)", err, runErr)
 			}
 			if got := strings.Contains(string(log), "store prefetch-file"); got == managed {
 				t.Fatalf("managed=%t prefetch=%t log=%s", managed, got, log)

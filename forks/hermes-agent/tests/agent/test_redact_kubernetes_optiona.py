@@ -102,6 +102,29 @@ F10_BRACE = [
 # F11: quoting or escaping the kubectl name splits it from the mention check.
 F11_SPLIT_NAME = [row for row in F10_BRACE if row[0].startswith("split-")]
 PLAIN = "plainvalue-hunter2"
+# F12: the shell builds the name from ``$``, a backtick, braces or a line continuation.
+F12_BUILT_NAME = [
+    ("dollar-empty-quotes", "kube$''ctl get pods -o yaml"),
+    ("backtick-name", "kube``ctl get pods -o yaml"),
+    ("dollar-subst", "kube$()ctl get pods -o yaml"),
+    ("dollar-brace", "kube${x}ctl get pods -o yaml"),
+    ("backslash-newline", "kube\\\nctl get pods -o yaml"),
+]
+
+
+@pytest.mark.parametrize("command", [c for _, c in F12_BUILT_NAME], ids=[i for i, _ in F12_BUILT_NAME])
+def test_f12_built_command_name_masks_whole_output(command):
+    text = PLAIN + "\n"
+    for out in _terminal(text, command):
+        assert PLAIN not in out, out
+        assert out == "***", out
+
+
+def test_keep_plain_kubectl_name_stays_unmasked():
+    text = "web 1/1 Running " + K + "\n"
+    for out in _terminal(text, "kubectl get pods -o yaml"):
+        assert out != "***", out
+        assert K in out, out
 
 
 @pytest.mark.parametrize("command", [c for _, c in F11_SPLIT_NAME], ids=[i for i, _ in F11_SPLIT_NAME])

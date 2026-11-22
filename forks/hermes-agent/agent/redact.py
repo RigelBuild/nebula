@@ -1808,6 +1808,8 @@ _KUBECTL_MENTION_RE = re.compile(r"(?<![A-Za-z0-9_-])(?:kubectl|oc|k)(?![A-Za-z0
 _KUBECTL_STRUCTURED_FORMATS = frozenset({"yaml", "json", "name", "wide"})
 # A leading ``NAME=value`` token, as in ``KUBECONFIG=/tmp/c kubectl get ...``.
 _ENV_ASSIGNMENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
+# The first word of a read must be plain text: any other character lets the shell build the name.
+_PLAIN_COMMAND_WORD_RE = re.compile(r"[A-Za-z0-9._/+-]+")
 
 
 def _binary_base(token: str) -> str:
@@ -1816,11 +1818,13 @@ def _binary_base(token: str) -> str:
 
 
 def _mentions_kubectl(command: str | None) -> bool:
-    """True if ``command`` names kubectl, oc or k as a standalone word anywhere. Quotes and
-    backslashes are removed first, because the shell joins ``kube''ctl`` and ``k\\ubectl`` into one word."""
+    """True if ``command`` names kubectl, oc or k as a standalone word anywhere. Shell characters
+    that can split or build a word (quotes, backslash, ``$``, backtick, parens, braces, line breaks)
+    are removed first, so ``kube$''ctl`` and ``kube\\<newline>ctl`` still count as a mention."""
     if not command or not isinstance(command, str):
         return False
-    return _KUBECTL_MENTION_RE.search(re.sub(r"[\"'\\\\]", "", command)) is not None
+    stripped = re.sub(r"\$\{[^}]*\}", "", command)
+    return _KUBECTL_MENTION_RE.search(re.sub(r"[\"'\\\\$`(){}\r\n]", "", stripped)) is not None
 
 
 _SHORT_FLAG_CLUSTER_RE = re.compile(r"-[A-Za-z]{2,}")
@@ -1875,8 +1879,8 @@ def _is_structured_kubectl_read(command: str) -> bool:
         tokens = tokens[1:]
     if not tokens or _binary_base(tokens[0]) not in _KUBECTL_NAMES:
         return False
-    raw_words = [w for w in command.split() if not _ENV_ASSIGNMENT_RE.match(w)]
-    if not raw_words or any(ch in raw_words[0] for ch in "\"'\\\\"):
+    raw_words = [w for w in command.replace("\\\n", "").split() if not _ENV_ASSIGNMENT_RE.match(w)]
+    if not raw_words or not _PLAIN_COMMAND_WORD_RE.fullmatch(raw_words[0]):
         return False
     args = tokens[1:]
     if "set" in args and "env" in args and any(

@@ -392,7 +392,9 @@ _FLOW_SCALAR = r"""("(?:[^"\\\n]|\\.)*"|'(?:[^'\n]|'')*'|[^,}\]\n]*)"""
 _FLOW_ENV_RE = re.compile(
     r"\{[ \t]*name:[ \t]*([\"']?)([\w.\-]+)\1[ \t]*,[ \t]*value:[ \t]*" + _FLOW_SCALAR
     + r"|\{[ \t]*value:[ \t]*" + _FLOW_SCALAR + r",[ \t]*name:[ \t]*([\"']?)([\w.\-]+)\5")
-_GO_MAP_RE = re.compile(r"map\[(?:(?!map\[)[^\r\n])*")
+# A map runs to the next ``map[`` that opens a key (``map[name:``), not to any ``map[``: a value
+# may hold ``map[`` text (``abmap[``), which must not cut the segment short.
+_GO_MAP_RE = re.compile(r"map\[(?:(?!map\[(?=name:|value:))[^\r\n])*")
 _GO_NAME_RE = re.compile(r"(?:^| )name:([^\s\]]+)")
 _GO_VALUE_RE = re.compile(r"(?:^| )value:")
 _DESCRIBE_NAME_RE = re.compile(r"([A-Za-z_][\w.\-]*):(?:[ \t]+|$)")

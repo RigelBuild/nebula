@@ -1801,13 +1801,27 @@ def is_env_dump_command(command: str | None) -> bool:
 # kubectl's own name: the binary or its ``k`` alias.
 _KUBECTL_NAMES = frozenset({"kubectl", "k"})
 _SECRET_RESOURCES = frozenset({"secret", "secrets"})
+# Output formats that print a Secret with its keys (``data:``/``stringData:``), so the
+# Kubernetes pass can find and mask the values. Any other format for a Secret read is masked
+# whole, because the template or column spec decides what prints.
+_KUBECTL_STRUCTURED_FORMATS = frozenset({"yaml", "json", "name", "wide"})
+# Shells that run a command string: ``bash -c "<cmd>"``.
+_SHELL_NAMES = frozenset({"sh", "bash", "zsh", "dash"})
 # The ``NAME=value`` lines ``kubectl set env --list`` prints. The value is masked whatever the name.
 _KUBECTL_ENV_VALUE_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_.\-]*=)[^\r\n]*", re.MULTILINE)
 
 
-def _kubectl_argvs(command: str | None) -> list[list[str]]:
-    """Token lists of the pipeline segments that run kubectl."""
-    if not command or not isinstance(command, str):
+def _binary_base(token: str) -> str:
+    """``/usr/bin/kubectl.exe`` -> ``kubectl``: the lowercase name a command runs under."""
+    return token.rsplit("/", 1)[-1].lower().removesuffix(".exe")
+
+
+def _kubectl_argvs(command: str | None, _depth: int = 0) -> list[list[str]]:
+    """Token lists from kubectl onward, one per pipeline segment that runs kubectl. A kubectl
+    token anywhere in a segment counts, so ``sudo``, ``watch``, ``time``, a ``FOO=bar``
+    prefix or ``KUBECONFIG=`` do not hide the read. ``sh -c`` / ``bash -c`` strings are split
+    and read the same way."""
+    if not command or not isinstance(command, str) or _depth > 4:
         return []
     argvs = []
     for seg in _command_segments(command):
@@ -1815,36 +1829,78 @@ def _kubectl_argvs(command: str | None) -> list[list[str]]:
             tokens = shlex.split(seg)
         except ValueError:
             tokens = seg.split()
-        if tokens and tokens[0].rsplit("/", 1)[-1].lower() in _KUBECTL_NAMES:
-            argvs.append(tokens)
+        for i, tok in enumerate(tokens):
+            base = _binary_base(tok)
+            if base in _KUBECTL_NAMES:
+                argvs.append(tokens[i:])
+                break
+            if base in _SHELL_NAMES and i + 2 < len(tokens) and tokens[i + 1] == "-c":
+                argvs += _kubectl_argvs(tokens[i + 2], _depth + 1)
+                break
     return argvs
 
 
+def _secret_kind(token: str) -> bool:
+    """Whether a resource token names Secrets: ``secret``, ``secrets.v1``, ``secret.v1.``,
+    ``secret/name``, or a comma list that holds one of those."""
+    return any(part.split("/", 1)[0].split(".", 1)[0].lower() in _SECRET_RESOURCES
+               for part in token.split(","))
+
+
+def _secret_manifest(args: list[str]) -> bool:
+    """A ``-f`` / ``--filename`` input whose file name contains ``secret``."""
+    names = []
+    for i, tok in enumerate(args):
+        if tok in ("-f", "--filename") and i + 1 < len(args):
+            names.append(args[i + 1])
+        elif tok.startswith("--filename="):
+            names.append(tok[len("--filename="):])
+        elif tok.startswith("-f") and not tok.startswith("--"):
+            names.append(tok[2:].removeprefix("="))
+    return any("secret" in name.lower() for name in names)
+
+
+def _output_format(args: list[str]) -> str | None:
+    """The format a read prints in: ``-o X``, ``-oX``, ``-o=X``, ``--output X``, ``--output=X``,
+    or ``--template``. None when no output flag is given."""
+    for i, tok in enumerate(args):
+        if tok in ("-o", "--output") and i + 1 < len(args):
+            return args[i + 1]
+        if tok.startswith("--output="):
+            return tok[len("--output="):]
+        if tok.startswith("-o") and not tok.startswith("--"):
+            return tok[2:].removeprefix("=")
+        if tok == "--template" or tok.startswith("--template="):
+            return "template"
+    return None
+
+
 def _is_secret_template_read(command: str | None) -> bool:
-    """True for a kubectl read of Secrets through ``-o go-template`` or ``-o jsonpath``. Those
-    templates print Secret data without the ``data:`` keys the redaction pass looks for."""
+    """True for a kubectl read of a Secret whose output is not a structured form. Template,
+    custom-columns and jsonpath output print Secret data without the ``data:`` keys the
+    redaction pass looks for, so the whole output is masked. A format this check does not
+    know fails closed. A read with no output flag prints a table, which is not masked."""
     for tokens in _kubectl_argvs(command):
-        if not any(part.lower() in _SECRET_RESOURCES or part.lower().startswith(("secret/", "secrets/"))
-                   for tok in tokens[1:] for part in tok.split(",")):
+        args = tokens[1:]
+        if not (any(_secret_kind(tok) for tok in args if not tok.startswith("-"))
+                or _secret_manifest(args)):
             continue
-        for i, tok in enumerate(tokens):
-            if tok in ("-o", "--output") and i + 1 < len(tokens):
-                fmt = tokens[i + 1]
-            elif tok.startswith("--output="):
-                fmt = tok[len("--output="):]
-            elif tok.startswith("-o"):
-                fmt = tok[2:].removeprefix("=")
-            else:
-                continue
-            if fmt.lstrip("\"'").lower().startswith(("go-template", "jsonpath")):
-                return True
+        fmt = _output_format(args)
+        if fmt is not None and fmt.strip("\"'").lower() not in _KUBECTL_STRUCTURED_FORMATS:
+            return True
     return False
 
 
 def _is_kubectl_env_list(command: str | None) -> bool:
-    """True for ``kubectl set env --list`` (``-l``), which prints ``NAME=value`` lines."""
-    return any("set" in tokens and "env" in tokens and ("--list" in tokens or "-l" in tokens)
-               for tokens in _kubectl_argvs(command))
+    """True for ``kubectl set env --list`` (``--list`` or ``--list=...``), which prints
+    ``NAME=value`` lines. ``-l`` is also accepted: it is kubectl's ``--selector`` short form
+    in other commands, so a selector read may be over-masked. That fails closed."""
+    for tokens in _kubectl_argvs(command):
+        args = tokens[1:]
+        if "set" in args and "env" in args and any(
+                tok == "-l" or tok == "--list" or tok.startswith("--list=") for tok in args):
+            return True
+    return False
 
 
 REDACTION_UNAVAILABLE = "[redaction-unavailable]"

@@ -1,6 +1,14 @@
 import * as path from "node:path";
 import { isRecord } from "@oh-my-pi/pi-utils";
-import { combine, effect, register, type ScopeLike, type Setting, type SettingValueOf } from "../config/registry";
+import {
+	combine,
+	effect,
+	operatorValue,
+	register,
+	type ScopeLike,
+	type Setting,
+	type SettingValueOf,
+} from "../config/registry";
 import {
 	SERVICE_TIER_ANTHROPIC_OPTIONS,
 	SERVICE_TIER_ANTHROPIC_VALUES,
@@ -1625,6 +1633,33 @@ export const cfgClaudeResetsSalvageHorizonHours = register({
 			"With auto-redeem enabled, use a server-selected Cedar reset within this many hours of expiry when its covered windows have meaningful usage. 0 disables early salvage; eligible Cedar or Juniper resets expiring within 5 minutes are still attempted regardless of usage or reserve. Provider limit requirements still apply.",
 	},
 });
+
+/**
+ * One Matt-approved Claude reset redeem, bound to the window it covers and to the banked count it was
+ * approved against. A redeem spends one banked credit, so `creditsLeft` stops matching by construction.
+ */
+export interface ClaudeResetApproval {
+	accountId: string;
+	approvedBy: string;
+	ref: string;
+	/** ISO time after which the entry no longer authorizes a redeem. */
+	expiresAt: string;
+	/** ISO natural reset time of the exhausted weekly window the approval covers. */
+	windowResetsAt: string;
+	/** Banked full-credit count the approval was given for; it matches only while the live sum equals this. */
+	creditsLeft: number;
+}
+
+const NO_CLAUDE_RESET_APPROVALS: readonly ClaudeResetApproval[] = [];
+
+export const cfgClaudeResetsApprovedRedeems = register({
+	id: "claudeResets.approvedRedeems",
+	type: "array",
+	default: NO_CLAUDE_RESET_APPROVALS,
+});
+
+/** Approvals from operator layers only: a project layer cannot approve its own redeems. */
+export const cfgOperatorClaudeResetsApprovedRedeems = operatorValue(cfgClaudeResetsApprovedRedeems);
 
 export type ClaudeResetSettings = {
 	autoRedeem5h: ResetAutoRedeemMode;

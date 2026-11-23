@@ -100,6 +100,7 @@ def _retire_admission_workers(conn, row, owner_epoch):
         compact_terminal_receipts(conn, execution_id)
     conn.execute(f"UPDATE worker_executions SET status='terminal' WHERE {scope}",
                  (*targets, row['generation'], owner_epoch))
+    conn.execute("DELETE FROM state_meta WHERE key=?", ('admission_compressed:' + row['admission_id'],))
 
 
 def _row(row):

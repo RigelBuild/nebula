@@ -31,8 +31,8 @@ async def _run_with_flip_during_read(tmp_path, monkeypatch, flip):
     flipped = threading.Event()
     real_held = runner._held_resume_sessions
 
-    def held_then_flip(authorities, candidates):
-        held = real_held(authorities, candidates)
+    def held_then_flip(authorities, candidates, *args):
+        held = real_held(authorities, candidates, *args)
         flip(runner.session_store, entry)
         flipped.set()
         return held

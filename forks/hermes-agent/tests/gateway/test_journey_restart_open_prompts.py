@@ -5,8 +5,8 @@ tools, loopback model). Each session has a turn parked on its prompt and durable
 behind it when the owner goes away. After a fresh daemon starts:
 - the stale prompts are gone from every snapshot and answering their old ids is refused, before and
   after the FIFO moves on, and never runs the gated command;
-- a crash leaves the parked turn ``unknown`` and holds its followers until /discard (no replay);
-  a graceful stop settles it ``interrupted`` and the followers resume on their own;
+- a crash resumes an eligible interrupted turn before its followers; a graceful stop settles it
+  ``interrupted`` and the followers resume on their own;
 - every input reaches the model exactly once and only as itself; the gated command never runs.
 """
 import asyncio
@@ -160,20 +160,7 @@ def test_restart_fences_open_prompts_and_never_reruns_work(tmp_path, restart):
                 snapshot = await call(ws, 'session.resume', session_id=sid)
                 assert snapshot['prompts'] == [], snapshot['prompts']
                 fenced[kind] = await answer(ws, sid, before['prompts'][kind])
-                if restart == 'crash':
-                    lost = [r for r in snapshot['pending'] if r['status'] == 'unknown']
-                    assert [r['input_id'] for r in lost] == [ASK[kind]], snapshot['pending']
-                    queued = [r['input_id'] for r in snapshot['pending'] if r['status'] == 'queued']
-                    assert queued == list(FOLLOWERS[kind]), snapshot['pending']
             assert fenced == {'approval': 'stale_generation', 'clarify': 'stale_generation'}, fenced
-            if restart == 'crash':
-                # Unknown work holds the FIFO: nothing ran behind it before the operator decides.
-                assert not any(reached(name) for names in FOLLOWERS.values() for name in names)
-                for kind, sid in before['sessions'].items():
-                    snapshot = await call(ws, 'session.resume', session_id=sid)
-                    lost = next(r for r in snapshot['pending'] if r['status'] == 'unknown')
-                    await call(ws, 'prompt.resolve_unknown', session_id=sid, admission_id=lost['admission_id'],
-                               execution_generation=lost['execution_generation'])
             await until(lambda: all(r['status'] == 'terminal' for r in admissions().values()))
             late = {kind: await answer(ws, sid, before['prompts'][kind]) for kind, sid in before['sessions'].items()}
             assert late == {'approval': 'stale_generation', 'clarify': 'stale_generation'}, late
@@ -196,7 +183,15 @@ def test_restart_fences_open_prompts_and_never_reruns_work(tmp_path, restart):
             # turn (an unclosed tail would be merged into it and re-sent as part of that request).
             assert reached(ASK[kind]) == 1, [r['text'] for r in peer.requests]
             first_follower = next(r for r in peer.requests if r['text'] == names[0])
-            assert first_follower['users'] == [ASK[kind], names[0]], first_follower['users']
+            if restart == 'crash':
+                assert first_follower['users'][0] == ASK[kind]
+                assert first_follower['users'][-1] == names[0]
+                notes = [r for r in peer.requests if r['text'].startswith('[System note: resumed after gateway interruption.')
+                         and ASK[kind] in r['users']]
+                assert len(notes) == 1
+                assert peer.requests.index(notes[0]) < peer.requests.index(first_follower)
+            else:
+                assert first_follower['users'] == [ASK[kind], names[0]], first_follower['users']
             assert not any(r['after_tool'] and r['text'] == ASK[kind] for r in peer.requests), 'gated tool resumed'
             order = [r['text'] for r in peer.requests if r['text'] in names]
             assert order == list(names), order

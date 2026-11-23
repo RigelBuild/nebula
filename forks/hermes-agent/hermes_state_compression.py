@@ -443,6 +443,8 @@ class SessionCompressionMixin:
                 (parent_session_id,))
         if not messages:
             raise RuntimeError("Compression child handoff must not be empty")
+        from hermes_state_runtime_workers import runtime_lineage
+        owners = json.dumps(sorted(runtime_lineage(conn, parent_session_id)))
         self._publish_child_session_row(
             conn, parent, parent_session_id=parent_session_id, child_session_id=child_session_id,
             source=source, model=model, model_config=model_config, system_prompt=system_prompt,
@@ -473,6 +475,13 @@ class SessionCompressionMixin:
             "WHERE id = ? AND ended_at IS NULL", (time.time(), parent_session_id))
         if updated.rowcount != 1:
             raise RuntimeError(f"Compression parent changed during publication: {parent_session_id}")
+        conn.execute("UPDATE session_admissions SET lineage_json=json_insert(lineage_json,'$[#]',?) "
+                     "WHERE status='started' AND (json_extract(lineage_json,'$[#-1]')=? "
+                     "OR target_session_id IN (SELECT value FROM json_each(?)))",
+                     (child_session_id, parent_session_id, owners))
+        conn.execute("INSERT OR IGNORE INTO state_meta(key,value) "
+                     "SELECT 'admission_compressed:' || admission_id, '1' FROM session_admissions "
+                     "WHERE status='started' AND json_extract(lineage_json,'$[#-1]')=?", (child_session_id,))
         # A child on a real surface stamps the chain's unset ancestors, so compressing a conversation
         # whose root predates write-time stamping lists it again under its surface.
         stamp_compression_ancestors(conn, child_session_id)

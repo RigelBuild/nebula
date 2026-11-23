@@ -63,6 +63,33 @@ def settle_recovered_unattended(db, epoch) -> int:
                     row['admission_id'], row['target_session_id'])
     return settled
 
+async def settle_recovered_session(authority, session_id, *, notice=None):
+    """Settle only a turn fenced from an earlier owner of this session."""
+    import asyncio
+    from gateway.session_authorities import admission_owner
+    from gateway.session_contract import SessionRef
+    from hermes_state_runtime import RuntimeStoreError, list_session_admissions
+
+    owner = await asyncio.to_thread(admission_owner, authority, session_id)
+    if not owner:
+        return None
+    rows = await asyncio.to_thread(list_session_admissions, authority.db, session_id=owner)
+    for row in rows:
+        if (row['admission_id'] not in getattr(authority, 'restart_fenced_admissions', ())
+                or row['status'] != 'unknown' or row['owner_epoch'] is None
+                or row['owner_epoch'] >= authority.epoch or is_unattended(row)):
+            continue
+        try:
+            await authority.resolve_unknown_as_owner(SessionRef(authority.profile_id, owner),
+                                                     row['admission_id'], row['generation'], notice=notice,
+                                                     restart_resume=True)
+        except RuntimeStoreError as exc:
+            logger.warning('Lost admission %s left unknown: %s', row['admission_id'], exc.reason)
+            continue
+        authority.restart_fenced_admissions.discard(row['admission_id'])
+        return row['admission_id']
+    return None
+
 
 async def settle_unattended_unknown(authority, ref) -> bool:
     """The drain found an ``unknown`` head (fenced in this owner, e.g. a lost managed worker):

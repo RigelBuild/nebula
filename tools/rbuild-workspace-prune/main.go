@@ -236,8 +236,8 @@ func stagedName(rel string) string {
 
 // idleCandidates returns root-relative seat/workspace paths whose last activity
 // is older than maxIdle. Lock directories, staged names and files are skipped.
-func idleCandidates(root *os.Root, now time.Time, maxIdle time.Duration) ([]string, error) {
-	var out []string
+func idleCandidates(root *os.Root, now time.Time, maxIdle time.Duration, out *printer) ([]string, error) {
+	var candidates []string
 	seats, err := listSeats(root)
 	if err != nil {
 		return nil, err
@@ -252,21 +252,21 @@ func idleCandidates(root *os.Root, now time.Time, maxIdle time.Duration) ([]stri
 				continue
 			}
 			rel := filepath.Join(seat, workspace.Name())
-			idle, err := idleLongerThan(root, rel, now, maxIdle)
+			idle, err := idleLongerThan(root, rel, now, maxIdle, out)
 			if err != nil {
 				return nil, err
 			}
 			if idle {
-				out = append(out, rel)
+				candidates = append(candidates, rel)
 			}
 		}
 	}
-	return out, nil
+	return candidates, nil
 }
 
 // idleLongerThan checks the entire tree and keeps it when the walk is bounded.
-func idleLongerThan(root *os.Root, rel string, now time.Time, maxIdle time.Duration) (bool, error) {
-	scan := homeScan{root: root, now: now, maxIdle: maxIdle, budget: defaultWalkBudget, clock: time.Now, out: &printer{w: io.Discard}}
+func idleLongerThan(root *os.Root, rel string, now time.Time, maxIdle time.Duration, out *printer) (bool, error) {
+	scan := homeScan{root: root, now: now, maxIdle: maxIdle, budget: defaultWalkBudget, clock: time.Now, out: out}
 	idle, err := scan.treeIdle(rel)
 	if errors.Is(err, fs.ErrNotExist) {
 		return false, nil
@@ -276,8 +276,8 @@ func idleLongerThan(root *os.Root, rel string, now time.Time, maxIdle time.Durat
 
 // stagedLeftovers returns staged seat/.prune-* directories from earlier runs
 // that have been idle longer than maxIdle.
-func stagedLeftovers(root *os.Root, now time.Time, maxIdle time.Duration) ([]string, error) {
-	var out []string
+func stagedLeftovers(root *os.Root, now time.Time, maxIdle time.Duration, out *printer) ([]string, error) {
+	var leftovers []string
 	seats, err := listSeats(root)
 	if err != nil {
 		return nil, err
@@ -292,16 +292,16 @@ func stagedLeftovers(root *os.Root, now time.Time, maxIdle time.Duration) ([]str
 				continue
 			}
 			rel := filepath.Join(seat, workspace.Name())
-			idle, err := idleLongerThan(root, rel, now, maxIdle)
+			idle, err := idleLongerThan(root, rel, now, maxIdle, out)
 			if err != nil {
 				return nil, err
 			}
 			if idle {
-				out = append(out, rel)
+				leftovers = append(leftovers, rel)
 			}
 		}
 	}
-	return out, nil
+	return leftovers, nil
 }
 
 // listSeats returns the seat directory names under root, skipping the lock directory.

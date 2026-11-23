@@ -45,12 +45,13 @@ type homeWalk struct {
 
 // homeScan selects home candidates and keeps trees whose walks exceed their bounds.
 type homeScan struct {
-	root    *os.Root
-	now     time.Time
-	maxIdle time.Duration
-	budget  time.Duration
-	clock   func() time.Time
-	out     *printer
+	root      *os.Root
+	now       time.Time
+	maxIdle   time.Duration
+	budget    time.Duration
+	clock     func() time.Time
+	out       *printer
+	entryInfo func(fs.DirEntry) (fs.FileInfo, error)
 }
 
 // selectCandidates returns the idle workspaces and staged leftovers to prune.
@@ -82,7 +83,7 @@ func selectCandidates(root *os.Root, now time.Time, opts options, out *printer) 
 			if !ok {
 				continue
 			}
-			idle, err := idleLongerThan(root, rel, now, opts.maxIdle)
+			idle, err := idleLongerThan(root, rel, now, opts.maxIdle, out)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -103,7 +104,7 @@ func selectCandidates(root *os.Root, now time.Time, opts options, out *printer) 
 			if !ok {
 				continue
 			}
-			idle, err := idleLongerThan(root, rel, now, opts.maxIdle)
+			idle, err := idleLongerThan(root, rel, now, opts.maxIdle, out)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -113,10 +114,10 @@ func selectCandidates(root *os.Root, now time.Time, opts options, out *printer) 
 		}
 		return candidates, leftovers, nil
 	}
-	if candidates, err = idleCandidates(root, now, opts.maxIdle); err != nil {
+	if candidates, err = idleCandidates(root, now, opts.maxIdle, out); err != nil {
 		return nil, nil, err
 	}
-	leftovers, err = stagedLeftovers(root, now, opts.maxIdle)
+	leftovers, err = stagedLeftovers(root, now, opts.maxIdle, out)
 	return candidates, leftovers, err
 }
 
@@ -282,7 +283,12 @@ func (s homeScan) treeIdle(rel string) (bool, error) {
 		if strings.Count(path, "/")-baseDepth > idleWalkMaxDepth || s.clock().After(deadline) {
 			return errWalkBound
 		}
-		info, err := entry.Info()
+		var info fs.FileInfo
+		if s.entryInfo != nil {
+			info, err = s.entryInfo(entry)
+		} else {
+			info, err = entry.Info()
+		}
 		if errors.Is(err, fs.ErrNotExist) {
 			return nil
 		}

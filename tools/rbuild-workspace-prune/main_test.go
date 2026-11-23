@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -82,7 +83,7 @@ func TestIdleCandidatesSelectsOnlyWorkspacesIdleOverMaxIdle(t *testing.T) {
 	}
 
 	r := openRootForTest(t, root)
-	got, err := idleCandidates(r, testNow, 24*time.Hour)
+	got, err := idleCandidates(r, testNow, 24*time.Hour, &printer{w: io.Discard})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +114,7 @@ func TestIdleCandidatesKeepsWorkspaceWithRecentTopLevelEntry(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := idleCandidates(openRootForTest(t, root), testNow, 24*time.Hour)
+	got, err := idleCandidates(openRootForTest(t, root), testNow, 24*time.Hour, &printer{w: io.Discard})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -277,7 +278,7 @@ func TestPruneSymlinkSwapCannotDeleteOutsideRoot(t *testing.T) {
 	seat := filepath.Join(root, "seat")
 
 	r := openRootForTest(t, root)
-	candidates, err := idleCandidates(r, testNow, 24*time.Hour)
+	candidates, err := idleCandidates(r, testNow, 24*time.Hour, &printer{w: io.Discard})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -322,7 +323,7 @@ func TestPruneBusyAfterStageIsRenamedBack(t *testing.T) {
 	r := openRootForTest(t, root)
 	var out strings.Builder
 	opts := options{root: resolvedRoot(t, root), maxIdle: 24 * time.Hour, procDir: procDir, readCwd: readLink}
-	candidates, err := idleCandidates(r, testNow, opts.maxIdle)
+	candidates, err := idleCandidates(r, testNow, opts.maxIdle, &printer{w: io.Discard})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -542,9 +543,40 @@ func TestIdleLongerThanDepthBound(t *testing.T) {
 	root := t.TempDir()
 	deep := "seat/ws" + strings.Repeat("/d", idleWalkMaxDepth+1)
 	idleTree(t, root, deep)
-	idle, err := idleLongerThan(openRootForTest(t, root), "seat/ws", testNow, 24*time.Hour)
+	var out strings.Builder
+	idle, err := idleLongerThan(openRootForTest(t, root), "seat/ws", testNow, 24*time.Hour, &printer{w: &out})
 	if err != nil || idle {
 		t.Fatalf("idle=%v err=%v; want bounded tree kept", idle, err)
+	}
+	if !strings.Contains(out.String(), "keeping tree") {
+		t.Fatalf("missing bound log: %q", out.String())
+	}
+}
+
+func TestIdleLongerThanMissingRoot(t *testing.T) {
+	idle, err := idleLongerThan(openRootForTest(t, t.TempDir()), "gone", testNow, 24*time.Hour, &printer{w: io.Discard})
+	if err != nil || idle {
+		t.Fatalf("idle=%v err=%v, want false and nil", idle, err)
+	}
+}
+
+func TestTreeIdleVanishingEntry(t *testing.T) {
+	root := t.TempDir()
+	path := idleTree(t, root, "seat/ws")
+	vanished := false
+	scan := homeScan{root: openRootForTest(t, root), now: testNow, maxIdle: 24 * time.Hour, budget: defaultWalkBudget, clock: time.Now, out: &printer{w: io.Discard}, entryInfo: func(entry fs.DirEntry) (fs.FileInfo, error) {
+		if entry.Name() == "data" {
+			vanished = true
+			if err := os.Remove(filepath.Join(path, "data")); err != nil {
+				return nil, err
+			}
+			return os.Stat(filepath.Join(path, "data"))
+		}
+		return entry.Info()
+	}}
+	idle, err := scan.treeIdle("seat/ws")
+	if !vanished || err != nil || !idle {
+		t.Fatalf("vanished=%v idle=%v err=%v", vanished, idle, err)
 	}
 }
 

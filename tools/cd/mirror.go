@@ -96,9 +96,12 @@ func syncMirror(ctx context.Context, o mirrorOptions, warn io.Writer) (string, m
 					"GIT_AUTHOR_EMAIL=" + mirrorCommitIdentity + "@users.noreply.github.com",
 					"GIT_COMMITTER_NAME=" + mirrorCommitIdentity,
 					"GIT_COMMITTER_EMAIL=" + mirrorCommitIdentity + "@users.noreply.github.com",
+					"GIT_CONFIG_GLOBAL=/dev/null",
+					"GIT_CONFIG_NOSYSTEM=1",
 				},
 				nil,
 				"commit-tree",
+				"--no-gpg-sign",
 				split+"^{tree}",
 				"-p",
 				tip,
@@ -127,6 +130,17 @@ func isBridgeContinuation(ctx context.Context, repo, tip, split string) (bool, b
 	}
 	fields := strings.Fields(parents)
 	if len(fields) < 3 {
+		return false, false, nil
+	}
+	tipTree, err := git(ctx, repo, "rev-parse", tip+"^{tree}")
+	if err != nil {
+		return false, false, err
+	}
+	secondParentTree, err := git(ctx, repo, "rev-parse", fields[2]+"^{tree}")
+	if err != nil {
+		return false, false, err
+	}
+	if tipTree != secondParentTree {
 		return false, false, nil
 	}
 	continuation, err := isAncestor(ctx, repo, fields[2], split)

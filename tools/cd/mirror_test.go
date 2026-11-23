@@ -90,6 +90,12 @@ func TestSyncMirrorBridgesUnrelatedHistory(t *testing.T) {
 	if message := testGit(t, src, "show", "-s", "--format=%s", bridge); message != "Merge history into the nebula subtree split" {
 		t.Fatalf("bridge message = %q", message)
 	}
+	identity := testGit(t, src, "show", "-s", "--format=%an %ae %cn %ce", bridge)
+	wantIdentity := "rigelbuild-nebula-release[bot] rigelbuild-nebula-release[bot]@users.noreply.github.com " +
+		"rigelbuild-nebula-release[bot] rigelbuild-nebula-release[bot]@users.noreply.github.com"
+	if identity != wantIdentity {
+		t.Fatalf("bridge identity = %q, want %q", identity, wantIdentity)
+	}
 	for _, ancestor := range []string{unrelatedTip, split} {
 		reachable, err := isAncestor(ctx, src, ancestor, bridge)
 		if err != nil {
@@ -101,6 +107,48 @@ func TestSyncMirrorBridgesUnrelatedHistory(t *testing.T) {
 	}
 	if tree := testGit(t, src, "rev-parse", bridge+"^{tree}"); tree != testGit(t, src, "rev-parse", split+"^{tree}") {
 		t.Fatalf("bridge tree = %s, want split tree %s", tree, testGit(t, src, "rev-parse", split+"^{tree}"))
+	}
+}
+
+func TestSyncMirrorRejectsForeignMergeAsContinuation(t *testing.T) {
+	ctx := context.Background()
+	src, remote, o, unrelatedTip := newSyncMirrorWithUnrelatedTip(t)
+	split, err := subtreeSplit(ctx, src, o.prefix, "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gitRun(ctx, src, nil, nil, "fetch", "-q", remote, "refs/heads/main"); err != nil {
+		t.Fatal(err)
+	}
+	foreignMerge := testGit(
+		t,
+		src,
+		"commit-tree",
+		unrelatedTip+"^{tree}",
+		"-p",
+		unrelatedTip,
+		"-p",
+		split,
+		"-m",
+		"foreign merge",
+	)
+	testGit(t, src, "push", remote, foreignMerge+":refs/heads/main")
+
+	var warn bytes.Buffer
+	moved, state, err := syncMirror(ctx, o, &warn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state != mirrorPushed || moved != split {
+		t.Fatalf("state = %s split = %s, want pushed split %s", state, moved, split)
+	}
+	if warn.Len() == 0 {
+		t.Fatal("foreign merge was accepted as a bridge continuation without warning")
+	}
+	newTip := testGit(t, remote, "rev-parse", "main")
+	parents := strings.Fields(testGit(t, src, "rev-list", "--parents", "-n", "1", newTip))
+	if len(parents) != 3 || parents[1] != foreignMerge || parents[2] != split {
+		t.Fatalf("replacement bridge parents = %v, want %s and %s", parents, foreignMerge, split)
 	}
 }
 
@@ -215,11 +263,16 @@ func TestSyncMirrorEqualTipIsNoOp(t *testing.T) {
 	remote := t.TempDir()
 	testGit(t, remote, "init", "-q", "--bare", "-b", "main")
 	o := mirrorOptions{repo: src, prefix: "tools/jj-hooks", url: remote, branch: "main"}
-	first, _, err := syncMirror(ctx, o, &bytes.Buffer{})
+	first, state, err := syncMirror(ctx, o, &bytes.Buffer{})
 	if err != nil {
 		t.Fatal(err)
 	}
-
+	if state != mirrorPushed {
+		t.Fatalf("empty mirror state = %s, want %s", state, mirrorPushed)
+	}
+	if tip := testGit(t, remote, "rev-parse", "main"); tip != first {
+		t.Fatalf("empty mirror tip = %s, want split %s", tip, first)
+	}
 	again, state, err := syncMirror(ctx, o, &bytes.Buffer{})
 	if err != nil {
 		t.Fatal(err)

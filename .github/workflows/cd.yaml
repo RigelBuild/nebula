@@ -717,12 +717,6 @@ jobs:
           SPLIT: ${{ steps.mirror.outputs.split }}
           STATE: ${{ steps.mirror.outputs.state }}
         run: |
-          # Copies only when the mirror took the split. A skipped mirror has no
-          # commit to target, so its Release is not created (RIG-10830).
-          if [ "$STATE" = skipped ]; then
-            echo "jj-hooks Release-asset copy skipped: the mirror was not updated (RIG-10830)"
-            exit 0
-          fi
           # Runs only when the manifest has per-system jj-hooks-bin assets (the Nix-built
           # jj-hooks package in tools/jj-hooks/component.cue).
           if ! git show "$COMMIT:release-manifest.json" | jq -e '(.["jj-hooks-bin"] // {}) | [.["x86_64-linux"], .["aarch64-linux"], .["aarch64-darwin"]] | any(type == "object")' >/dev/null; then

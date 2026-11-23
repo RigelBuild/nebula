@@ -1997,17 +1997,21 @@ mod tests {
 			Ok(())
 		}
 	}
-	/// A test writer that cancels the blocked read when the mux emits a keepalive.
+	/// A test writer that cancels the blocked read after the second keepalive.
 	struct CancelOnKeepalive {
 		sink: Sink,
 		cancel: Arc<AtomicBool>,
+		keepalives: usize,
 	}
 
 	impl Write for CancelOnKeepalive {
 		fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
 			let n = self.sink.write(buf)?;
 			if buf == [0, 0, 0, 7] {
-				self.cancel.store(true, Ordering::Relaxed);
+				self.keepalives += 1;
+				if self.keepalives == 2 {
+					self.cancel.store(true, Ordering::Relaxed);
+				}
 			}
 			Ok(n)
 		}
@@ -2016,7 +2020,6 @@ mod tests {
 			self.sink.flush()
 		}
 	}
-
 
 	/// A Read that blocks until bytes are sent (EOF once the sender is dropped).
 	struct Blocking(flume::Receiver<Vec<u8>>, Vec<u8>);
@@ -2888,14 +2891,14 @@ mod tests {
 		assert_eq!(*lock(&calls), [false]);
 	}
 
-	/// The mux's first emitted keepalive cancels the blocked read before its next
+	/// The mux's second emitted keepalive cancels the blocked read before its next
 	/// timeout check. With keepalive sending disabled, the read times out and fails.
 	#[test]
 	fn blocked_sender_sends_keepalives_instead_of_timing_out() {
 		let (mut r, _tx, cancel) = blocking_reader(Some(Duration::from_secs(2)));
 		let sink = Sink::default();
 		let w = MuxWriter::new(
-			Box::new(CancelOnKeepalive { sink: sink.clone(), cancel }),
+			Box::new(CancelOnKeepalive { sink: sink.clone(), cancel, keepalives: 0 }),
 			IoCounters::default(),
 			WriteConfig { timeout: Some(Duration::from_secs(2)), ..WriteConfig::default() },
 		);
@@ -2905,7 +2908,7 @@ mod tests {
 		let err = r.read(&mut [0u8; 1]).unwrap_err();
 		assert_eq!(RsyncError::from_io(&err, RERR_STREAMIO).code, RERR_SIGNAL);
 		let out = sink.take();
-		assert!(out.len() >= HDR && out.chunks(HDR).all(|chunk| chunk == [0, 0, 0, 7]), "{out:?}");
+		assert!(out.len() >= 2 * HDR && out.chunks(HDR).all(|chunk| chunk == [0, 0, 0, 7]), "{out:?}");
 	}
 
 	#[test]

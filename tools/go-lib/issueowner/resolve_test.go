@@ -15,37 +15,37 @@ func TestResolveOwnerPrecedence(t *testing.T) {
 	}{
 		{
 			name:       "own owner beats parent and branch",
-			in:         OwnerInput{Owner: "docs-site", HasOwner: true, Parents: []ParentOwner{{Identifier: "SEA-100", Owner: "nix-infra", HasOwner: true}}, BranchCodename: "ci-build"},
+			in:         OwnerInput{Owner: "docs-site", HasOwner: true, Parents: []ParentOwner{{Identifier: "EX-100", Owner: "nix-infra", HasOwner: true}}, BranchCodename: "ci-build"},
 			wantOwner:  "docs-site",
 			wantSource: SourceOwner,
 			wantEv:     "Owner: docs-site",
 		},
 		{
 			name:       "nearest owned parent beats branch",
-			in:         OwnerInput{Parents: []ParentOwner{{Identifier: "SEA-100", Owner: "nix-infra", HasOwner: true}}, BranchCodename: "ci-build"},
+			in:         OwnerInput{Parents: []ParentOwner{{Identifier: "EX-100", Owner: "nix-infra", HasOwner: true}}, BranchCodename: "ci-build"},
 			wantOwner:  "nix-infra",
 			wantSource: SourceParent,
-			wantEv:     "parent chain SEA-100 (owner nix-infra)",
+			wantEv:     "parent chain EX-100 (owner nix-infra)",
 		},
 		{
 			name: "walks an unowned chain to the first owner",
 			in: OwnerInput{Parents: []ParentOwner{
-				{Identifier: "SEA-1"}, {Identifier: "SEA-2"}, {Identifier: "SEA-3", Owner: "ci-build", HasOwner: true},
+				{Identifier: "EX-1"}, {Identifier: "EX-2"}, {Identifier: "EX-3", Owner: "ci-build", HasOwner: true},
 			}},
 			wantOwner:  "ci-build",
 			wantSource: SourceParent,
-			wantEv:     "parent chain SEA-1 → SEA-2 → SEA-3 (owner ci-build)",
+			wantEv:     "parent chain EX-1 → EX-2 → EX-3 (owner ci-build)",
 		},
 		{
 			name:       "branch decides when no owner is on the chain",
-			in:         OwnerInput{Parents: []ParentOwner{{Identifier: "SEA-1"}}, BranchCodename: "livingstone"},
+			in:         OwnerInput{Parents: []ParentOwner{{Identifier: "EX-1"}}, BranchCodename: "livingstone"},
 			wantOwner:  "livingstone",
 			wantSource: SourceBranch,
 			wantEv:     "branch names livingstone",
 		},
 		{
 			name: "no owner, parent, or branch yields an empty verdict",
-			in:   OwnerInput{Parents: []ParentOwner{{Identifier: "SEA-1"}}},
+			in:   OwnerInput{Parents: []ParentOwner{{Identifier: "EX-1"}}},
 		},
 	}
 	for _, tc := range tests {
@@ -73,7 +73,7 @@ func TestResolveOwnerConflict(t *testing.T) {
 		}
 	})
 	t.Run("branch codename disagreeing with a parent owner is named", func(t *testing.T) {
-		got := ResolveOwner(OwnerInput{Parents: []ParentOwner{{Identifier: "SEA-100", Owner: "nix-infra", HasOwner: true}}, BranchCodename: "ci-build"})
+		got := ResolveOwner(OwnerInput{Parents: []ParentOwner{{Identifier: "EX-100", Owner: "nix-infra", HasOwner: true}}, BranchCodename: "ci-build"})
 		if got.Owner != "nix-infra" || got.Source != SourceParent {
 			t.Fatalf("parent precedence broken: %+v", got)
 		}
@@ -106,28 +106,28 @@ func TestResolveOwnerChainAndTruncated(t *testing.T) {
 		{
 			name: "chain ends at the owning parent",
 			in: OwnerInput{Parents: []ParentOwner{
-				{Identifier: "SEA-1"}, {Identifier: "SEA-2", Owner: "ci-build", HasOwner: true}, {Identifier: "SEA-3", Owner: "nix-infra", HasOwner: true},
+				{Identifier: "EX-1"}, {Identifier: "EX-2", Owner: "ci-build", HasOwner: true}, {Identifier: "EX-3", Owner: "nix-infra", HasOwner: true},
 			}},
-			wantChain: []string{"SEA-1", "SEA-2"},
+			wantChain: []string{"EX-1", "EX-2"},
 			wantOwner: "ci-build",
 		},
 		{
 			name:      "unowned chain is reported whole and not truncated",
-			in:        OwnerInput{Parents: []ParentOwner{{Identifier: "SEA-1"}, {Identifier: "SEA-2"}}},
-			wantChain: []string{"SEA-1", "SEA-2"},
+		in:        OwnerInput{Parents: []ParentOwner{{Identifier: "EX-1"}, {Identifier: "EX-2"}}},
+		wantChain: []string{"EX-1", "EX-2"},
 		},
 		{
 			name:          "truncated walk with no owner reports truncation",
-			in:            OwnerInput{Parents: []ParentOwner{{Identifier: "SEA-1"}, {Identifier: "SEA-2"}}, ParentsTruncated: true},
-			wantChain:     []string{"SEA-1", "SEA-2"},
+			in:            OwnerInput{Parents: []ParentOwner{{Identifier: "EX-1"}, {Identifier: "EX-2"}}, ParentsTruncated: true},
+			wantChain:     []string{"EX-1", "EX-2"},
 			wantTruncated: true,
 		},
 		{
 			name: "truncated walk that still finds an owner keeps truncation and stops the chain at the owner",
 			in: OwnerInput{Parents: []ParentOwner{
-				{Identifier: "SEA-1", Owner: "ci-build", HasOwner: true}, {Identifier: "SEA-2"},
+				{Identifier: "EX-1", Owner: "ci-build", HasOwner: true}, {Identifier: "EX-2"},
 			}, ParentsTruncated: true},
-			wantChain:     []string{"SEA-1"},
+			wantChain:     []string{"EX-1"},
 			wantTruncated: true,
 			wantOwner:     "ci-build",
 		},

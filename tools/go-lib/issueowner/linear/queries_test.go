@@ -12,12 +12,12 @@ import (
 
 func TestFetchPageWithPaginationAndProjection(t *testing.T) {
 	fullNode := issueNode{
-		Identifier:  "SEA-1",
+		Identifier:  "EX-1",
 		Title:       "t",
 		URL:         "u",
 		Description: new("d"),
 		State:       &issueState{Name: "In Progress", Type: "started"},
-		Parent:      &issueParent{Identifier: "SEA-0"},
+		Parent:      &issueParent{Identifier: "EX-0"},
 		CompletedAt: new("2026-08-20T10:00:00.000Z"),
 	}
 	tests := []pageCase{
@@ -30,7 +30,7 @@ func TestFetchPageWithPaginationAndProjection(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) { runPageCase(t, test) })
 	}
 	response := pageResponse(false, "")
-	response.Issues.Nodes = []issueNode{{Identifier: "SEA-2", Title: "t2", URL: "u2"}}
+	response.Issues.Nodes = []issueNode{{Identifier: "EX-2", Title: "t2", URL: "u2"}}
 	page, err := fetchPageWith(t.Context(), func(context.Context, string, map[string]any) (pageResponseData, error) {
 		return response, nil
 	}, "")
@@ -79,7 +79,7 @@ func runPageCase(t *testing.T, test pageCase) {
 	}
 	if test.wantIssues == 1 {
 		issue := got.Issues[0]
-		if issue.Identifier != "SEA-1" || issue.StateName != "In Progress" || issue.StateType != "started" || issue.ParentIdentifier != "SEA-0" || issue.CompletedAt == nil || *issue.CompletedAt != "2026-08-20T10:00:00.000Z" {
+		if issue.Identifier != "EX-1" || issue.StateName != "In Progress" || issue.StateType != "started" || issue.ParentIdentifier != "EX-0" || issue.CompletedAt == nil || *issue.CompletedAt != "2026-08-20T10:00:00.000Z" {
 			t.Fatalf("projected issue = %#v", issue)
 		}
 	}
@@ -115,10 +115,10 @@ func TestIssueClientPageFetchAndUpdate(t *testing.T) {
 	if len(page.Issues) != 2 || page.EndCursor != "c9" {
 		t.Fatalf("page = %#v", page)
 	}
-	if page.Issues[0].StateName != "In Progress" || page.Issues[0].ParentIdentifier != "SEA-0" || page.Issues[1].StateType != "" {
+	if page.Issues[0].StateName != "In Progress" || page.Issues[0].ParentIdentifier != "EX-0" || page.Issues[1].StateType != "" {
 		t.Fatalf("page projection = %#v", page.Issues)
 	}
-	if err := api.UpdateDescription(t.Context(), "SEA-1", "new body"); err != nil {
+	if err := api.UpdateDescription(t.Context(), "EX-1", "new body"); err != nil {
 		t.Fatal(err)
 	}
 	if len(calls) != 2 {
@@ -153,7 +153,7 @@ func handlePageRequest(t *testing.T, calls *[]map[string]any, w http.ResponseWri
 	w.Header().Set("Content-Type", "application/json")
 	switch {
 	case strings.Contains(request.Query, "TeamIssuesPage"):
-		_, err := io.WriteString(w, `{"data":{"issues":{"nodes":[{"identifier":"SEA-1","title":"t","url":"u","description":"d","state":{"name":"In Progress","type":"started"},"parent":{"identifier":"SEA-0"},"completedAt":"2026-08-20T10:00:00.000Z"},{"identifier":"SEA-2","title":"t2","url":"u2","state":null,"parent":null}],"pageInfo":{"hasNextPage":false,"endCursor":"c9"}}}}`)
+		_, err := io.WriteString(w, `{"data":{"issues":{"nodes":[{"identifier":"EX-1","title":"t","url":"u","description":"d","state":{"name":"In Progress","type":"started"},"parent":{"identifier":"EX-0"},"completedAt":"2026-08-20T10:00:00.000Z"},{"identifier":"EX-2","title":"t2","url":"u2","state":null,"parent":null}],"pageInfo":{"hasNextPage":false,"endCursor":"c9"}}}}`)
 		if err != nil {
 			t.Errorf("write page: %v", err)
 		}

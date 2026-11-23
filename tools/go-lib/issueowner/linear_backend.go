@@ -98,7 +98,7 @@ type LinearPage struct {
 	EndCursor string
 }
 
-var issueRefPattern = regexp.MustCompile(`(?i)\b(?:SEA|RIG)-\d+\b`)
+var issueRefPattern = regexp.MustCompile(`(?i)\bRIG-\d+\b`)
 
 // LinearBackend implements the owner seam for Linear records.
 type LinearBackend struct{ api LinearIssueAPI }
@@ -109,14 +109,8 @@ func NewLinearBackend(api LinearIssueAPI) *LinearBackend { return &LinearBackend
 // IssueRefPattern returns the case-insensitive Linear issue reference pattern.
 func (b *LinearBackend) IssueRefPattern() *regexp.Regexp { return issueRefPattern }
 
-// CanonicalRef maps historical SEA references to their current RIG identifiers.
-func (b *LinearBackend) CanonicalRef(ref string) string {
-	upper := strings.ToUpper(ref)
-	if strings.HasPrefix(upper, "SEA-") {
-		return "RIG-" + upper[len("SEA-"):]
-	}
-	return upper
-}
+// CanonicalRef normalizes issue references to uppercase.
+func (b *LinearBackend) CanonicalRef(ref string) string { return strings.ToUpper(ref) }
 
 type linearMutation struct{ payload *mutationPayload }
 

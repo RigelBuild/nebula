@@ -21,6 +21,10 @@ class _FakeAllowedMentions:
         self.users = users
         self.replied_user = replied_user
 
+    @classmethod
+    def none(cls):
+        return cls(everyone=False, roles=False, users=False, replied_user=False)
+
 
 def _ensure_discord_mock():
     """Install (or augment) a mock ``discord`` module.

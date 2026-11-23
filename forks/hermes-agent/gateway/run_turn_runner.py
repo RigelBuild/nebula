@@ -713,7 +713,8 @@ class TurnRunner(GatewayTurnProgressMixin, GatewaySessionAgentMixin):
                 except Exception:
                     logger.debug("request_reopen_seed after clarify answer failed", exc_info=True)
             try:
-                ctx._status_adapter.resume_typing_for_chat(ctx._status_chat_id)
+                (self._runner._delivery_adapter_for(ctx.source) if getattr(ctx, "source", None) is not None
+                 else ctx._status_adapter).resume_typing_for_chat(ctx._status_chat_id)
             except Exception:
                 logger.debug("resume_typing_for_chat after clarify answer failed", exc_info=True)
         return response, answered
@@ -736,7 +737,9 @@ class TurnRunner(GatewayTurnProgressMixin, GatewaySessionAgentMixin):
         from gateway.run_turn_runner_approval_settle import register_timeout_notice
         from gateway.run_turn_runner_approval_text import approval_text_prompt
         ctx = self._ctx
-        adapter = ctx._status_adapter
+        adapter = self._runner._delivery_adapter_for(ctx.source) if getattr(ctx, "source", None) is not None else ctx._status_adapter
+        if adapter is None:
+            raise RuntimeError("exec approval undeliverable: no live delivery adapter")
         # Slack's assistant_threads_setStatus disables the compose box, so the user can't type
         # /approve while "is thinking..." shows. Pausing stops _keep_typing re-setting it; resumed
         # in approve/deny.
@@ -773,7 +776,7 @@ class TurnRunner(GatewayTurnProgressMixin, GatewaySessionAgentMixin):
                     # learns the command did NOT run (only the TUI registered a settle hook).
                     register_timeout_notice(
                         self, approval_data, command=cmd,
-                        card_message_id=getattr(fut.result(timeout=0), "message_id", None))
+                        card_message_id=getattr(fut.result(timeout=0), "message_id", None), adapter=adapter)
                     return
                 if outcome == "ambiguous":
                     # Timeout ≠ failure: the card may have posted with a late ack. The prompt
@@ -790,7 +793,7 @@ class TurnRunner(GatewayTurnProgressMixin, GatewaySessionAgentMixin):
                 raw = getattr(fut.result(timeout=0), "raw_response", None) if fut.exception(timeout=0) is None else None
                 if outcome == "failed" and isinstance(raw, dict) and raw.get("approval_text_fallback_posted"):
                     # The adapter already posted the text prompt in the approval's thread and owns its deadline.
-                    register_timeout_notice(self, approval_data, command=cmd, card_message_id=None)
+                    register_timeout_notice(self, approval_data, command=cmd, card_message_id=None, adapter=adapter)
                     return
                 if outcome == "declined":
                     # P5(b): the connector AUTHORIZED this destination and
@@ -845,7 +848,7 @@ class TurnRunner(GatewayTurnProgressMixin, GatewaySessionAgentMixin):
                            approval_data.get("request_id"), ctx.session_key)
                 # No card to edit on the text path: the prompt has no buttons to drop and carries
                 # the /approve instructions, so the timeout notice is posted as a new message.
-                register_timeout_notice(self, approval_data, command=cmd, card_message_id=None)
+                register_timeout_notice(self, approval_data, command=cmd, card_message_id=None, adapter=adapter)
         except Exception as e:
             logger.error("Failed to send approval request: %s", e)
 

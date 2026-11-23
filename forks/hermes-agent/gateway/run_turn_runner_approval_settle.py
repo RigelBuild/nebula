@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 
 def register_timeout_notice(
-    runner, approval_data: dict, *, command: str, card_message_id: Optional[str]) -> None:
+    runner, approval_data: dict, *, command: str, card_message_id: Optional[str], adapter=None) -> None:
     """Arm a settle hook that posts the timed-out notice for ``approval_data['request_id']``.
 
     ``runner`` is the ``TurnRunner`` (for ``_ctx`` and ``_schedule``); ``card_message_id`` is the
@@ -54,7 +54,7 @@ def register_timeout_notice(
         if callable(still_current) and not still_current():
             return
         runner._schedule(
-            _post_timeout_notice(runner._ctx, command, card_message_id, timeout_s, flagged),
+            _post_timeout_notice(runner._ctx, command, card_message_id, timeout_s, flagged, adapter=adapter),
             "Approval timeout notice scheduling error")
 
     register_gateway_settle(session_key, request_id, settle)
@@ -78,12 +78,12 @@ def register_approval_index_settle(runner, approval_data: dict, adapter) -> None
 
 
 async def _post_timeout_notice(
-        ctx, command: str, card_message_id: Optional[str], timeout_s: int, reason: str = "") -> None:
+        ctx, command: str, card_message_id: Optional[str], timeout_s: int, reason: str = "", *, adapter=None) -> None:
     from gateway.run import _interim_metadata
 
     from gateway.bot_peer_notices import automatic_notices_allowed
 
-    adapter = ctx._status_adapter
+    adapter = adapter if adapter is not None else ctx._status_adapter
     if not automatic_notices_allowed(getattr(ctx, "source", None)):
         return
     notice = format_approval_timed_out_notice(timeout_s)

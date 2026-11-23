@@ -73,6 +73,7 @@ def _runner(adapter):
         _status_adapter=adapter, _status_chat_id="C1", _status_thread_metadata={"thread_id": "t1"},
         session_key=SESSION, source=SimpleNamespace(chat_id="C1", platform="telegram", session_key=SESSION),
     )
+    runner._runner = SimpleNamespace(_delivery_adapter_for=lambda _source: adapter)
 
     class _Fut:
         def __init__(self, result): self._r = result
@@ -93,6 +94,16 @@ def pending_entry(monkeypatch):
     yield entry
     with _approval._lock:
         _approval._gateway_queues.pop(SESSION, None)
+
+
+def test_timeout_notice_uses_the_adapter_that_sent_the_card(pending_entry):
+    old, live = _ButtonAdapter(), _ButtonAdapter()
+    runner = _runner(old)
+    runner._runner._delivery_adapter_for = lambda _source: live
+    runner._approval_notify_sync(dict(pending_entry.data))
+    pending_entry.settle("timeout")
+    assert live.card_request_ids and live.edits
+    assert old.card_request_ids == [] and old.edits == []
 
 
 @pytest.mark.parametrize("warning_notifications", [True, False])

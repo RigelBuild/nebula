@@ -1,6 +1,9 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -38,6 +41,96 @@ func TestProfileFor(t *testing.T) {
 				!slices.Equal(profile.CIGates, tc.ciGates) ||
 				!slices.Equal(profile.LocalGates, []string{"bookmark-name", "issue-id"}) {
 				t.Fatalf("profile = %+v", profile)
+			}
+		})
+	}
+}
+
+func TestProfileForDefaultAndOwnerCoAuthor(t *testing.T) {
+	_, source, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("cannot locate the test source directory")
+	}
+	data, err := os.ReadFile(filepath.Join(filepath.Dir(source), "testdata", "profile.cue"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	profileCUE := string(data) + `
+
+default: {
+	issuePrefix: "EX"
+	specDirs: ["docs/"]
+}
+coAuthorByOwner: {
+	EXAMPLE: "Org Author <org@example.com>"
+}
+`
+	path := filepath.Join(t.TempDir(), "profile.cue")
+	writeTestFile(t, path, profileCUE)
+	withDefaults, err := loadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name       string
+		origin     string
+		noDefault  bool
+		oldFile    bool
+		wantName   string
+		wantPrefix string
+		wantAuthor string
+		wantError  string
+	}{
+		{
+			name:       "unlisted repo gets default",
+			origin:     "https://github.com/example/unlisted.git",
+			wantName:   "example/unlisted",
+			wantPrefix: "EX",
+			wantAuthor: "Org Author <org@example.com>",
+		},
+		{
+			name:      "unlisted repo with no default is refused",
+			origin:    "https://github.com/example/unlisted.git",
+			noDefault: true,
+			wantError: "is not listed in the profile file",
+		},
+		{
+			name:       "owner override wins over global coauthor",
+			origin:     "https://github.com/example/app.git",
+			wantName:   "example/app",
+			wantPrefix: "EX",
+			wantAuthor: "Org Author <org@example.com>",
+		},
+		{
+			name:       "old profile file still loads",
+			origin:     "https://github.com/example/app.git",
+			oldFile:    true,
+			wantName:   "example/app",
+			wantPrefix: "EX",
+			wantAuthor: "Example Author <author@example.com>",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := withDefaults
+			if tt.noDefault {
+				cfg.Default = nil
+			}
+			if tt.oldFile {
+				cfg = loadExampleConfig(t)
+			}
+			profile, err := ProfileFor(cfg, tt.origin)
+			if tt.wantError != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantError) {
+					t.Fatalf("ProfileFor error = %v, want %q", err, tt.wantError)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if profile.Name != tt.wantName || profile.IssuePrefix != tt.wantPrefix || profile.CoAuthor != tt.wantAuthor {
+				t.Fatalf("profile = %+v, want name %q, issue prefix %q, coauthor %q", profile, tt.wantName, tt.wantPrefix, tt.wantAuthor)
 			}
 		})
 	}

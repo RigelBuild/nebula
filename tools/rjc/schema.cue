@@ -5,8 +5,12 @@ package main
 #Config: {
 	// owners lists the GitHub owners rjc accepts repositories from.
 	owners: [_, ...string]
-	// coAuthor is the trailer added to every commit and PR body.
+	// coAuthor is the fallback trailer added to every commit and PR body.
 	coAuthor: string & !=""
+	// coAuthorByOwner optionally overrides coAuthor for a GitHub owner.
+	coAuthorByOwner?: {
+		[Owner=string]: string & !=""
+	}
 	// reviewer is the login requested as reviewer on tracking-fork PRs.
 	reviewer: string & !=""
 	// agentEmail is the jj user.email required in agent workspaces.
@@ -23,11 +27,13 @@ package main
 	rootChecksDir: string & !=""
 	// devenvNixpkgs pins the nixpkgs revision used to start a devenv shell.
 	devenvNixpkgs: string & !=""
+	// default supplies repository policy when repos has no matching entry.
+	default?: #Repo
 	repos: [Name=string]: #Repo & {name: Name}
 }
 
 #Repo: {
-	name:    string
+	name?: string
 	pr:      *true | bool
 	posture: *"none" | "tracking" | "owned"
 	trunk:   *"main" | string

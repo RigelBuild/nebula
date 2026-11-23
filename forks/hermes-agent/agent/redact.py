@@ -2071,6 +2071,264 @@ def _is_structured_kubectl_read(command: str) -> bool:
     return _kubectl_outputs_structured(args)
 
 
+_POD_COPY_PATHS: dict[str, dict[str, tuple[str, bool]]] = {}
+_POD_COPY_LOCK = threading.Lock()
+_POD_COPY_MAX_PER_SESSION = 256
+_POD_COPY_VALUE_FLAGS = _KUBECTL_GLOBAL_VALUE_FLAGS | {
+    "-c", "--container", "--retries", "--exclude", "--include",
+}
+_POD_COPY_VALUES: dict[str, dict[str, tuple[str, bool]]] = {}
+
+
+def _register_copy_text(text: str, session_key: str, details: tuple[str, bool]) -> None:
+    import base64
+
+    candidates = []
+    lines = text.splitlines()
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("- "):
+            stripped = stripped[2:].strip()
+        elif stripped.startswith("#"):
+            stripped = stripped[1:].strip()
+        padded = re.fullmatch(r"[A-Za-z0-9+/_-]+={1,2}", stripped) is not None
+        if stripped and not stripped.endswith(":") and ("=" not in stripped or padded) and ": " not in stripped:
+            candidates.append(stripped.strip("\"'"))
+        if "=" in line:
+            candidates.append(line.split("=", 1)[1].strip().strip("\"'"))
+        if ": " in line:
+            candidates.append(line.split(": ", 1)[1].strip().strip(",\"'"))
+    try:
+        obj = json.loads(text)
+    except (ValueError, RecursionError):
+        obj = None
+    def collect(value):
+        if isinstance(value, str):
+            candidates.append(value)
+        elif isinstance(value, dict):
+            for child in value.values():
+                collect(child)
+        elif isinstance(value, list):
+            for child in value:
+                collect(child)
+    try:
+        collect(obj)
+    except RecursionError:
+        return
+    with _POD_COPY_LOCK:
+        values = _POD_COPY_VALUES.setdefault(session_key, {})
+        for value in candidates:
+            if (len(value) < 8 or any(ch.isspace() for ch in value)
+                    or (len(value) < 20 and value.isalpha())):
+                continue
+            data = value.encode("utf-8")
+            for variant in (value, base64.b64encode(data).decode(), base64.urlsafe_b64encode(data).decode(), data.hex()):
+                if variant not in values and len(values) >= _POD_COPY_MAX_PER_SESSION:
+                    logger.info("Pod copy value bound exceeded; retaining destination path tracking")
+                    return
+                values[variant] = details
+
+
+def redact_pod_copy_values(output: str, session_key: str, *, audit: bool = True) -> str:
+    if not output or not _redact_enabled():
+        return output
+    with _POD_COPY_LOCK:
+        values = sorted(_POD_COPY_VALUES.get(session_key, {}).items(), key=lambda item: len(item[0]), reverse=True)
+    matched = None
+    for value, details in values:
+        if value in output:
+            output = output.replace(value, "***")
+            matched = details
+    if matched and audit:
+        tool, known = matched
+        logger.info("Masked pod %scopy read-back (tool=%s, known_secret_mount=%s)",
+                    "secret " if known else "", tool, known)
+    return output
+
+
+def _register_local_copy(path: str, session_key: str, details: tuple[str, bool]) -> None:
+    from pathlib import Path
+    root = Path(path)
+    try:
+        if root.is_symlink():
+            return
+        files = root.rglob("*") if root.is_dir() else (root,)
+        count = 0
+        for file in files:
+            if file.is_symlink() or not file.is_file():
+                continue
+            count += 1
+            if count > 64:
+                return
+            with file.open("rb") as stream:
+                data = stream.read(65537)
+            if len(data) > 65536 or b"\x00" in data:
+                continue
+            try:
+                text = data.decode("utf-8")
+            except UnicodeDecodeError:
+                continue
+            _register_copy_text(text, session_key, details)
+    except OSError:
+        logger.info("Pod copy read bound exceeded; retaining destination path tracking")
+
+
+
+def clear_pod_copies(session_key: str) -> None:
+    with _POD_COPY_LOCK:
+        _POD_COPY_PATHS.pop(session_key, None)
+        _POD_COPY_VALUES.pop(session_key, None)
+
+
+def _strip_copy_prefix(tokens: list[str]) -> list[str]:
+    while tokens:
+        if _ENV_ASSIGNMENT_RE.match(tokens[0]):
+            tokens = tokens[1:]
+        elif _binary_base(tokens[0]) in {"sudo", "doas"}:
+            tokens = tokens[1:]
+            while tokens and tokens[0].startswith("-"):
+                flag = tokens.pop(0)
+                if (flag in {"-u", "-g", "-h", "-p", "-C", "-T", "--user", "--group", "--host", "--prompt"}
+                        or (flag.startswith("-") and not flag.startswith("--") and flag[-1:] in "ughpCT")) and tokens:
+                    tokens.pop(0)
+        elif _binary_base(tokens[0]) == "env":
+            tokens = tokens[1:]
+            while tokens and tokens[0].startswith("-"):
+                flag = tokens.pop(0)
+                if flag in {"-u", "--unset"} and tokens:
+                    tokens.pop(0)
+        elif _binary_base(tokens[0]) == "timeout":
+            tokens = tokens[2:]
+        elif _binary_base(tokens[0]) == "stdbuf":
+            tokens = tokens[1:]
+            while tokens and tokens[0].startswith("-"):
+                tokens.pop(0)
+        elif _binary_base(tokens[0]) in {"command", "time", "nice", "nohup", "exec"}:
+            tokens = tokens[1:]
+        else:
+            break
+    return tokens
+
+
+def _stream_destinations(command: str) -> list[str]:
+    lexer = shlex.shlex(command, posix=True, punctuation_chars="|;&<>")
+    lexer.whitespace_split = True
+    try:
+        tokens = list(lexer)
+    except ValueError:
+        return []
+    destinations = []
+    for i, token in enumerate(tokens[:-1]):
+        if token in {">", ">>", "&>", "&>>", ">|"}:
+            destinations.append(tokens[i + 1])
+        following = _strip_copy_prefix(tokens[i + 1:]) if token == "|" else []
+        if following and _binary_base(following[0]) == "tee":
+            for arg in following[1:]:
+                if arg in {"|", ";", "&&", "||", ">", ">>"}:
+                    break
+                if not arg.startswith("-"):
+                    destinations.append(arg)
+    return destinations
+
+
+def _copy_path(path: str, cwd: str | None) -> str:
+    return os.path.normpath(os.path.join(cwd or ".", os.path.expandvars(os.path.expanduser(path))))
+
+
+def record_pod_copy(command: str, session_key: str, cwd: str | None, *, local: bool = False, output: str = "") -> None:
+    """Capture local copied values or track paths for non-local backends."""
+    # Secret volumes can be mounted anywhere; track every pod copy rather than
+    # guessing the mount from its path. This may mask non-secret pod copies.
+    current_cwd = cwd
+    for segment in _command_segments(command):
+        try:
+            tokens = shlex.split(segment.strip().strip("()"))
+        except ValueError:
+            continue
+        tokens = _strip_copy_prefix(tokens)
+        if tokens and _binary_base(tokens[0]) in {"sh", "bash", "zsh"} and len(tokens) >= 3 and tokens[1] == "-c":
+            record_pod_copy(tokens[2], session_key, current_cwd, local=local, output=output)
+            continue
+        if tokens and tokens[0] in {"cd", "pushd"} and len(tokens) > 1:
+            current_cwd = _copy_path(tokens[1], current_cwd)
+            continue
+        if len(tokens) < 4 or _binary_base(tokens[0]) not in _KUBECTL_NAMES:
+            continue
+        verb = _kubectl_verb(tokens[1:])
+        if verb not in ({"cp", "rsync"} if _binary_base(tokens[0]) == "oc" else {"cp"}):
+            continue
+        operands = tokens[tokens.index(verb) + 1:]
+        positional = []
+        i = 0
+        while i < len(operands):
+            arg = operands[i]
+            if arg in _POD_COPY_VALUE_FLAGS:
+                i += 2
+                continue
+            if not arg.startswith("-") or arg == "-":
+                positional.append(arg)
+            i += 1
+        if len(positional) < 2:
+            continue
+        source, destination = positional[:2]
+        pod, separator, remote = source.partition(":")
+        if not separator or not pod or not remote or ":" in destination:
+            continue
+        stream = destination in {"/dev/stdout", "/dev/fd/1", "/proc/self/fd/1"}
+        destinations = _stream_destinations(command) if stream else [destination]
+        if destination == "-":
+            destinations += _stream_destinations(command)
+        known_mount = remote.startswith(("/var/run/secrets/", "/run/secrets/"))
+        details = (f"{_binary_base(tokens[0])} {verb}", known_mount)
+        if local:
+            if stream:
+                _register_copy_text(output, session_key, details)
+            for dest in destinations:
+                _register_local_copy(_copy_path(dest, current_cwd), session_key, details)
+        with _POD_COPY_LOCK:
+            paths = _POD_COPY_PATHS.setdefault(session_key, {})
+            for dest in destinations:
+                path = _copy_path(dest, current_cwd)
+                # Keep every destination: evicting a path would fail open.
+                paths[path] = details
+
+
+def pod_copy_read(command: str, session_key: str, cwd: str | None) -> tuple[str, bool] | None:
+    """Identify a terminal read of a destination recorded for this session."""
+    with _POD_COPY_LOCK:
+        paths = _POD_COPY_PATHS.get(session_key, {}).copy()
+    if not paths:
+        return None
+    has_cd = any(seg.strip().startswith("cd ") for seg in _command_segments(command))
+    for segment in _command_segments(command):
+        try:
+            tokens = shlex.split(segment)
+        except ValueError:
+            continue
+        tokens = _strip_copy_prefix(tokens)
+        if tokens and _binary_base(tokens[0]) in {"echo", "rm"}:
+            continue
+        for arg in tokens[1:]:
+            if arg.startswith("-"):
+                continue
+            path = _copy_path(arg, cwd)
+            for destination, details in paths.items():
+                if (path == destination or path.startswith(destination.rstrip(os.sep) + os.sep)
+                        or (has_cd and os.path.basename(arg) == os.path.basename(destination))):
+                    return details
+    return None
+
+
+def redact_pod_copy_read(output: str, copy: tuple[str, bool] | None, *, audit: bool = True) -> str:
+    if output and copy and _redact_enabled():
+        if audit:
+            verb, known_mount = copy
+            kind = "secret " if known_mount else ""
+            logger.info("Masked pod %scopy read-back (tool=%s, known_secret_mount=%s)", kind, verb, known_mount)
+        return "***"
+    return output
+
+
 REDACTION_UNAVAILABLE = "[redaction-unavailable]"
 # The opaque branch needs a 20-char floor (the floor the gateway/A2A sweeps always had): without it the
 # English word "bearer" turns "the bearer of bad news" into "Bearer [redacted] bad news" on every chat

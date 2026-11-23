@@ -167,20 +167,24 @@ def _failure_hint(command: str, returncode: int, output: str, exit_note) -> Opti
     return None
 
 
-def _redact_spill_file(path, total_chars, command) -> list[tuple[str, Any]]:
+def _redact_spill_file(path, total_chars, command, copy_read=None, copy_scope=None) -> list[tuple[str, Any]]:
     """Spill handle so the model can read the omitted middle instead of
     re-running. The collector wrote it raw; redact it with the same pass so no
     secret persists unmasked on disk. On failure drop the handle (and file)."""
     if not path:
         return []
     try:
-        from agent.redact import redact_terminal_output
+        from agent.redact import redact_pod_copy_read, redact_pod_copy_values, redact_terminal_output
         from tools.ansi_strip import strip_ansi
         from tools.spill_safety import write_text_exclusive
         raw_spill = Path(path).read_text(encoding="utf-8-sig", errors="replace")
         # lstat-checked unlink + exclusive create: the redacted copy can't
         # be diverted through a symlink planted since the collector's write.
-        write_text_exclusive(Path(path), redact_terminal_output(strip_ansi(raw_spill), command),
+        safe_spill = redact_terminal_output(strip_ansi(raw_spill), command)
+        safe_spill = redact_pod_copy_read(safe_spill, copy_read, audit=False)
+        if copy_scope is not None:
+            safe_spill = redact_pod_copy_values(safe_spill, copy_scope, audit=False)
+        write_text_exclusive(Path(path), safe_spill,
                              private=True, overwrite=True, errors="replace")
     except Exception:
         logger.debug("spill redaction failed; dropping spill handle", exc_info=True)
@@ -210,7 +214,7 @@ def finalize_foreground_result(
     workdir: Optional[str], command_cwd: Optional[str], approval_note: Optional[str],
 ) -> str:
     """Turn a raw ``env.execute`` result into the tool's JSON result string."""
-    from tools.terminal_tool import record_session_cwd
+    from tools.terminal_tool import _qualify_task_key, record_session_cwd
 
     # Record the cwd this command finished in as THIS session's durable cwd —
     # only when the command actually reported it (an interrupted/killed command
@@ -232,15 +236,22 @@ def finalize_foreground_result(
     # Strip ANSI so the model never copies escapes into file writes, then
     # redact secrets; redact_terminal_output is command-aware (env-dump
     # commands get the KEY=value pass, source/config dumps skip it).
-    from agent.redact import redact_terminal_output
+    from agent.redact import pod_copy_read, record_pod_copy, redact_pod_copy_read, redact_pod_copy_values, redact_terminal_output
     from tools.ansi_strip import strip_ansi
     output = strip_ansi(output)
+    copy_scope = _qualify_task_key(str(session_key or "default"))
+    local_copy = env_type == "local" and getattr(env, "uses_host_filesystem", False)
+    record_pod_copy(command, copy_scope, command_cwd, local=local_copy, output=output)
+    copy_read = pod_copy_read(command, copy_scope, command_cwd)
     # For source/config dumps (MAX_TOKENS=100, "apiKey": "x" fixtures, postgresql:// f-string templates) the
     # ENV/JSON/template passes are skipped to avoid false positives (code_file=True). But for env-dump
     # commands (env/printenv/set/export/declare) the output IS a KEY=value credential dump, so
     # redact_terminal_output runs the ENV pass (code_file=False) to mask opaque tokens with no vendor
     # prefix. Real prefixes, auth headers, JWTs, private keys are masked in both modes. See issue #43025.
-    output = redact_terminal_output(output.strip(), command) if output else ""
+    if output:
+        output = redact_pod_copy_read(output.strip(), copy_read)
+        output = redact_pod_copy_values(output, copy_scope)
+        output = redact_terminal_output(output, command)
 
     exit_note = _interpret_exit_code(command, returncode)
     failure_hint = _failure_hint(command, returncode, output, exit_note)
@@ -262,7 +273,8 @@ def finalize_foreground_result(
     optional_fields: list[tuple[str, Any]] = [
         ("cwd", changed_cwd),
         ("environment_recreated", _ENV_RECREATED_NOTE if result.get("environment_recreated") else None),
-        *_redact_spill_file(result.get("full_output_path"), result.get("output_total_chars"), command),
+        *_redact_spill_file(result.get("full_output_path"), result.get("output_total_chars"), command, copy_read,
+                            copy_scope if local_copy else None),
         ("verification_evidence", _verification_evidence(
             command, command_cwd, session_id or task_id or effective_task_id or "default",
             returncode, output, result.get("pipeline_status"))),

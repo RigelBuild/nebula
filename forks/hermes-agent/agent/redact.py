@@ -17,6 +17,7 @@ from urllib.parse import unquote_plus
 # drift: a blocked file_tools read that falls back to ``cat`` is still caught.
 from agent.file_safety import _BLOCKED_PROJECT_ENV_BASENAMES as _ENV_FILE_BASENAMES
 from agent.redact_connstr import _KV_CONNSTR_GATE_RE, _redact_kv_connection_strings
+from agent.redact_kubernetes import redact_kubernetes
 from agent.redact_headers import (
     _COOKIE_HEADER_JSON_RE, _COOKIE_HEADER_JSON_UNTERMINATED_RE, _SECRET_HEADER_JSON_RE,
     _SECRET_HEADER_JSON_UNTERMINATED_RE, json_header_value_is_credential, redact_cookie_assignments,
@@ -1420,7 +1421,9 @@ def _redact_assignments(text: str, *, mask_nonreusable: bool = False) -> str:
             if quote and (not inner or _DSN_PW_PLACEHOLDER_RE.fullmatch(inner)
                           or (inner.startswith("{{") and inner.endswith("}}"))):  # Helm/Jinja template
                 return m.group(0)
-            if not _should_redact_assignment(key, inner, check_keyword=True):
+            # ``kubectl describe``'s ``<set to the key 'k' in secret 's'>`` names a reference, not a value.
+            if not _should_redact_assignment(key, inner, check_keyword=True) \
+                    or (inner == "<set" and m.string.startswith(" to the key ", m.end())):
                 return m.group(0)
             return f"{key}{sep}{quote}{mask(inner)}{quote}"
         text = _YAML_ASSIGN_RE.sub(_redact_yaml, text)
@@ -1618,13 +1621,18 @@ def redact_sensitive_text(text: str, *, force: bool = False, code_file: bool = F
         _zhipu_sub = _mask_token_nonreusable if file_read else _mask_token
         text = _ZHIPU_API_KEY_RE.sub(lambda m: _zhipu_sub(m.group(1)), text)
 
+    # PEM blocks first: a multi-line key under a secret env name must be masked as a whole block.
+    text = _redact_private_key_blocks(text)
+    # Kubernetes Secret data / secret env values run in every mode: the source is a live object,
+    # never a code fixture, and kubectl output is how the model sees them (RIG-11725).
+    text = redact_kubernetes(text, _mask_token_nonreusable("") if file_read else "***")
+
     if not code_file:
         text = _redact_assignments(text, mask_nonreusable=file_read)
 
     # Flags and connection-string keys carry a credential in command text, so they are not
     # gated on code_file: the shape (``--password=`` / ``;AccountKey=``) is unambiguous, and
     # the surfaces that leaked them (approval cards, chat status) run this pass anyway.
-    text = _redact_private_key_blocks(text)
     text = _redact_cli_secrets(text, _mask_token_nonreusable if file_read else None)
 
     if force and "=" in text:
@@ -1852,6 +1860,99 @@ def is_env_dump_command(command: str | None) -> bool:
     return False
 
 
+# kubectl's own name: the binary, its ``k`` alias, or ``oc`` (OpenShift).
+_KUBECTL_NAMES = frozenset({"kubectl", "k", "oc"})
+# A standalone ``kubectl``, ``oc`` or ``k`` word in any case: ``kubectl.exe`` and
+# ``C:\tools\kubectl`` match; ``kubectl-foo`` and ``my_k`` do not.
+_KUBECTL_MENTION_RE = re.compile(r"(?<![A-Za-z0-9_-])(?:kubectl|oc|k)(?![A-Za-z0-9_-])", re.IGNORECASE)
+# Output formats that print a Secret with its keys (``data:``/``stringData:``), so the
+# Kubernetes pass can find and mask the values. Any other format masks the whole output.
+_KUBECTL_STRUCTURED_FORMATS = frozenset({"yaml", "json", "name", "wide"})
+# A leading ``NAME=value`` token, as in ``KUBECONFIG=/tmp/c kubectl get ...``.
+_ENV_ASSIGNMENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
+# The first word of a read must be plain text: any other character lets the shell build the name.
+_PLAIN_COMMAND_WORD_RE = re.compile(r"[A-Za-z0-9._/+-]+")
+
+
+def _binary_base(token: str) -> str:
+    """``/usr/bin/kubectl.exe`` -> ``kubectl``: the lowercase name a command runs under."""
+    return token.rsplit("/", 1)[-1].lower().removesuffix(".exe")
+
+
+def _mentions_kubectl(command: str | None) -> bool:
+    """True if ``command`` names kubectl, oc or k as a standalone word anywhere. Two copies are
+    checked: shell-building characters (quotes, backslash, ``$``, backtick, parens, braces, line
+    breaks) removed, so ``kube''ctl`` joins; and the same characters as spaces, so ``echo)kubectl``
+    and ``${IFS}`` split. A hit in either copy counts as a mention."""
+    if not command or not isinstance(command, str):
+        return False
+    removed = re.sub(r"[\"'\\\\$`(){}\r\n]", "", re.sub(r"\$\{[^}]*\}", "", command))
+    spaced = re.sub(r"[\"'\\\\$`(){}\r\n]", " ", command)
+    return any(_KUBECTL_MENTION_RE.search(t) is not None for t in (removed, spaced))
+
+
+_SHORT_FLAG_CLUSTER_RE = re.compile(r"-[A-Za-z]{2,}")
+
+
+def _is_short_flag_cluster(tok: str) -> bool:
+    """True for a single-dash token that starts with two or more ASCII letters: ``-Ao``,
+    ``-wo``, ``-Aojson``, and ``-Ao=jsonpath={...}`` once a value is attached. kubectl reads
+    each letter as a short flag, so an ``o`` inside the run may be an output flag."""
+    return _SHORT_FLAG_CLUSTER_RE.match(tok) is not None
+
+
+def _kubectl_outputs_structured(args: list[str]) -> bool:
+    """True if every output-format flag in ``args`` names a structured format. All occurrences
+    count, so the first-vs-last flag does not matter: ``-o X``, ``-oX``, ``-o=X``, ``--output X``,
+    ``--output=X``, and the same forms of ``--template``. A missing value fails. A short-flag
+    cluster that does not start with ``o`` (``-Ao``, ``-wo``) fails closed: its ``o`` is hidden."""
+    for i, tok in enumerate(args):
+        if tok in ("-o", "--output", "--template"):
+            value = args[i + 1] if i + 1 < len(args) else None
+        elif tok.startswith(("--output=", "--template=")):
+            value = tok.split("=", 1)[1]
+        elif tok.startswith("-o") and not tok.startswith("--"):
+            value = tok[2:].removeprefix("=")
+        elif _is_short_flag_cluster(tok):
+            return False
+        else:
+            continue
+        if value not in _KUBECTL_STRUCTURED_FORMATS:
+            return False
+    return True
+
+
+def _is_structured_kubectl_read(command: str) -> bool:
+    """True only for a kubectl/oc/k read that stays unmasked: one pipeline segment on one line,
+    no ``$``, backtick, or parenthesis, shlex-parseable, the binary first after ``NAME=value``
+    prefixes, not ``set env --list``, and every output format structured. Anything else is
+    masked whole, so a wrapper, substitution or pipe cannot hide a Secret value from the
+    per-line pass."""
+    stripped = command.strip()
+    if "\n" in command or "\r" in command or stripped[:1] in ("|", ";", "&") or stripped[-1:] in ("|", ";", "&"):
+        return False
+    if len(_command_segments(command)) != 1:
+        return False
+    if any(ch in command for ch in "$`(){}*?[]~"):
+        return False
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        return False
+    while tokens and _ENV_ASSIGNMENT_RE.match(tokens[0]):
+        tokens = tokens[1:]
+    if not tokens or _binary_base(tokens[0]) not in _KUBECTL_NAMES:
+        return False
+    raw_words = [w for w in command.replace("\\\n", "").split() if not _ENV_ASSIGNMENT_RE.match(w)]
+    if not raw_words or not _PLAIN_COMMAND_WORD_RE.fullmatch(raw_words[0]):
+        return False
+    args = tokens[1:]
+    if "set" in args and "env" in args and any(
+            tok in ("-l", "--list") or tok.startswith("--list=") for tok in args):
+        return False
+    return _kubectl_outputs_structured(args)
+
+
 REDACTION_UNAVAILABLE = "[redaction-unavailable]"
 # The opaque branch needs a 20-char floor (the floor the gateway/A2A sweeps always had): without it the
 # English word "bearer" turns "the bearer of bad news" into "Bearer [redacted] bad news" on every chat
@@ -1881,6 +1982,9 @@ def redact_terminal_output(output: str, command: str | None = None, *, force: bo
     source/config dumps."""
     if not output:
         return output
+    if force or _redact_enabled():
+        if _mentions_kubectl(command) and not _is_structured_kubectl_read(command):
+            return "***"
     code_file = not (is_env_dump_command(command) or _command_reads_secret_file(command))
     redacted = redact_sensitive_text(output, force=force, code_file=code_file)
     # Source-preserving output still gets the Python-repr pass on high-confidence

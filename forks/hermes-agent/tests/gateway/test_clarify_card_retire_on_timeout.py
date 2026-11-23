@@ -126,6 +126,29 @@ def test_clarify_retires_live_adapter_card_when_status_adapter_is_stale():
     assert stale.retired == []
 
 
+def test_clarify_sends_through_live_adapter_when_stale_adapter_is_disconnected():
+    class _StaleAdapter:
+        _client = None
+
+        def pause_typing_for_chat(self, chat_id):
+            raise RuntimeError("Not connected")
+
+        def resume_typing_for_chat(self, chat_id):
+            raise RuntimeError("Not connected")
+
+        async def send_clarify(self, **kwargs):
+            raise RuntimeError("Not connected")
+
+    stale, live = _StaleAdapter(), _CardAdapter()
+
+    reply, _labels = _run_clarify(stale, answers=("green",), live_adapter=live)
+
+    assert reply["answers"] == {"q0": "green"}
+    assert _asked(live) == ["Pick one"]
+    assert live.paused == 1
+    assert live.resumed == 1
+
+
 def test_late_text_fallback_uses_adapter_live_when_fallback_starts():
     from concurrent.futures import Future
 

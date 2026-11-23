@@ -2004,21 +2004,17 @@ mod tests {
 			Ok(())
 		}
 	}
-	/// A test writer that cancels the blocked read after the second keepalive.
+	/// A test writer that cancels the blocked read after the first keepalive.
 	struct CancelOnKeepalive {
 		sink: Sink,
 		cancel: Arc<AtomicBool>,
-		keepalives: usize,
 	}
 
 	impl Write for CancelOnKeepalive {
 		fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
 			let n = self.sink.write(buf)?;
 			if buf == [0, 0, 0, 7] {
-				self.keepalives += 1;
-				if self.keepalives == 2 {
-					self.cancel.store(true, Ordering::Relaxed);
-				}
+				self.cancel.store(true, Ordering::Relaxed);
 			}
 			Ok(n)
 		}
@@ -2637,6 +2633,20 @@ mod tests {
 	}
 
 	#[test]
+	fn timeout_check_sends_due_keepalive_before_timeout() {
+		let sink = Sink::default();
+		let w = writer(&sink, WriteConfig::default());
+		w.start_multiplex().unwrap();
+		let counters = IoCounters::default();
+		let now = clock_ms();
+		counters.last_in.store(now, Ordering::Relaxed);
+		w.shared.counters.last_out.store(now, Ordering::Relaxed);
+		let timing = Timing { timeout: u64::MAX, lull: 0, select: 1 };
+		check_timeout(&counters, Some(timing), Some(Role::Sender), Some(&w), 0, true).unwrap();
+		assert_eq!(sink.take(), [0, 0, 0, 7]);
+	}
+
+	#[test]
 	fn reader_follows_timeout_set_on_linked_writer() {
 		let (mut r, _tx, _) = blocking_reader(None);
 		let sink = Sink::default();
@@ -2906,16 +2916,21 @@ mod tests {
 			.map_err(|err| cancel_before_timeout(err, Some(&cancel)))
 			.unwrap_err();
 		assert_eq!(RsyncError::from_io(&err, RERR_STREAMIO).code, RERR_SIGNAL);
+		cancel.store(false, Ordering::Relaxed);
+		let err = check_timeout(&IoCounters::default(), Some(timing), Some(Role::Sender), None, 0, false)
+			.map_err(|err| cancel_before_timeout(err, Some(&cancel)))
+			.unwrap_err();
+		assert_eq!(RsyncError::from_io(&err, RERR_STREAMIO).code, RERR_TIMEOUT);
 	}
 
-	/// The mux's second emitted keepalive cancels the blocked read before its next
+	/// The mux's first emitted keepalive cancels the blocked read before its next
 	/// timeout check. With keepalive sending disabled, the read times out and fails.
 	#[test]
 	fn blocked_sender_sends_keepalives_instead_of_timing_out() {
 		let (mut r, _tx, cancel) = blocking_reader(Some(Duration::from_secs(2)));
 		let sink = Sink::default();
 		let w = MuxWriter::new(
-			Box::new(CancelOnKeepalive { sink: sink.clone(), cancel, keepalives: 0 }),
+			Box::new(CancelOnKeepalive { sink: sink.clone(), cancel }),
 			IoCounters::default(),
 			WriteConfig { timeout: Some(Duration::from_secs(2)), ..WriteConfig::default() },
 		);
@@ -2925,7 +2940,7 @@ mod tests {
 		let err = r.read(&mut [0u8; 1]).unwrap_err();
 		assert_eq!(RsyncError::from_io(&err, RERR_STREAMIO).code, RERR_SIGNAL);
 		let out = sink.take();
-		assert!(out.len() >= 2 * HDR && out.chunks(HDR).all(|chunk| chunk == [0, 0, 0, 7]), "{out:?}");
+		assert!(out.len() >= HDR && out.chunks(HDR).all(|chunk| chunk == [0, 0, 0, 7]), "{out:?}");
 	}
 
 	#[test]

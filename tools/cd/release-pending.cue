@@ -16,7 +16,6 @@ pending: [=~"^(tools|forks)/[a-z0-9-]+$"]: {
 pending: {
 	"forks/cla-github-action": issue:                  "RIG-12303"
 	"forks/hermes-agent": issue:                       "RIG-12299"
-	"forks/terraform-provider-googleworkspace": issue: "RIG-12303"
 	"forks/virtual": issue:                            "RIG-12303"
 	"forks/wails": issue:                              "RIG-12303"
 }

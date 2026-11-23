@@ -207,6 +207,12 @@ func TestLinearBackendReadAndWarning(t *testing.T) {
 	if backend.IssueRefPattern().MatchString("branch " + legacyRef) {
 		t.Fatal("IssueRefPattern matched an unsupported reference")
 	}
+	if got := backend.CanonicalRef("SEA" + "-42"); got != "SEA"+"-42" {
+		t.Fatalf("CanonicalRef rewrote a retired issue reference: %q", got)
+	}
+	if backend.IssueRefPattern().MatchString("branch SEA" + "-42") {
+		t.Fatal("IssueRefPattern matched a retired issue reference")
+	}
 	if backend.IssueRefPattern().MatchString("branch EX-42") {
 		t.Fatal("IssueRefPattern matched a non-RIG reference")
 	}

@@ -37,7 +37,7 @@ func TestParseBranchClaim(t *testing.T) {
 			}
 		})
 	}
-	for _, branch := range []string{"release/notes-rig-1-update", "ci-build/rig-1143", "ci-build/ex-1143-x", "ci-build-ex-1143-x", "renovate/rig-1143-update", "mintaka/rig-3-x"} {
+	for _, branch := range []string{"release/notes-rig-1-update", "ci-build/rig-1143", "ci-build/ex-1143-x", "ci-build-ex-1143-x", "ci-build-sea-1143-x", "ci-build/sea-1143-x", "renovate/rig-1143-update", "mintaka/rig-3-x"} {
 		if claim, ok := ParseBranchClaim(branch, refs, nil, nil); ok && !IsReservedCodename(claim.Codename) {
 			t.Errorf("ParseBranchClaim(%q) = %+v, want no agent claim", branch, claim)
 		}

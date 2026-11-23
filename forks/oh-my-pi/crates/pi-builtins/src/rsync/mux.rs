@@ -827,7 +827,8 @@ impl MuxWriter {
 				let due = *next_check.get_or_insert(now + Duration::from_secs(timing.select));
 				if now >= due {
 					let role = self.state().role;
-					check_timeout(&sh.counters, Some(timing), role, None, 0, false)?;
+					check_timeout(&sh.counters, Some(timing), role, None, 0, false)
+						.map_err(|err| cancel_before_timeout(err, sh.cancel.as_deref()))?;
 					next_check = Some(now + Duration::from_secs(timing.select));
 				}
 			}
@@ -1145,6 +1146,11 @@ fn check_timeout(
 	let chk = counters.last_in.load(Ordering::Relaxed).max(last_out);
 	let idle = idle_secs(now, chk);
 	if idle >= timing.timeout { Err(timeout_error(role, idle)) } else { Ok(()) }
+}
+
+fn cancel_before_timeout(err: io::Error, cancel: Option<&AtomicBool>) -> io::Error {
+	// Cancellation may arrive while the timeout check is sending a keepalive.
+	if cancel.is_some_and(|flag| flag.load(Ordering::Relaxed)) { RsyncError::cancelled_io() } else { err }
 }
 
 /// Reader settings.
@@ -1944,7 +1950,8 @@ impl MuxReader {
 					// to the generator's pipe, and the generator sees socket
 					// activity through the shared counters.
 					let writer = if self.refill_hook.is_some() { None } else { self.writer.as_ref() };
-					check_timeout(&sh.counters, Some(timing), role, writer, 0, false)?;
+					check_timeout(&sh.counters, Some(timing), role, writer, 0, false)
+						.map_err(|err| cancel_before_timeout(err, Some(&sh.cancel)))?;
 					st = sh.lock();
 					next_check = Some(Instant::now() + select);
 					continue;
@@ -2889,6 +2896,16 @@ mod tests {
 		r.read_exact(&mut byte).unwrap();
 		drop(t.join().unwrap());
 		assert_eq!(*lock(&calls), [false]);
+	}
+
+	#[test]
+	fn cancellation_takes_precedence_over_due_timeout() {
+		let cancel = AtomicBool::new(true);
+		let timing = Timing { timeout: 0, lull: 0, select: 1 };
+		let err = check_timeout(&IoCounters::default(), Some(timing), Some(Role::Sender), None, 0, false)
+			.map_err(|err| cancel_before_timeout(err, Some(&cancel)))
+			.unwrap_err();
+		assert_eq!(RsyncError::from_io(&err, RERR_STREAMIO).code, RERR_SIGNAL);
 	}
 
 	/// The mux's second emitted keepalive cancels the blocked read before its next

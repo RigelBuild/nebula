@@ -163,7 +163,7 @@ func TestCapGoBuild(t *testing.T) {
 		aNew := plantGoAction(t, root, actNew, outNew, base.Add(-1*time.Hour))
 		dNew := plantGoFile(t, root, outNew, "-d", strings.Repeat("y", 1000), base.Add(-1*time.Hour))
 
-		items, total, err := scanGoBuild(t.Context(), root)
+		items, total, err := scanGoBuild(t.Context(), root, time.Time{}, true)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -177,7 +177,7 @@ func TestCapGoBuild(t *testing.T) {
 		}
 
 		// A cap just under the size minus the oldest -a forces removing aOld then dShared.
-		removed, freed, err := capGoBuild(t.Context(), root, size-200, true)
+		removed, freed, err := capGoBuild(t.Context(), root, size-200, time.Time{}, true)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -199,7 +199,7 @@ func TestCapGoBuild(t *testing.T) {
 		root := t.TempDir()
 		aOld := plantGoAction(t, root, actOld, outShared, base.Add(-3*time.Hour))
 		dShared := plantGoFile(t, root, outShared, "-d", "x", base.Add(-3*time.Hour))
-		removed, _, err := capGoBuild(t.Context(), root, 1<<30, true)
+		removed, _, err := capGoBuild(t.Context(), root, 1<<30, time.Time{}, true)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -230,7 +230,7 @@ func TestCapGoBuild(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		if _, _, err := capGoBuild(t.Context(), root, 1, true); err != nil {
+		if _, _, err := capGoBuild(t.Context(), root, 1, time.Time{}, true); err != nil {
 			t.Fatal(err)
 		}
 		if exists(t, d) {
@@ -252,7 +252,7 @@ func TestCapGoBuild(t *testing.T) {
 		root := t.TempDir()
 		aOld := plantGoAction(t, root, actOld, outShared, base.Add(-3*time.Hour))
 		d := plantGoOutputDir(t, root, outShared, base.Add(-time.Hour))
-		removed, _, err := capGoBuild(t.Context(), root, 1, false)
+		removed, _, err := capGoBuild(t.Context(), root, 1, time.Time{}, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -298,6 +298,48 @@ func TestPruneGoCachesCapsOnlyGoBuildAfterAgePass(t *testing.T) {
 	}
 	if !strings.Contains(buf.String(), "go cache go-build: 1 item(s) over the 1500-byte cap") {
 		t.Fatalf("report = %q", buf.String())
+	}
+}
+
+func TestPruneGoCachesDryRunCapMatchesApply(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 11, 10, 0, 0, 0, 0, time.UTC)
+	cutoff := now.Add(-24 * time.Hour)
+	const maxBytes = 50
+
+	capReport := func(apply bool) string {
+		t.Helper()
+		cacheDir := t.TempDir()
+		root := filepath.Join(cacheDir, goBuildDir)
+		stale := plantGoFile(t, root, actOld, "-a", strings.Repeat("s", 1000), cutoff.Add(-time.Hour))
+		plantGoFile(t, root, actMid, "-a", strings.Repeat("f", 100), now.Add(-2*time.Hour))
+		plantGoFile(t, root, actNew, "-a", strings.Repeat("g", 100), now.Add(-time.Hour))
+
+		var buf bytes.Buffer
+		if err := pruneGoCaches(t.Context(), cacheDir, cutoff, maxBytes, apply, &printer{w: &buf}); err != nil {
+			t.Fatal(err)
+		}
+		if exists(t, stale) == apply {
+			t.Fatalf("stale -a exists after apply=%t", apply)
+		}
+
+		for _, line := range strings.Split(buf.String(), "\n") {
+			if strings.Contains(line, " item(s) over the ") {
+				return strings.TrimSuffix(strings.TrimSuffix(line, " (dry run)"), " removed")
+			}
+		}
+		t.Fatalf("cap report missing from %q", buf.String())
+		return ""
+	}
+
+	dryReport := capReport(false)
+	applyReport := capReport(true)
+	if dryReport != applyReport {
+		t.Fatalf("dry-run cap report = %q, apply report = %q", dryReport, applyReport)
+	}
+	want := "go cache go-build: 2 item(s) over the 50-byte cap, 200 byte(s)"
+	if dryReport != want {
+		t.Fatalf("cap report = %q, want %q", dryReport, want)
 	}
 }
 

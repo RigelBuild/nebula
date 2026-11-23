@@ -35,7 +35,7 @@ func pruneGoCaches(ctx context.Context, cacheDir string, cutoff time.Time, maxBy
 		if name != goBuildDir {
 			continue
 		}
-		items, freed, err := capGoBuild(ctx, filepath.Join(cacheDir, name), maxBytes, apply)
+		items, freed, err := capGoBuild(ctx, filepath.Join(cacheDir, name), maxBytes, cutoff, apply)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("cap %s: %w", name, err))
 		}
@@ -105,10 +105,11 @@ type goBuildItem struct {
 
 // capGoBuild removes go-build items, oldest mtime first, until the cache is at most maxBytes.
 // It follows Go's trimSubdir (cmd/go/internal/cache/cache.go): every -a file, -d file and -d
-// directory is its own item. Dry run only counts. It assumes no concurrent go run or go tool
-// resolves an evicted -d at that moment; at the default cap eviction reaches only old items.
-func capGoBuild(ctx context.Context, root string, maxBytes int64, apply bool) (int, int64, error) {
-	items, total, err := scanGoBuild(ctx, root)
+// directory is its own item. In dry runs, it excludes files the age pass would remove. Dry run only
+// counts. It assumes no concurrent go run or go tool resolves an evicted -d at that moment; at the
+// default cap eviction reaches only old items.
+func capGoBuild(ctx context.Context, root string, maxBytes int64, cutoff time.Time, apply bool) (int, int64, error) {
+	items, total, err := scanGoBuild(ctx, root, cutoff, apply)
 	if err != nil {
 		return 0, 0, err
 	}
@@ -140,9 +141,10 @@ func capGoBuild(ctx context.Context, root string, maxBytes int64, apply bool) (i
 	return removed, freed, errors.Join(errs...)
 }
 
-// scanGoBuild lists every -a and -d item in the two-hex subdirs of root and the total size.
-// Files at the root (README, trim.txt) and symlinks are never items. A missing root is an empty cache.
-func scanGoBuild(ctx context.Context, root string) ([]goBuildItem, int64, error) {
+// scanGoBuild lists every -a and -d item in the two-hex subdirs of root and the total size. Dry
+// runs exclude regular files older than cutoff. Files at the root (README, trim.txt) and symlinks
+// are never items. A missing root is an empty cache.
+func scanGoBuild(ctx context.Context, root string, cutoff time.Time, apply bool) ([]goBuildItem, int64, error) {
 	var items []goBuildItem
 	var total int64
 	subs, err := os.ReadDir(root)
@@ -180,12 +182,18 @@ func scanGoBuild(ctx context.Context, root string) ([]goBuildItem, int64, error)
 				}
 				return nil, 0, err
 			}
+			if !apply && !f.IsDir() && info.ModTime().Before(cutoff) {
+				continue
+			}
 			path := filepath.Join(dir, name)
 			size := info.Size()
 			if f.IsDir() {
-				if size, err = treeSize(path); err != nil {
+				if size, err = treeSize(path, cutoff, apply); err != nil {
 					return nil, 0, err
 				}
+			}
+			if !apply && f.IsDir() && size == 0 {
+				continue
 			}
 			items = append(items, goBuildItem{path: path, mtime: info.ModTime(), size: size})
 			total += size
@@ -206,8 +214,8 @@ func isHexPair(name string) bool {
 	return true
 }
 
-// treeSize sums the regular files under a -d directory. WalkDir does not follow symlinks.
-func treeSize(path string) (int64, error) {
+// treeSize sums the regular files under a -d directory, excluding stale files in dry runs.
+func treeSize(path string, cutoff time.Time, apply bool) (int64, error) {
 	var total int64
 	err := filepath.WalkDir(path, func(p string, entry fs.DirEntry, err error) error {
 		if err != nil {
@@ -225,6 +233,9 @@ func treeSize(path string) (int64, error) {
 				return nil
 			}
 			return err
+		}
+		if !apply && info.ModTime().Before(cutoff) {
+			return nil
 		}
 		total += info.Size()
 		return nil

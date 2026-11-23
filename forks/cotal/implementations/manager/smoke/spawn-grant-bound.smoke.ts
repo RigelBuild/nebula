@@ -192,10 +192,9 @@ try {
     const w = await spawnAs(issuedCallerOf("dispatcher"), "worker");
     check("it hands the role on", w.ok === true, w);
     const resume = await spawnAs(caller, "worker", { resume: "existing-worker-session" });
-    const roleRefusal = "spawn: this spawn hands its helper more than the spawner holds: role worker (a spawner hands on a role it was given as its own or as the `role:worker` capability). A spawner hands on only what its own issued credential carries (SPEC 13.15). Drop these from the persona or the spawn, or have the operator widen the spawner's own persona.";
-    check("resuming a worker without its role is refused with the same grant error", resume.ok === false && resume.code === undefined && resume.error === roleRefusal, resume);
+    check("resuming a worker without its role is refused with the same grant error", resume.ok === false && resume.code === undefined && resume.error === r.error, resume);
     const allowedResume = await spawnAs(issuedCallerOf("dispatcher"), "worker", { resume: "existing-worker-session" });
-    check("a spawner holding role:worker can resume the worker", allowedResume.ok === true, allowedResume);
+    check("a spawner holding role:worker passes the grant bound with a resume", allowedResume.ok === true, allowedResume);
     const dt = await spawnAs(issuedCallerOf("dispatcher"), "deputy");
     check("and the role:worker token", dt.ok === true, dt);
   }

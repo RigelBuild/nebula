@@ -95,7 +95,7 @@ M.managerInstanceId = "smoke-manager-instance";
   requestDeliveryAdmin: requestDeliveryAdminZeroMemberships,
   getRoster: () => [...M.agents.values()].map((a) => ({ card: { id: principalKey(DEV_OWNER, a.id).key, name: a.name }, status: "idle", lifecycleUid: a.lifecycleUid })),
 };
-const con: Connector = { kind: "connector", name: "smoke-gb", requires: ["node"], eventChannel, buildLaunch: () => ({ command: "true", args: [], env: {} }) };
+const con: Connector = { kind: "connector", name: "smoke-gb", requires: ["node"], eventChannel, supportsResume: true, buildLaunch: () => ({ command: "true", args: [], env: {} }) };
 registry.register(con);
 
 const spawnAs = (caller: EpCaller | undefined, name: string, extra: Record<string, unknown> = {}): Promise<ControlReply> =>
@@ -191,6 +191,11 @@ try {
     check("its credential binds the worker task queue", raw.some((s) => s.startsWith("$JS.API.CONSUMER.MSG.NEXT.") && s.endsWith(".svc_worker")), raw.filter((s) => s.includes("svc_")));
     const w = await spawnAs(issuedCallerOf("dispatcher"), "worker");
     check("it hands the role on", w.ok === true, w);
+    const resume = await spawnAs(caller, "worker", { resume: "existing-worker-session" });
+    const roleRefusal = "spawn: this spawn hands its helper more than the spawner holds: role worker (a spawner hands on a role it was given as its own or as the `role:worker` capability). A spawner hands on only what its own issued credential carries (SPEC 13.15). Drop these from the persona or the spawn, or have the operator widen the spawner's own persona.";
+    check("resuming a worker without its role is refused with the same grant error", resume.ok === false && resume.code === undefined && resume.error === roleRefusal, resume);
+    const allowedResume = await spawnAs(issuedCallerOf("dispatcher"), "worker", { resume: "existing-worker-session" });
+    check("a spawner holding role:worker can resume the worker", allowedResume.ok === true, allowedResume);
     const dt = await spawnAs(issuedCallerOf("dispatcher"), "deputy");
     check("and the role:worker token", dt.ok === true, dt);
   }

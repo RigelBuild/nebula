@@ -303,17 +303,8 @@ _HELD_COLUMNS = ('admission_id, target_session_id, seq, principal_id, payload_js
                  'lineage_json, status, outcome, owner_epoch, generation')
 
 
-def held_admissions(authority, session_ids) -> set:
-    """``{id for id in session_ids if holds_admission(authority, id)}``, read in batches.
-
-    The startup resume scan asks this for every candidate, off the loop. It is two batched queries per chunk of
-    at most ``HELD_ID_CHUNK`` targets, plus a per-id owner lookup (``admission_owner``, one read per id) that
-    runs first. The per-id reads of ``holds_admission`` are not batched away: ``_restart_interrupted`` still
-    reads one admission result per interrupted row. The pending query and the latest-decision query are the
-    two batched reads; the latest decision row is picked in SQL. The answer matches ``holds_admission`` per id,
-    including the steer-row rule. A retiring store that cannot answer holds every candidate, as
-    ``holds_admission`` does; a serving store still raises.
-    """
+def held_admissions(authority, session_ids, *, resumed_admissions=(), resumed_sessions=(), resume_pending=False) -> set:
+    """Read held sessions in batches, allowing only explicitly resumed admissions."""
     ids = list(session_ids)
     if not ids:
         return set()
@@ -323,12 +314,14 @@ def held_admissions(authority, session_ids) -> set:
         targets = sorted({t for pair in pairs.values() for t in pair})
         pending: set = set()
         latest: dict = {}
+        interrupted: set = set(resumed_admissions)
         for start in range(0, len(targets), HELD_ID_CHUNK):
             chunk = targets[start:start + HELD_ID_CHUNK]
             marks = ','.join('?' * len(chunk))
             pending.update(row[0] for row in authority.db._read_all(
                 f"SELECT DISTINCT target_session_id FROM session_admissions WHERE target_session_id IN ({marks}) "
-                "AND status IN ('queued','started','unknown')", chunk))
+                + ("AND status IN ('started','unknown')" if resume_pending else
+                   "AND status IN ('queued','started','unknown')"), chunk))
             for row in authority.db._read_all(
                     f"SELECT {_HELD_COLUMNS} FROM ("
                     f"  SELECT a.*, ROW_NUMBER() OVER (PARTITION BY a.target_session_id ORDER BY a.seq DESC) AS rn"
@@ -345,7 +338,9 @@ def held_admissions(authority, session_ids) -> set:
                 continue
             rows = [latest[t] for t in pairs[sid] if t in latest]
             newest = max(rows, key=lambda r: r['seq'], default=None)
-            if newest is not None and not _restart_interrupted(authority, newest):
+            resumed = any(t in resumed_sessions for t in pairs[sid])
+            if newest is not None and newest['admission_id'] not in interrupted and not (
+                    resume_pending and resumed and newest['status'] == 'queued') and not _restart_interrupted(authority, newest):
                 held.add(sid)
         return held
     except Exception as exc:

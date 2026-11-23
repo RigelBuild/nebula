@@ -130,17 +130,39 @@ class GatewayStartupMixin:
         """Dispatch one synthetic startup resume and wait for its agent turn (inbound stays queued
         until it finishes, else a user message can race it)."""
         from gateway.run import _AGENT_PENDING_SENTINEL
+        cancelled = False
         try:
-            await adapter.handle_message(event)
+            if adapter.platform == Platform.LOCAL:
+                state = self._peek_session_state(session_key)
+                if state is not None and state.turn.agent is _AGENT_PENDING_SENTINEL:
+                    self._release_running_agent_state(session_key)
+                await self._primary_message_handler()(event)
+            else:
+                await adapter.handle_message(event)
             session_tasks = getattr(adapter, "_session_tasks", {})
             task = session_tasks.get(session_key) if isinstance(session_tasks, dict) else None
             if task is not None:
                 await asyncio.shield(task)
+        except asyncio.CancelledError:
+            cancelled = True
+            raise
         finally:
             # Release the pre-claimed slot if handle_message raised before _handle_message took ownership.
             _pre_state = self._peek_session_state(session_key)
             if (_pre_state.turn.agent if _pre_state else None) is _AGENT_PENDING_SENTINEL:
                 self._release_running_agent_state(session_key)
+            from gateway.session_authorities import all_authorities, admission_owner
+            from gateway.session_contract import SessionRef
+            entry = self.session_store._entries.get(session_key)
+            if not cancelled and entry is not None:
+                for authority in all_authorities(self):
+                    owner = await asyncio.to_thread(admission_owner, authority, entry.session_id)
+                    holds = getattr(authority, 'restart_resume_holds', set())
+                    if owner in holds:
+                        await asyncio.to_thread(authority.db._execute_write, lambda conn: conn.execute(
+                            "DELETE FROM state_meta WHERE key LIKE 'restart_resume:%' AND value=?", (owner,)))
+                        holds.discard(owner)
+                        authority._schedule(SessionRef(authority.profile_id, owner))
 
     def _queue_startup_restore_event(self, event: MessageEvent) -> None:
         queue = getattr(self, "_startup_restore_queue", None)
@@ -640,20 +662,115 @@ class GatewayStartupMixin:
 
     async def _schedule_resume_pending_sessions_async(self, platform=None) -> int:
         """``_schedule_resume_pending_sessions`` for a coroutine: the held set is read in a worker thread."""
+        from gateway.session_authorities import all_authorities, admission_owner
+        from gateway.session_unattended_unknown import is_unattended, settle_recovered_session
+        from gateway.run import _auto_continue_freshness_window, _is_fresh_gateway_interruption
+        from hermes_state_runtime import _row
+        authorities = all_authorities(self)
+        with self.session_store._lock:
+            self.session_store._ensure_loaded_locked()
+            entries = list(self.session_store._entries.values())
+        recovered = {}
+        markers = {}
+        for authority in authorities:
+            try:
+                rows = await asyncio.to_thread(authority.db._read_all,
+                    "SELECT * FROM session_admissions WHERE status='unknown' AND owner_epoch<?", (authority.epoch,))
+                for raw in rows:
+                    row = _row(raw)
+                    if row['admission_id'] in getattr(authority, 'restart_fenced_admissions', ()) and not is_unattended(row):
+                        recovered.setdefault(row['target_session_id'], []).append((authority, row['admission_id']))
+                rows = await asyncio.to_thread(authority.db._read_all,
+                    "SELECT key,value FROM state_meta WHERE key LIKE 'restart_resume:%'")
+                for row in rows:
+                    markers.setdefault(row['value'], []).append((authority, row['key'].removeprefix('restart_resume:')))
+            except Exception:
+                logger.warning('Could not enumerate restart admissions', exc_info=True)
+        def lookup_owners():
+            owners = {}
+            for authority in authorities:
+                for entry in entries:
+                    try:
+                        owners[(id(authority), entry.session_id)] = admission_owner(authority, entry.session_id)
+                    except Exception:
+                        logger.warning('Could not look up restart owner for %s', entry.session_id, exc_info=True)
+            return owners
+        owners = await asyncio.to_thread(lookup_owners)
+        for entry in entries:
+            if entry.resume_pending or entry.origin is None or entry.suspended or not any(
+                    owners.get((id(authority), entry.session_id)) in recovered for authority in authorities):
+                continue
+            if platform is not None and entry.origin.platform != platform:
+                continue
+            try:
+                source = self._restored_source(entry)
+                if self._delivery_adapter_for(source) and self._resume_owner_authorized(entry.session_key, source):
+                    await self.async_session_store.mark_resume_pending(entry.session_key, 'restart_interrupted')
+            except Exception:
+                logger.warning('Could not mark restart session %s', entry.session_id, exc_info=True)
         candidates = self._resume_pending_candidates(platform)
         if not candidates:
-            return self._schedule_resume_pending_sessions(platform=platform, candidates=candidates)
-        from gateway.session_authorities import all_authorities
-        held = await asyncio.to_thread(self._held_resume_sessions, all_authorities(self), candidates)
-        return self._schedule_resume_pending_sessions(platform=platform, candidates=candidates, held=held)
+            return 0
+        resolved_admissions = set()
+        resolved_sessions = set()
+        eligible = []
+        window = _auto_continue_freshness_window()
+        for entry in candidates:
+            try:
+                if (not self._still_resume_pending(entry.session_key)
+                        or not _is_fresh_gateway_interruption(entry.last_resume_marked_at or entry.updated_at, window_secs=window)
+                        or self._is_session_running(entry.session_key)):
+                    continue
+                source = self._restored_source(entry)
+                if self._delivery_adapter_for(source) is None or not self._resume_owner_authorized(entry.session_key, source):
+                    continue
+                eligible.append(entry)
+                for authority in authorities:
+                    owner = owners.get((id(authority), entry.session_id))
+                    for candidate_authority, admission_id in recovered.get(owner, ()):
+                        if candidate_authority is not authority:
+                            continue
+                        if not await self.async_session_store.mark_resume_pending(entry.session_key, entry.resume_reason):
+                            continue
+                        settled = await settle_recovered_session(authority, entry.session_id)
+                        if settled:
+                            resolved_admissions.add(settled)
+                            resolved_sessions.add(owner)
+                    for marker_authority, admission_id in markers.get(owner, ()):
+                        if marker_authority is not authority:
+                            continue
+                        resolved_admissions.add(admission_id)
+                        resolved_sessions.add(owner)
+                        holds = getattr(authority, 'restart_resume_holds', None)
+                        if holds is None:
+                            holds = authority.restart_resume_holds = set()
+                        holds.add(owner)
+            except Exception:
+                logger.warning('Could not recover restart session %s', entry.session_id, exc_info=True)
+        held = await asyncio.to_thread(self._held_resume_sessions, authorities, eligible, resolved_admissions, resolved_sessions)
+        scheduled = self._schedule_resume_pending_sessions(platform=platform, candidates=eligible, held=held)
+        from gateway.session_contract import SessionRef
+        for entry in eligible:
+            if self._is_session_running(entry.session_key):
+                continue
+            for authority in authorities:
+                holds = getattr(authority, 'restart_resume_holds', set())
+                owner = owners.get((id(authority), entry.session_id))
+                if owner in holds:
+                    await asyncio.to_thread(authority.db._execute_write, lambda conn: conn.execute(
+                        "DELETE FROM state_meta WHERE key LIKE 'restart_resume:%' AND value=?", (owner,)))
+                    holds.discard(owner)
+                    authority._schedule(SessionRef(authority.profile_id, owner))
+        return scheduled
 
-    def _held_resume_sessions(self, authorities, candidates) -> set:
+    def _held_resume_sessions(self, authorities, candidates, resumed_admissions=(), resumed_sessions=()) -> set:
         """Session ids of *candidates* a canonical admission holds (see ``held_admissions``), one read per authority."""
         from gateway.session_authorities import held_admissions
         ids = [entry.session_id for entry in candidates]
         held: set = set()
         for authority in authorities:
-            held |= held_admissions(authority, ids)
+            held |= held_admissions(authority, ids, resumed_admissions=resumed_admissions,
+                                    resumed_sessions=resumed_sessions, resume_pending=True)
         return held
 
     def _still_resume_pending(self, session_key: str) -> bool:

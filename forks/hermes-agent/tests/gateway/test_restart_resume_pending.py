@@ -658,6 +658,312 @@ async def _startup_auto_resume(authority, entry):
 
 
 @pytest.mark.asyncio
+async def test_stale_restart_marker_keeps_admission_fenced(tmp_path, monkeypatch):
+    from datetime import timedelta
+    from hermes_state_runtime import begin_runtime_epoch, claim_session_input, get_session_admission, recover_session_inputs
+    from tests.gateway.test_session_authority_cancel_settlement import _submit
+
+    db, authority = _restart_authority(tmp_path, monkeypatch)
+    entry = _auto_resume_entry('agent:main:telegram:dm:stale', 'stale')
+    entry.last_resume_marked_at = datetime.now() - timedelta(hours=5)
+    runner, adapter = make_restart_runner()
+    runner.session_authority = authority
+    runner.session_store._entries = {entry.session_key: entry}
+    with db:
+        await _submit(authority, 'lost')
+        lost = claim_session_input(db, epoch=authority.epoch, session_id='s')
+        authority.restart_fenced_admissions = {lost['admission_id']}
+        authority.epoch = begin_runtime_epoch(db, instance_id='restart')
+        recover_session_inputs(db, epoch=authority.epoch)
+        assert await runner._schedule_resume_pending_sessions_async() == 0
+        assert get_session_admission(db, admission_id=lost['admission_id'])['status'] == 'unknown'
+        assert 's' not in getattr(authority, 'restart_resume_holds', set())
+
+
+@pytest.mark.asyncio
+async def test_second_compression_keeps_started_admission_unknown(tmp_path, monkeypatch):
+    from gateway.session_authority import _restart_fenced_admissions
+    from hermes_state_runtime import begin_runtime_epoch, claim_session_input, get_session_admission, recover_session_inputs
+    from tests.gateway.test_session_authority_cancel_settlement import _submit
+
+    db, authority = _restart_authority(tmp_path, monkeypatch)
+    with db:
+        db.publish_compression_child(parent_session_id='s', child_session_id='c1', source='test',
+                                     messages=[{'role': 'assistant', 'content': 'summary'}],
+                                     require_compression_lease=False)
+        await _submit(authority, 'lost')
+        lost = claim_session_input(db, epoch=authority.epoch, session_id='s')
+        db.publish_compression_child(parent_session_id='c1', child_session_id='c2', source='test',
+                                     messages=[{'role': 'assistant', 'content': 'summary'}],
+                                     require_compression_lease=False)
+        import json
+        row = db._read_one('SELECT lineage_json FROM session_admissions WHERE admission_id=?', (lost['admission_id'],))
+        assert json.loads(row['lineage_json']) == ['s', 'c2']
+        authority.epoch = begin_runtime_epoch(db, instance_id='restart')
+        assert lost['admission_id'] not in _restart_fenced_admissions(db, authority.epoch)
+        recover_session_inputs(db, epoch=authority.epoch)
+        assert get_session_admission(db, admission_id=lost['admission_id'])['status'] == 'unknown'
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('prior', ['reset', 'compression'])
+async def test_worker_after_prior_boundary_auto_resumes_after_crash(tmp_path, monkeypatch, prior):
+    import subprocess
+    import sys
+    from gateway.session_authority import _restart_fenced_admissions
+    from gateway.session_worker_reservation import reserve_admission_worker
+    from hermes_state_runtime import admit_session_input, begin_runtime_epoch, claim_session_input, get_session_admission, recover_session_inputs
+    from tests.gateway.test_worker_admission_reservation import hello
+    from tests.hermes_state.test_target_advance_fence import _local_session, _mutate
+
+    db, authority = _restart_authority(tmp_path, monkeypatch)
+    runner, adapter = make_restart_runner()
+    runner.session_authority = authority
+    adapter.handle_message = AsyncMock()
+    process = subprocess.Popen([sys.executable, '-c', 'import sys; sys.stdin.read()'], stdin=subprocess.PIPE,
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        with db:
+            sid = _local_session(db, authority.epoch, tmp_path)
+            authority.sessions[sid] = authority.sessions['s']
+            if prior == 'reset':
+                target = _mutate(db, authority.epoch, sid, 'reset')['target_session_id']
+                assert db.get_session(sid)['end_reason'] == 'session_reset'
+            else:
+                target = 'compressed'
+                db.publish_compression_child(parent_session_id=sid, child_session_id=target, source='test',
+                                             messages=[{'role': 'assistant', 'content': 'summary'}],
+                                             require_compression_lease=False)
+            entry = _auto_resume_entry('agent:main:telegram:dm:boundary-worker', 'boundary-worker', session_id=target)
+            runner.session_store._entries = {entry.session_key: entry}
+            admitted = admit_session_input(db, epoch=authority.epoch, principal_id='human', session_id=sid,
+                                           request_id='lost', payload={'text': 'lost'})
+            lost = claim_session_input(db, epoch=authority.epoch, session_id=sid)
+            scope = reserve_admission_worker(authority, admission_id=lost['admission_id'], process=process,
+                                             principal_id='human', hello=hello(process))
+            assert scope['session_id'] == target
+            authority.epoch = begin_runtime_epoch(db, instance_id='restart')
+            authority.restart_fenced_admissions = _restart_fenced_admissions(db, authority.epoch)
+            assert admitted['admission_id'] in authority.restart_fenced_admissions
+            recover_session_inputs(db, epoch=authority.epoch)
+            assert await runner._schedule_resume_pending_sessions_async() == 1
+            await asyncio.gather(*list(runner._background_tasks))
+            assert get_session_admission(db, admission_id=lost['admission_id'])['outcome'] == 'interrupted'
+            adapter.handle_message.assert_awaited_once()
+    finally:
+        process.stdin.close()
+        process.wait(timeout=5)
+
+
+@pytest.mark.asyncio
+async def test_old_epoch_started_admission_does_not_block_resume(tmp_path, monkeypatch):
+    from hermes_state_runtime import begin_runtime_epoch, claim_session_input, get_session_admission, recover_session_inputs
+    from tests.gateway.test_session_authority_cancel_settlement import _submit
+
+    db, authority = _restart_authority(tmp_path, monkeypatch)
+    entry = _auto_resume_entry('agent:main:telegram:dm:restart', 'restart')
+    runner, adapter = make_restart_runner()
+    runner.session_authority = authority
+    runner.session_store._entries = {entry.session_key: entry}
+    resumed = asyncio.Event()
+    adapter.handle_message = AsyncMock(side_effect=lambda event: resumed.set())
+    with db:
+        await _submit(authority, 'lost-original')
+        lost = claim_session_input(db, epoch=authority.epoch, session_id='s')
+        authority.restart_fenced_admissions = {lost['admission_id']}
+        authority.epoch = begin_runtime_epoch(db, instance_id='restarted')
+        recover_session_inputs(db, epoch=authority.epoch)
+        scheduled = await runner._schedule_resume_pending_sessions_async()
+        await resumed.wait()
+        row = get_session_admission(db, admission_id=lost['admission_id'])
+    assert (row['status'], row['outcome']) == ('terminal', 'interrupted')
+    assert scheduled == 1
+    adapter.handle_message.assert_awaited_once()
+    assert adapter.handle_message.await_args.args[0].text == ''
+
+
+@pytest.mark.asyncio
+async def test_unmarked_crash_resumes_only_its_fenced_admission(tmp_path, monkeypatch):
+    from hermes_state_runtime import (admit_session_input, begin_runtime_epoch, claim_session_input,
+                                      get_session_admission, recover_session_inputs)
+    from tests.gateway.test_session_authority_cancel_settlement import _submit
+
+    db, authority = _restart_authority(tmp_path, monkeypatch)
+    entry = _auto_resume_entry('agent:main:telegram:dm:crashed', 'crashed')
+    entry.resume_pending = False
+    runner, adapter = make_restart_runner()
+    runner.session_authority = authority
+    runner.session_store._entries = {entry.session_key: entry}
+    resumed = asyncio.Event()
+    adapter.handle_message = AsyncMock(side_effect=lambda event: resumed.set())
+    async def mark(key, reason):
+        entry.resume_pending = True
+        entry.resume_reason = reason
+        return True
+    runner.async_session_store.mark_resume_pending = AsyncMock(side_effect=mark)
+    with db:
+        await _submit(authority, 'lost-original')
+        lost = claim_session_input(db, epoch=authority.epoch, session_id='s')
+        db.create_session('other', source='test')
+        other = admit_session_input(db, epoch=authority.epoch, principal_id='human', session_id='other',
+                                    request_id='other', payload={'text': 'other'})
+        claim_session_input(db, epoch=authority.epoch, session_id='other')
+        authority.restart_fenced_admissions = {lost['admission_id'], other['admission_id']}
+        authority.epoch = begin_runtime_epoch(db, instance_id='restarted')
+        recover_session_inputs(db, epoch=authority.epoch)
+        scheduled = await runner._schedule_resume_pending_sessions_async()
+        await resumed.wait()
+        row = get_session_admission(db, admission_id=lost['admission_id'])
+        untouched = get_session_admission(db, admission_id=other['admission_id'])
+    assert (row['status'], row['outcome']) == ('terminal', 'interrupted')
+    assert untouched['status'] == 'unknown'
+    assert scheduled == 1
+    assert entry.resume_reason == 'restart_interrupted'
+    assert adapter.sent == []
+    assert adapter.handle_message.await_args.args[0].text == ''
+
+@pytest.mark.asyncio
+async def test_resume_precedes_queued_follower(tmp_path, monkeypatch):
+    from hermes_state_runtime import begin_runtime_epoch, claim_session_input, recover_session_inputs
+    from tests.gateway.test_session_authority_cancel_settlement import _submit
+
+    db, authority = _restart_authority(tmp_path, monkeypatch)
+    entry = _auto_resume_entry('agent:main:telegram:dm:ordered', 'ordered')
+    runner, adapter = make_restart_runner()
+    runner.session_authority = authority
+    runner.session_store._entries = {entry.session_key: entry}
+    events = []
+    from gateway.session_authority import SessionAuthority
+    gate = asyncio.Event()
+    resume_started = asyncio.Event()
+    follower_done = asyncio.Event()
+    async def resume(event):
+        events.append('resume')
+        resume_started.set()
+        await gate.wait()
+    async def drain(ref):
+        events.append('follower')
+        follower_done.set()
+    adapter.handle_message = AsyncMock(side_effect=resume)
+    monkeypatch.setattr(authority, '_drain', drain)
+    with db:
+        await _submit(authority, 'lost')
+        lost = claim_session_input(db, epoch=authority.epoch, session_id='s')
+        await _submit(authority, 'follower')
+        events.clear()
+        authority.restart_fenced_admissions = {lost['admission_id']}
+        monkeypatch.setattr(authority, '_schedule', SessionAuthority._schedule.__get__(authority))
+        authority.epoch = begin_runtime_epoch(db, instance_id='restart')
+        recover_session_inputs(db, epoch=authority.epoch)
+        assert await runner._schedule_resume_pending_sessions_async() == 1
+        await resume_started.wait()
+        assert events == ['resume']
+        gate.set()
+        await follower_done.wait()
+    assert events == ['resume', 'follower']
+
+
+@pytest.mark.asyncio
+async def test_cancelled_resume_keeps_marker_and_hold(tmp_path, monkeypatch):
+    db, authority = _restart_authority(tmp_path, monkeypatch)
+    entry = _auto_resume_entry('agent:main:telegram:dm:cancel', 'cancel')
+    runner, adapter = make_restart_runner()
+    runner.session_authority = authority
+    runner.session_store._entries = {entry.session_key: entry}
+    authority.restart_resume_holds = {'s'}
+    started = asyncio.Event()
+    async def resume(event):
+        started.set()
+        await asyncio.Event().wait()
+    adapter.handle_message = AsyncMock(side_effect=resume)
+    with db:
+        db._execute_write(lambda conn: conn.execute(
+            "INSERT INTO state_meta(key,value) VALUES('restart_resume:lost','s')"))
+        task = asyncio.create_task(runner._run_startup_resume_event(adapter, None, entry.session_key))
+        await started.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert db._read_one("SELECT value FROM state_meta WHERE key='restart_resume:lost'")['value'] == 's'
+        assert 's' in authority.restart_resume_holds
+
+
+@pytest.mark.asyncio
+async def test_failed_resume_releases_marker_and_follower(tmp_path, monkeypatch):
+    from gateway.session_authority import SessionAuthority
+    db, authority = _restart_authority(tmp_path, monkeypatch)
+    entry = _auto_resume_entry('agent:main:telegram:dm:failed', 'failed')
+    runner, adapter = make_restart_runner()
+    runner.session_authority = authority
+    runner.session_store._entries = {entry.session_key: entry}
+    authority.restart_resume_holds = {'s'}
+    follower_done = asyncio.Event()
+    async def drain(ref):
+        follower_done.set()
+    monkeypatch.setattr(authority, '_drain', drain)
+    monkeypatch.setattr(authority, '_schedule', SessionAuthority._schedule.__get__(authority))
+    adapter.handle_message = AsyncMock(side_effect=RuntimeError('resume failed'))
+    with db:
+        db._execute_write(lambda conn: conn.execute(
+            "INSERT INTO state_meta(key,value) VALUES('restart_resume:lost','s')"))
+        with pytest.raises(RuntimeError, match='resume failed'):
+            await runner._run_startup_resume_event(adapter, None, entry.session_key)
+        await asyncio.wait_for(follower_done.wait(), 5)
+        assert db._read_one("SELECT value FROM state_meta WHERE key='restart_resume:lost'") is None
+        assert 's' not in authority.restart_resume_holds
+
+
+@pytest.mark.asyncio
+async def test_second_restart_after_resolution_still_resumes(tmp_path, monkeypatch):
+    from hermes_state_runtime import begin_runtime_epoch, claim_session_input, recover_session_inputs
+    from tests.gateway.test_session_authority_cancel_settlement import _submit
+
+    db, authority = _restart_authority(tmp_path, monkeypatch)
+    entry = _auto_resume_entry('agent:main:telegram:dm:second', 'second')
+    runner, adapter = make_restart_runner()
+    runner.session_authority = authority
+    runner.session_store._entries = {entry.session_key: entry}
+    from gateway.session_authority import SessionAuthority
+    from gateway.session_contract import SessionRef
+    events = []
+    gate = asyncio.Event()
+    resume_started = asyncio.Event()
+    follower_done = asyncio.Event()
+    async def resume(event):
+        events.append('resume')
+        resume_started.set()
+        await gate.wait()
+    async def drain(ref):
+        events.append('follower')
+        follower_done.set()
+    adapter.handle_message = AsyncMock(side_effect=resume)
+    monkeypatch.setattr(authority, '_drain', drain)
+    with db:
+        await _submit(authority, 'lost')
+        lost = claim_session_input(db, epoch=authority.epoch, session_id='s')
+        await _submit(authority, 'follower')
+        authority.restart_fenced_admissions = {lost['admission_id']}
+        authority.epoch = begin_runtime_epoch(db, instance_id='restart')
+        recover_session_inputs(db, epoch=authority.epoch)
+        from gateway.session_unattended_unknown import settle_recovered_session
+        await settle_recovered_session(authority, 's')
+        authority.epoch = begin_runtime_epoch(db, instance_id='second-restart')
+        authority.restart_fenced_admissions = set()
+        authority.restart_resume_holds = set()
+        monkeypatch.setattr(authority, '_schedule', SessionAuthority._schedule.__get__(authority))
+        assert await runner._schedule_resume_pending_sessions_async() == 1
+        await resume_started.wait()
+        authority._schedule(SessionRef(authority.profile_id, 's'))
+        if authority.sessions['s'].task is not None:
+            await authority.sessions['s'].task
+        assert events == ['resume']
+        gate.set()
+        await follower_done.wait()
+        assert events == ['resume', 'follower']
+
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("cause", [GATEWAY_RESTART_CAUSE, GATEWAY_SHUTDOWN_CAUSE])
 async def test_turn_interrupted_by_restart_or_shutdown_resumes(tmp_path, monkeypatch, cause):
     """(a) A canonical turn the gateway restart or shutdown interrupted settles terminal/interrupted,
@@ -720,6 +1026,42 @@ async def test_unattended_interrupted_turn_holds_its_session(tmp_path, monkeypat
 
     assert scheduled == 0
     adapter.handle_message.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_compression_child_recovers_owner_marker(tmp_path, monkeypatch):
+    from hermes_state_runtime import begin_runtime_epoch, claim_session_input, recover_session_inputs
+    from gateway.session_unattended_unknown import settle_recovered_session
+    from tests.gateway.test_session_authority_cancel_settlement import _submit
+    db, authority = _restart_authority(tmp_path, monkeypatch)
+    runner, adapter = make_restart_runner()
+    entry = _auto_resume_entry('agent:main:telegram:dm:child-marker', 'child-marker', session_id='child')
+    runner.session_authority = authority
+    runner.session_store._entries = {entry.session_key: entry}
+    started, release = asyncio.Event(), asyncio.Event()
+    async def resume(event):
+        started.set()
+        await release.wait()
+    adapter.handle_message = AsyncMock(side_effect=resume)
+    with db:
+        await _submit(authority, 'lost')
+        lost = claim_session_input(db, epoch=authority.epoch, session_id='s')
+        authority.restart_fenced_admissions = {lost['admission_id']}
+        authority.epoch = begin_runtime_epoch(db, instance_id='first-restart')
+        recover_session_inputs(db, epoch=authority.epoch)
+        await settle_recovered_session(authority, 's')
+        db.publish_compression_child(parent_session_id='s', child_session_id='child', source='test',
+                                     messages=[{'role': 'assistant', 'content': 'summary'}],
+                                     require_compression_lease=False)
+        authority.epoch = begin_runtime_epoch(db, instance_id='second-restart')
+        authority.restart_resume_holds = set()
+        assert await runner._schedule_resume_pending_sessions_async() == 1
+        await started.wait()
+        assert authority.restart_resume_holds == {'s'}
+        release.set()
+        tasks = list(runner._background_tasks)
+        await asyncio.gather(*tasks)
+        assert db._read_one("SELECT value FROM state_meta WHERE key=?", ('restart_resume:' + lost['admission_id'],)) is None
 
 
 @pytest.mark.asyncio
@@ -829,6 +1171,42 @@ async def test_startup_auto_resume_skips_session_with_a_pending_admission(tmp_pa
 
     assert scheduled == 0
     adapter.handle_message.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_startup_auto_resume_resolves_fenced_unknown_without_replaying_input(tmp_path, monkeypatch):
+    from hermes_state_runtime import (claim_session_input, begin_runtime_epoch, get_session_admission,
+                                      recover_session_inputs)
+    from tests.gateway.test_session_authority_cancel_settlement import _submit
+
+    db, authority = _restart_authority(tmp_path, monkeypatch)
+    entry = _auto_resume_entry("agent:main:telegram:dm:restart-chat", "restart-chat")
+    runner, adapter = make_restart_runner()
+    runner.session_authority = authority
+    runner.session_store._entries = {entry.session_key: entry}
+    resumed = asyncio.Event()
+    adapter.handle_message = AsyncMock(side_effect=lambda event: resumed.set())
+    with db:
+        receipt = await _submit(authority, 'lost-turn', 'original payload')
+        claim_session_input(db, epoch=authority.epoch, session_id='s')
+        authority.restart_fenced_admissions = {receipt.admission_id}
+        authority.epoch = begin_runtime_epoch(db, instance_id='restart')
+        recover_session_inputs(db, epoch=authority.epoch)
+        authority.resolve_unknown = AsyncMock(side_effect=AssertionError("manual discard used"))
+
+        scheduled = await runner._schedule_resume_pending_sessions_async()
+        await resumed.wait()
+
+        admission = get_session_admission(db, admission_id=receipt.admission_id)
+        assert (admission['status'], admission['outcome']) == ('terminal', 'interrupted')
+
+    assert scheduled == 1
+    adapter.handle_message.assert_awaited_once()
+    event = adapter.handle_message.await_args.args[0]
+    assert event.text == ""
+    assert event.internal
+    assert event.text != 'original payload'
+    authority.resolve_unknown.assert_not_called()
 
 
 

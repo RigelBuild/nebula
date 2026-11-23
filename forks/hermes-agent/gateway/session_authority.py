@@ -482,6 +482,8 @@ class SessionAuthority:
         wake_bot_receipts(self, ref.session_id)
 
     def _schedule(self, ref):
+        if ref.session_id in getattr(self, 'restart_resume_holds', ()):
+            return
         from gateway.session_retirement import restore_retired
         restore_retired(self, ref.session_id)
         live = self.sessions[ref.session_id]
@@ -912,7 +914,7 @@ class SessionAuthority:
         await self.receipt(actor, ref, admission_id)
         return await self.resolve_unknown_as_owner(ref, admission_id, generation)
 
-    async def resolve_unknown_as_owner(self, ref, admission_id, generation, *, notice=None):
+    async def resolve_unknown_as_owner(self, ref, admission_id, generation, *, notice=None, restart_resume=False):
         """``resolve_unknown`` past authorization: also the owner's own call when the last viewer
         closed a session whose turn recovered ``unknown`` (gateway/session_viewer_close), or when an
         unattended automation turn settles itself (``notice``: its transcript copy, GW-10)."""
@@ -928,14 +930,24 @@ class SessionAuthority:
         # result the answer is normally already the transcript tail, so the closer is a no-op.
         from gateway.session_results import close_discarded_turn
         from gateway.session_runtime_workers import tracked_write
+        def close(conn, lost):
+            close_discarded_turn(self.db, conn, lost, None if (
+                prepared is not None and lost['owner_epoch'] == self.epoch) else notice)
+            if restart_resume:
+                conn.execute('INSERT OR REPLACE INTO state_meta(key,value) VALUES(?,?)',
+                             ('restart_resume:' + admission_id, ref.session_id))
+
+        async def resolved(row):
+            if restart_resume and row['status'] == 'terminal' and row['outcome'] == 'interrupted':
+                holds = getattr(self, 'restart_resume_holds', None)
+                if holds is None:
+                    holds = self.restart_resume_holds = set()
+                holds.add(ref.session_id)
+            return await self._resolved_unknown(ref, admission_id, prepared, captured, row)
+
         return await tracked_write(self, partial(
             resolve_unknown_session_input, self.db, epoch=self.epoch, admission_id=admission_id,
-            generation=generation, _captured=prepared,
-            # ``notice`` says the turn was interrupted: only when that is the outcome, never beside a
-            # captured result this resolution commits as the turn's own answer.
-            _terminal_write=lambda conn, lost: close_discarded_turn(self.db, conn, lost, None if (
-                prepared is not None and lost['owner_epoch'] == self.epoch) else notice)),
-            then=partial(self._resolved_unknown, ref, admission_id, prepared, captured))
+            generation=generation, _captured=prepared, _terminal_write=close), then=resolved)
 
     async def _resolved_unknown(self, ref, admission_id, prepared, captured, row):
         self.pending_results.pop(admission_id, None)
@@ -1494,6 +1506,15 @@ def backfill_compression_created_sources(db):
     return stamped
 
 
+def _restart_fenced_admissions(db, epoch):
+    # A turn interrupted during compression has an uncertain continuation, whether it ran in
+    # a managed worker or in-process. Keep it unknown until explicit recovery decides it.
+    return {row['admission_id'] for row in db._read_all(
+        "SELECT admission_id FROM session_admissions AS a "
+        "WHERE status='started' AND owner_epoch!=? AND NOT EXISTS ("
+        "SELECT 1 FROM state_meta WHERE key='admission_compressed:' || a.admission_id)", (epoch,))}
+
+
 async def initialize_session_authority(runner, *, profile_id, instance_id, db=None, register=True):
     """Call after exclusive profile ownership, before connecting adapters/API.
 
@@ -1507,6 +1528,7 @@ async def initialize_session_authority(runner, *, profile_id, instance_id, db=No
     from pathlib import Path
     db_key = await asyncio.to_thread(Path(db.db_path).resolve)
     epoch = await asyncio.to_thread(begin_runtime_epoch, db, instance_id=instance_id)
+    fenced = await asyncio.to_thread(_restart_fenced_admissions, db, epoch)
     # Hot-serve builds a profile while the loop serves the others: both writes stay off it.
     await asyncio.to_thread(recover_session_inputs, db, epoch=epoch)
     # A lost automation turn has nobody to resolve it: it settles interrupted before any FIFO runs.
@@ -1519,6 +1541,7 @@ async def initialize_session_authority(runner, *, profile_id, instance_id, db=No
     from gateway.session_bot import release_superseded_bot_chat_at_boot
     await asyncio.to_thread(release_superseded_bot_chat_at_boot, db, runner.session_store)
     authority = SessionAuthority(runner, profile_id=profile_id, instance_id=instance_id, db=db, epoch=epoch)
+    authority.restart_fenced_admissions = fenced
     # A receipt's compression catch-up (#140060) writes: it commits off the loop too, before the
     # authority is published, so the recovery below only reads.
     from gateway.session_local_adoption import adopt_local_compressions

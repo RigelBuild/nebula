@@ -15,23 +15,25 @@ import (
 )
 
 const (
-	defaultIdle     = 48 * time.Hour
-	defaultCacheAge = 24 * time.Hour
+	defaultIdle          = 48 * time.Hour
+	defaultCacheAge      = 24 * time.Hour
+	defaultGoCacheMaxGiB = 40
 )
 
 type config struct {
 	roots []string
 	// defaultRoot is set when roots came from the default, not -root. A missing default root is skipped, not an error.
-	defaultRoot bool
-	stateDir    string
-	reportTo    string
-	cotalBin    string
-	to          string
-	server      string
-	creds       string
-	idle        time.Duration
-	cacheAge    time.Duration
-	apply       bool
+	defaultRoot   bool
+	stateDir      string
+	reportTo      string
+	cotalBin      string
+	to            string
+	server        string
+	creds         string
+	idle          time.Duration
+	cacheAge      time.Duration
+	goCacheMaxGiB int64
+	apply         bool
 }
 
 // rootFlags is a repeatable -root flag. Each occurrence adds one workspaces root to scan.
@@ -90,7 +92,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		errs = append(errs, fmt.Errorf("resolve user cache dir: %w", err))
 	} else {
-		errs = append(errs, pruneGoCaches(ctx, cacheDir, time.Now().Add(-cfg.cacheAge), cfg.apply, out))
+		errs = append(errs, pruneGoCaches(ctx, cacheDir, time.Now().Add(-cfg.cacheAge), cfg.goCacheMaxGiB<<30, cfg.apply, out))
 	}
 
 	// One live-cwd scan per run. A failed scan skips workspace work entirely: it never guesses "none live".
@@ -161,6 +163,7 @@ func parseFlags(args []string, stderr io.Writer) (config, error) {
 	flags.StringVar(&cfg.creds, "creds", "", "NATS credentials file for cotal send. Empty uses the cotal config.")
 	flags.DurationVar(&cfg.idle, "idle", defaultIdle, "Idle window before a workspace is eligible for cleanup.")
 	flags.DurationVar(&cfg.cacheAge, "cache-age", defaultCacheAge, "Go cache files untouched this long are pruned.")
+	flags.Int64Var(&cfg.goCacheMaxGiB, "go-cache-max-gib", defaultGoCacheMaxGiB, "Cap on the go-build cache in GiB; after the age pass, oldest cache items go until under it.")
 	flags.BoolVar(&cfg.apply, "apply", false, "Prune caches, trim build output, and report idle workspaces. Default: dry run.")
 	if err := flags.Parse(args); err != nil {
 		return config{}, err
@@ -172,8 +175,12 @@ func parseFlags(args []string, stderr io.Writer) (config, error) {
 		return config{}, errors.New("-to is required")
 	}
 	// A non-positive window would make every workspace look idle.
-	if cfg.idle <= 0 || cfg.cacheAge <= 0 {
-		return config{}, errors.New("-idle and -cache-age must be positive")
+	if cfg.idle <= 0 || cfg.cacheAge <= 0 || cfg.goCacheMaxGiB <= 0 {
+		return config{}, errors.New("-idle, -cache-age and -go-cache-max-gib must be positive")
+	}
+	// GiB<<30 must not overflow int64.
+	if cfg.goCacheMaxGiB > 1<<32 {
+		return config{}, errors.New("-go-cache-max-gib is too large")
 	}
 	if len(cfg.roots) == 0 {
 		home, err := os.UserHomeDir()

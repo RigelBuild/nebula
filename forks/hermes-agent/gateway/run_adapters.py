@@ -256,14 +256,14 @@ class GatewayAdapterLifecycleMixin(GatewaySecondaryReconnectMixin):
             "predecessor": adapter,
         }
 
-    def _queue_retryable_fatal_platform(self, adapter: BasePlatformAdapter) -> bool:
+    def _queue_retryable_fatal_platform(self, adapter: BasePlatformAdapter, *, force: bool = False) -> bool:
         """Queue a retryable fatal adapter for background reconnection (True when newly queued).
 
         Must not await: callers run this BEFORE any disconnect so a wedged close can't strand it.
 
         Idempotent if already queued. See #80598.
         """
-        if not adapter.fatal_error_retryable:
+        if not force and not adapter.fatal_error_retryable:
             return False
         platform_config = self.config.platforms.get(adapter.platform)
         if not platform_config:
@@ -369,14 +369,38 @@ class GatewayAdapterLifecycleMixin(GatewaySecondaryReconnectMixin):
         ):
             self._queue_retryable_fatal_platform(adapter)
 
+    def _adapter_transport_dead(self, adapter: BasePlatformAdapter) -> bool:
+        client = getattr(adapter, "_client", _UNSET)
+        is_closed = getattr(client, "is_closed", None)
+        return (not adapter.is_connected or (callable(is_closed) and is_closed())
+                or (adapter.platform.value == "discord" and client is None))
+
+    async def _requeue_degraded_send(self, adapter: BasePlatformAdapter) -> None:
+        platform = adapter.platform
+        if self.adapters.get(platform) is not adapter or not self._adapter_transport_dead(adapter):
+            return
+        self._queue_retryable_fatal_platform(adapter, force=True)
+        if platform not in self._failed_platforms:
+            return
+        logger.warning("Evicting dead %s adapter after degraded send", platform.value)
+        self.adapters.pop(platform)
+        self.delivery_router.adapters = self.adapters
+        await self._safe_adapter_disconnect(adapter, platform)
+
     async def _handle_adapter_fatal_error_impl(self, adapter: BasePlatformAdapter) -> None:
         # Snapshot the slot owner first: a stale notification must not touch a healthy platform.
         existing = self.adapters.get(adapter.platform)
         if existing is not None and existing is not adapter:
-            logger.debug(
-                "Ignoring stale fatal error from a superseded %s adapter instance: %s",
-                adapter.platform.value, adapter.fatal_error_code or "unknown",
-            )
+            if not self._adapter_transport_dead(existing):
+                logger.debug("Ignoring stale fatal error from a superseded %s adapter instance", adapter.platform.value)
+                return
+            self._queue_retryable_fatal_platform(existing, force=True)
+            if adapter.platform not in self._failed_platforms:
+                return
+            logger.warning("Evicting dead %s adapter after stale fatal", adapter.platform.value)
+            self.adapters.pop(adapter.platform)
+            self.delivery_router.adapters = self.adapters
+            await self._safe_adapter_disconnect(existing, adapter.platform)
             return
         logger.error(
             "Fatal %s adapter error (%s): %s", adapter.platform.value,
@@ -463,7 +487,7 @@ class GatewayAdapterLifecycleMixin(GatewaySecondaryReconnectMixin):
         return min(60, 2 ** min(attempt, 6))
 
     def _spawn_supervised(
-        self, coro_factory, name, *, restart=True, _attempt=0, on_spawn=None, on_give_up=None
+        self, coro_factory, name, *, restart=True, _attempt=0, on_spawn=None, on_give_up=None, should_respawn=None
     ):
         """Launch a long-lived supervised background task: exceptions a bare ``create_task`` drops
         are logged, and it respawns with capped backoff up to ``_MAX_SUPERVISED_RESTARTS`` rapid
@@ -524,10 +548,12 @@ class GatewayAdapterLifecycleMixin(GatewaySecondaryReconnectMixin):
 
             async def _respawn():
                 await asyncio.sleep(backoff)
+                if should_respawn is not None and not should_respawn():
+                    return
                 if self._running:
                     self._spawn_supervised(
                         coro_factory, name, restart=restart, _attempt=effective_attempt + 1,
-                        on_spawn=on_spawn, on_give_up=on_give_up,  # only the LAST give-up matters
+                        on_spawn=on_spawn, on_give_up=on_give_up, should_respawn=should_respawn,
                     )
 
             # The done callback runs in its registration context; isolate the backoff task too.
@@ -689,10 +715,15 @@ class GatewayAdapterLifecycleMixin(GatewaySecondaryReconnectMixin):
     def _spawn_reconnect_watcher(self, *, on_give_up=None):
         """Launch the reconnect watcher. ``on_spawn`` is load-bearing: without it a supervised
         respawn leaves ``_reconnect_watcher_task`` dead and ``_ensure_...`` spawns a second one."""
+        current = getattr(self, "_reconnect_watcher_task", None)
+        if current is not None and not current.done():
+            return current
         self._reconnect_watcher_task = self._spawn_supervised(
             self._platform_reconnect_watcher, "platform_reconnect_watcher",
             on_spawn=lambda t: setattr(self, "_reconnect_watcher_task", t),
             on_give_up=on_give_up or self._on_reconnect_watcher_gave_up,
+            should_respawn=lambda: (getattr(self, "_reconnect_watcher_task", None) is None
+                                    or self._reconnect_watcher_task.done()),
         )
         return self._reconnect_watcher_task
 
@@ -806,6 +837,19 @@ class GatewayAdapterLifecycleMixin(GatewaySecondaryReconnectMixin):
         )
 
     async def _reconnect_failed_platform(self, platform, now: float) -> None:
+        """Run at most one reconnect pass per platform."""
+        active = getattr(self, "_reconnecting_platforms", None)
+        if active is None:
+            active = self._reconnecting_platforms = set()
+        if platform in active:
+            return
+        active.add(platform)
+        try:
+            await self._reconnect_failed_platform_once(platform, now)
+        finally:
+            active.remove(platform)
+
+    async def _reconnect_failed_platform_once(self, platform, now: float) -> None:
         """One watcher pass for a queued platform: gate, attempt, and record the outcome."""
         from gateway.run import _dispose_unused_adapter, _platform_has_bot_credential
         info = self._failed_platforms.get(platform)
@@ -895,6 +939,7 @@ class GatewayAdapterLifecycleMixin(GatewaySecondaryReconnectMixin):
 
     def _publish_primary_adapter(self, platform, adapter) -> None:
         """Register a connected primary adapter and wire voice mode/input (transcription without /voice join)."""
+        adapter._on_degraded_send = self._requeue_degraded_send
         self.adapters[platform] = adapter
         if platform == Platform.API_SERVER:
             from gateway.session_api_turn import recover_api_turns

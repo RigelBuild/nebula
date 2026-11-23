@@ -19,10 +19,11 @@ class _CardAdapter:
     def __init__(self):
         self.retired: list[tuple[str, str]] = []
         self.asked: list[str] = []
+        self.paused: int = 0
         self.resumed: int = 0
 
     def pause_typing_for_chat(self, chat_id):
-        return None
+        self.paused += 1
 
     def resume_typing_for_chat(self, chat_id):
         self.resumed += 1
@@ -46,7 +47,7 @@ def _asked(adapter):
     return [text.split("\n")[0] for text in adapter.asked]
 
 
-def _run_clarify(adapter, questions=_ONE_QUESTION, answers=(), via_tool=False):
+def _run_clarify(adapter, questions=_ONE_QUESTION, answers=(), via_tool=False, live_adapter=None):
     """Returns (clarify result, labels of every coroutine the runner scheduled).
 
     Question i resolves from ``answers[i]``, and ``None`` leaves it unanswered so it expires.
@@ -57,9 +58,14 @@ def _run_clarify(adapter, questions=_ONE_QUESTION, answers=(), via_tool=False):
 
     runner = object.__new__(TurnRunner)
     runner._approval_owner = None  # no owning authority: the controls snapshot is skipped
-    runner._ctx = SimpleNamespace(
+    ctx = SimpleNamespace(
         _status_adapter=adapter, _status_chat_id="C1", _status_thread_metadata={},
         session_key="sk1", stream_consumer_holder=[None])
+    if live_adapter is not None:
+        ctx.source = object()
+    runner._ctx = ctx
+    if live_adapter is not None:
+        runner._runner = SimpleNamespace(_delivery_adapter_for=lambda _source: live_adapter)
     labels: list[str] = []
 
     class _Fut:
@@ -90,6 +96,89 @@ def _run_clarify(adapter, questions=_ONE_QUESTION, answers=(), via_tool=False):
             from tools.clarify_tool import clarify_tool
             return clarify_tool(questions, callback=runner._clarify_callback_sync), labels
         return runner._clarify_callback_sync(questions), labels
+
+
+def test_clarify_sends_and_rearms_typing_on_live_adapter_when_status_adapter_is_stale():
+    stale, live = _CardAdapter(), _CardAdapter()
+
+    reply, _labels = _run_clarify(stale, answers=("green",), live_adapter=live)
+
+    assert reply["answers"] == {"q0": "green"}
+    assert _asked(live) == ["Pick one"]
+    assert live.paused == 1
+    assert live.resumed == 1
+    assert stale.asked == []
+    assert stale.paused == 0
+    assert stale.resumed == 0
+
+
+def test_clarify_retires_live_adapter_card_when_status_adapter_is_stale():
+    stale, live = _CardAdapter(), _CardAdapter()
+
+    reply, _labels = _run_clarify(stale, live_adapter=live)
+
+    assert reply["outcome"] == "timed_out"
+    assert _asked(live) == ["Pick one"]
+    assert live.paused == 1
+    assert len(live.retired) == 1
+    assert stale.asked == []
+    assert stale.paused == 0
+    assert stale.retired == []
+
+
+def test_late_text_fallback_uses_adapter_live_when_fallback_starts():
+    from concurrent.futures import Future
+
+    from gateway.run_turn_runner import TurnRunner
+    from tools import clarify_gateway as clarify_mod
+
+    stale, live = _CardAdapter(), _CardAdapter()
+    current_adapter = [stale]
+    runner = object.__new__(TurnRunner)
+    runner._approval_owner = None
+    runner._ctx = SimpleNamespace(
+        _status_adapter=stale, _status_chat_id="C1", _status_thread_metadata={},
+        session_key="sk1", stream_consumer_holder=[None], source=object())
+    runner._runner = SimpleNamespace(_delivery_adapter_for=lambda _source: current_adapter[0])
+    runner._close_native_stream_boundary = lambda *args, **kwargs: None
+    card_send = Future()
+    fallback_adapters = []
+
+    labels = []
+
+    def _schedule(coro, label):
+        labels.append(label)
+        if label == "Clarify send failed to schedule":
+            asyncio.run(coro)
+            return card_send
+        future = Future()
+        future.set_result(asyncio.run(coro))
+        return future
+
+    async def _send_text_fallback(adapter, **kwargs):
+        fallback_adapters.append(adapter)
+        return await adapter.send_clarify(**kwargs)
+
+
+    def _wait_for_response(*args, **kwargs):
+        current_adapter[0] = live
+        card_send.set_result(SendResult(success=False, error="late send failure"))
+        return None
+
+    runner._schedule = _schedule
+    with patch("gateway.run_turn_runner_clarify_delivery.text_fallback_coro",
+               lambda adapter, **kwargs: _send_text_fallback(adapter, **kwargs)), \
+            patch("gateway.run_turn_runner_clarify_delivery.SEND_ACK_WINDOW", 0), \
+            patch.object(clarify_mod, "wait_for_response", _wait_for_response), \
+            patch.object(clarify_mod, "get_clarify_timeout", return_value=0.05):
+        response, answered = runner._ask_clarify_question("Pick one", ["a", "b"], False)
+
+    assert response.startswith("[user did not respond")
+    assert not answered
+    assert stale.asked == ["Pick one"]
+    assert live.asked == ["Pick one"]
+    assert fallback_adapters == [live]
+    assert labels[:2] == ["Clarify send failed to schedule", "Clarify text fallback failed to schedule"]
 
 
 def test_timeout_retires_the_native_card_with_the_expired_notice():
@@ -186,6 +275,7 @@ def test_skip_hint_only_on_messaging_platforms(platform, hinted):
         _status_adapter=adapter, _status_chat_id="C1", _status_thread_metadata={},
         session_key="sk1", stream_consumer_holder=[None],
         source=SimpleNamespace(platform=Platform(platform)))
+    runner._runner = SimpleNamespace(_delivery_adapter_for=lambda _source: adapter)
 
     class _Fut:
         def __init__(self, r): self._r = r

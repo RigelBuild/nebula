@@ -585,8 +585,14 @@ class TurnRunner(GatewayTurnProgressMixin, GatewaySessionAgentMixin):
             logger.warning("%s boundary timed out or failed: %s", reason, err)
             return False
 
-    async def _send_shared_clarify(self, entry, **kwargs):
-        result = await self._ctx._status_adapter.send_clarify(**kwargs)
+    def _live_delivery_adapter(self):
+        ctx = self._ctx
+        return (self._runner._delivery_adapter_for(ctx.source)
+                if getattr(ctx, "source", None) is not None else ctx._status_adapter)
+
+
+    async def _send_shared_clarify(self, entry, adapter, **kwargs):
+        result = await adapter.send_clarify(**kwargs)
         if self._approval_owner is not None and result.success:
             authority, session_id, generation = self._approval_owner
             from gateway import local_viewer_events
@@ -642,7 +648,8 @@ class TurnRunner(GatewayTurnProgressMixin, GatewaySessionAgentMixin):
         from tools import clarify_gateway as clarify_mod
         import uuid
         ctx = self._ctx
-        if not ctx._status_adapter:
+        adapter = self._live_delivery_adapter()
+        if not adapter:
             # Nothing can render the question: say so, or the batch's blank answers read as
             # user inactivity (#112684).
             return UNDELIVERED_NO_SURFACE, False
@@ -656,7 +663,7 @@ class TurnRunner(GatewayTurnProgressMixin, GatewaySessionAgentMixin):
 
         def _text_fallback():
             """Schedule the plain-text prompt when the native card cannot render; None = no such path."""
-            coro = text_fallback_coro(ctx._status_adapter, **send_kwargs)
+            coro = text_fallback_coro(self._live_delivery_adapter(), **send_kwargs)
             return None if coro is None else self._schedule(coro, "Clarify text fallback failed to schedule")
         entry = clarify_mod.register(
             clarify_id=clarify_id, session_key=session_key, question=question, choices=choices,
@@ -668,7 +675,7 @@ class TurnRunner(GatewayTurnProgressMixin, GatewaySessionAgentMixin):
         # Pause typing: a "thinking..." status must not obscure the prompt or block an "Other" reply
         # on platforms that disable input while typing (Slack Assistant).
         with suppress(Exception):
-            ctx._status_adapter.pause_typing_for_chat(ctx._status_chat_id)
+            adapter.pause_typing_for_chat(ctx._status_chat_id)
         # Ordering barrier: flush buffered assistant prose BEFORE the poll, which goes out on a
         # separate agent-thread-blocking path and would otherwise render ABOVE its own explanation.
         # Best-effort + short timeout so the agent thread never hangs if the consumer isn't running.
@@ -679,7 +686,7 @@ class TurnRunner(GatewayTurnProgressMixin, GatewaySessionAgentMixin):
         except Exception:
             logger.debug("Stream-consumer flush before clarify prompt failed", exc_info=True)
         fut = self._schedule(
-            self._send_shared_clarify(entry, **send_kwargs),
+            self._send_shared_clarify(entry, adapter, **send_kwargs),
             "Clarify send failed to schedule",
         )
         # Boundary rule (see _approval_send_outcome): a send timeout is AMBIGUOUS — the card may
@@ -697,10 +704,11 @@ class TurnRunner(GatewayTurnProgressMixin, GatewaySessionAgentMixin):
         if not answered:
             # No answer arrived (timeout, /new, run end): retire the native card so it stops
             # looking answerable. Adapters without a persistent card have no such method.
-            retire = getattr(type(ctx._status_adapter), "retire_clarify_card", None)
+            live = self._live_delivery_adapter()
+            retire = getattr(type(live), "retire_clarify_card", None)
             if callable(retire):
                 self._schedule(
-                    retire(ctx._status_adapter, clarify_id, _clarify_expired_notice()),
+                    retire(live, clarify_id, _clarify_expired_notice()),
                     "Clarify card retire failed to schedule")
         elif rearm:
             # Reopen typing IMMEDIATELY, not on the LLM's first post-answer token (native streaming
@@ -713,8 +721,7 @@ class TurnRunner(GatewayTurnProgressMixin, GatewaySessionAgentMixin):
                 except Exception:
                     logger.debug("request_reopen_seed after clarify answer failed", exc_info=True)
             try:
-                (self._runner._delivery_adapter_for(ctx.source) if getattr(ctx, "source", None) is not None
-                 else ctx._status_adapter).resume_typing_for_chat(ctx._status_chat_id)
+                self._live_delivery_adapter().resume_typing_for_chat(ctx._status_chat_id)
             except Exception:
                 logger.debug("resume_typing_for_chat after clarify answer failed", exc_info=True)
         return response, answered
@@ -737,7 +744,7 @@ class TurnRunner(GatewayTurnProgressMixin, GatewaySessionAgentMixin):
         from gateway.run_turn_runner_approval_settle import register_timeout_notice
         from gateway.run_turn_runner_approval_text import approval_text_prompt
         ctx = self._ctx
-        adapter = self._runner._delivery_adapter_for(ctx.source) if getattr(ctx, "source", None) is not None else ctx._status_adapter
+        adapter = self._live_delivery_adapter()
         if adapter is None:
             raise RuntimeError("exec approval undeliverable: no live delivery adapter")
         # Slack's assistant_threads_setStatus disables the compose box, so the user can't type

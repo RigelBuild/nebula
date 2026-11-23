@@ -3544,7 +3544,11 @@ class BasePlatformAdapter(ABC):
         """Send with exponential-backoff retry on transient network errors; permanent
         failures fall back to a plain-text send, exhausted retries notify the user."""
         async def _send(text: str) -> SendResult:
-            return await self.send(chat_id=chat_id, content=text, reply_to=reply_to, metadata=metadata)
+            result = await self.send(chat_id=chat_id, content=text, reply_to=reply_to, metadata=metadata)
+            callback = getattr(self, "_on_degraded_send", None)
+            if not result.success and result.error == "send_path_degraded" and callback is not None:
+                await callback(self)
+            return result
 
         async def _send_again(previous: SendResult) -> Optional[SendResult]:
             """Retry: the whole payload normally; only the undelivered remainder after a partial split

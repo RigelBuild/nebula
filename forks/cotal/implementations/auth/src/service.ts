@@ -455,9 +455,8 @@ export interface ReconcilerSecretOptions {
 /** Trusted composition policy for unpinned interactive manager-caller requests. No request or CLI
  *  flag sets it. The local-primary policy refuses an unavailable local Manager without substitution. */
 export interface AuthServiceRuntimeOptions {
-  /** If any placement port is unset, enrollment is unimplemented. */
+  /** Runtime callers provide these optional ports; auth derives the authenticator from its identity. */
   placementReconciler?: ReconcilerPort;
-  placementAuthenticator?: ServiceAuthenticator;
   placementRolePolicy?: RolePolicyPort;
   interactiveManagerSelection?: "local-primary";
   /** Process-lifetime cancellation custody quotas. No eviction or automatic restart on exhaustion. */
@@ -497,6 +496,8 @@ export interface OpenAuthAuthorityPlaneOptions extends AuthServiceRuntimeOptions
   registryStore?: SecretStore;
   dataAccount: ServiceKeys["dataAccount"];
   log: (line: string) => void;
+  /** Test seam for direct plane opens; runtime startup derives this from the auth-owned identity. */
+  placementAuthenticator?: ServiceAuthenticator;
   /** SMOKE-ONLY eviction override for the barrier executor's boot resume. Production
    *  compositions never set this: the real capability is the delivery daemon's
    *  `ctl.delivery-admin` rail ({@link makeDeliveryAdminEvictor}). */
@@ -790,7 +791,8 @@ async function buildAuthAuthorityPlane(opts: OpenAuthAuthorityPlaneOptions, unwi
   // the FRESH space-manager-lease holder check) and dispatches.
   // The placement authority is built after this listener opens; the getter follows its readiness.
   let placementAuthority: PlacementEnrollmentAuthority | undefined;
-  const placementConfigured = Boolean(opts.placementReconciler && opts.placementAuthenticator && opts.placementRolePolicy);
+  const placementPorts = { placementReconciler: opts.placementReconciler, placementAuthenticator: opts.placementAuthenticator, placementRolePolicy: opts.placementRolePolicy };
+  const placementConfigured = placementPortsConfigured(placementPorts);
   const rosterReader = await openAuthRosterReader({ server, space, auth: dataAccountAuth(space, dataAccount), onConnection, log });
   unwind.push(() => rosterReader.close());
   const authAdmin = await openAuthAdminListener({ onConnection, server, space, dataAccount, reg: barrierReg, retirement, rosterReader, barrierFlight: retirementFlights, instanceId: authServeInstanceId, epoch: authServeGrant.epoch, grant: authServeGrant, log, placement: { configured: placementConfigured, port: () => placementAuthority } });
@@ -1343,9 +1345,9 @@ async function buildAuthAuthorityPlane(opts: OpenAuthAuthorityPlaneOptions, unwi
   };
   const placementEnrollment = placementConfigured ? createPlacementEnrollmentAuthority({
     dir: opts.dir, space, accountPublicKey: dataAccount.pub, proofSecret: dataAccount.signingSeed,
-    observeManagerGate: observeLegacyManagerGate, reconciler: opts.placementReconciler!,
-    authenticator: opts.placementAuthenticator!, assertOpen: refuseIfFenced,
-    rolePolicy: opts.placementRolePolicy!,
+    observeManagerGate: observeLegacyManagerGate, reconciler: placementPorts.placementReconciler!,
+    authenticator: placementPorts.placementAuthenticator!, assertOpen: refuseIfFenced,
+    rolePolicy: placementPorts.placementRolePolicy!,
     serializedForAlias: (owner, actor, action) => serializedForAlias(opts.dir, owner, actor, action),
     deprovisionFootprint: (owner, actor, lifecycleUid, channels) => deprovisionManagedFootprint(owner, actor, lifecycleUid, channels.filter(isConcreteChannel)),
     enrollManagedAgent,
@@ -2412,6 +2414,29 @@ export function reconcilerPrincipalFor(ownerSecret: string | Uint8Array, space: 
   return principalKey(platformControlOwner(ownerSecret, space, accountPublicKey), "reconciler").key;
 }
 
+export interface AuthServicePlacementOptions {
+  placementReconciler?: ReconcilerPort;
+  placementAuthenticator: ServiceAuthenticator;
+  placementRolePolicy?: RolePolicyPort;
+}
+
+/** Derive the production authenticator from auth-owned identity material while retaining only the
+ *  optional reconciler and role-policy ports supplied by the embedder. */
+export function placementPortsFor(
+  options: Pick<AuthServiceRuntimeOptions, "placementReconciler" | "placementRolePolicy">,
+  identity: { ownerSecret: string | Uint8Array; space: string; accountPublicKey: string },
+): AuthServicePlacementOptions {
+  return {
+    placementReconciler: options.placementReconciler,
+    placementAuthenticator: reconcilerServiceAuthenticator(reconcilerPrincipalFor(identity.ownerSecret, identity.space, identity.accountPublicKey)),
+    placementRolePolicy: options.placementRolePolicy,
+  };
+}
+
+export function placementPortsConfigured(options: Pick<OpenAuthAuthorityPlaneOptions, "placementReconciler" | "placementAuthenticator" | "placementRolePolicy">): boolean {
+  return Boolean(options.placementReconciler && options.placementAuthenticator && options.placementRolePolicy);
+}
+
 /** Trusted local embedding hooks. They carry no prepared key material or loopback capability. */
 export interface AuthDaemonLifecycle extends AuthServiceRuntimeOptions {
   readonly root: string;
@@ -2992,9 +3017,7 @@ async function startAuthContext(o: AuthContextOptions): Promise<{ handle: Omit<A
     dataAccount: { pub: keys.dataAccount.pub, signingSeed: keys.dataAccount.signingSeed },
     log,
     localManager: o.localManager,
-    placementReconciler: o.placementReconciler,
-    placementAuthenticator: reconcilerServiceAuthenticator(reconcilerPrincipalFor(ownerSecret, space, keys.dataAccount.pub)),
-    placementRolePolicy: o.placementRolePolicy,
+    ...placementPortsFor(o, { ownerSecret, space, accountPublicKey: keys.dataAccount.pub }),
     ...(o.interactiveManagerSelection !== undefined ? { interactiveManagerSelection: o.interactiveManagerSelection } : {}),
     ...(o.runCancelLimits !== undefined ? { runCancelLimits: o.runCancelLimits } : {}),
     ...(o.standingRenewableTtlSeconds !== undefined ? { standingRenewableTtlSeconds: o.standingRenewableTtlSeconds } : {}),

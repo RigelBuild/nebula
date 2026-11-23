@@ -1,11 +1,11 @@
 /**
- * Placement wiring: the production reconciler authenticator, the reconciler key derived from the
- * auth identity, and placement staying unconfigured while only the authenticator is set. Each case
- * prints one ✓ or ✗ line; the process exits non-zero when any case fails.
+ * Placement wiring: the production reconciler authenticator is derived from the auth identity, and
+ * placement stays unconfigured while only that authenticator is set. Each case prints one ✓ or ✗
+ * line; the process exits non-zero when any case fails.
  */
 import assert from "node:assert/strict";
 import * as enrollment from "../src/placement-enrollment.js";
-import * as service from "../src/service.js";
+import { placementPortsConfigured, placementPortsFor, reconcilerPrincipalFor, type OpenAuthAuthorityPlaneOptions } from "../src/service.js";
 import { platformControlOwner } from "../src/derive.js";
 
 const OWNER = `u_${"a".repeat(26)}`;
@@ -13,7 +13,6 @@ const OTHER_OWNER = `u_${"b".repeat(26)}`;
 const RECONCILER_KEY = `${OWNER}.reconciler`;
 const OPERATION = "auth.verify-placement-enrollment";
 const DIGEST = `sha256:${"0".repeat(64)}`;
-
 
 let failed = 0;
 async function check(name: string, run: () => unknown): Promise<void> {
@@ -61,18 +60,19 @@ await check("the empty string is refused, also by an empty configured key", asyn
   assert.deepEqual(await admits(enrollment.reconcilerServiceAuthenticator(""), ""), { principal: "unauthorized" });
 });
 
-await check("the reconciler key is the derived auth identity, owner.reconciler", () => {
+await check("startup derives and admits only the auth reconciler identity", async () => {
   const seed = "p".repeat(32);
   const accountPublicKey = "A".repeat(56);
-  const derived = service.reconcilerPrincipalFor(seed, "main", accountPublicKey);
-  assert.equal(derived, `${platformControlOwner(seed, "main", accountPublicKey)}.reconciler`);
+  const expected = reconcilerPrincipalFor(seed, "main", accountPublicKey);
+  const ports = placementPortsFor({}, { ownerSecret: seed, space: "main", accountPublicKey });
+  assert.deepEqual(await admits(ports.placementAuthenticator, expected), { principal: "reconciler" });
+  assert.deepEqual(await admits(ports.placementAuthenticator, `${OTHER_OWNER}.reconciler`), { principal: "unauthorized" });
 });
 
-await check("the derived key is the one the authenticator admits", async () => {
-  const seed = "p".repeat(32);
-  const accountPublicKey = "A".repeat(56);
-  const auth = enrollment.reconcilerServiceAuthenticator(service.reconcilerPrincipalFor(seed, "main", accountPublicKey));
-  assert.deepEqual(await admits(auth, `${platformControlOwner(seed, "main", accountPublicKey)}.reconciler`), { principal: "reconciler" });
+await check("an authenticator alone leaves placement unconfigured", () => {
+  const ports = placementPortsFor({}, { ownerSecret: "p".repeat(32), space: "main", accountPublicKey: "A".repeat(56) });
+  const options = { ...ports, placementReconciler: undefined, placementRolePolicy: undefined } satisfies Pick<OpenAuthAuthorityPlaneOptions, "placementAuthenticator" | "placementReconciler" | "placementRolePolicy">;
+  assert.equal(placementPortsConfigured(options), false);
 });
 
 console.log(failed === 0 ? "placement wiring smoke passed" : `placement wiring smoke FAILED (${failed} failed)`);

@@ -78,6 +78,74 @@ def _make_runner():
     runner.session_store._routing_home = None
     return runner
 
+@pytest.mark.asyncio
+async def test_concurrent_reconnect_passes_create_one_adapter():
+    runner = _make_runner()
+    platform = Platform.TELEGRAM
+    runner._failed_platforms[platform] = {"config": runner.config.platforms[platform], "attempts": 0, "next_retry": 0}
+    entered, release = asyncio.Event(), asyncio.Event()
+    adapter = StubAdapter()
+    adapter._running = True
+    runner._create_adapter_off_loop_deps = AsyncMock(return_value=adapter)
+    runner._wire_adapter_handlers = MagicMock()
+    runner._connect_adapter_with_timeout = AsyncMock(return_value=True)
+    runner._install_reconnected_adapter = AsyncMock(side_effect=lambda p, a: runner.adapters.update({p: a}))
+
+    async def load(*args):
+        entered.set()
+        await release.wait()
+
+    runner._run_in_executor_with_context = load
+    first = asyncio.create_task(runner._reconnect_failed_platform(platform, time.monotonic()))
+    await entered.wait()
+    second = asyncio.create_task(runner._reconnect_failed_platform(platform, time.monotonic()))
+    await asyncio.sleep(0)
+    release.set()
+    await asyncio.gather(first, second)
+    runner._create_adapter_off_loop_deps.assert_awaited_once()
+    assert runner.adapters[platform] is adapter and adapter.is_connected
+
+
+@pytest.mark.asyncio
+async def test_stale_fatal_requeues_closed_slot():
+    runner = _make_runner()
+    runner._ensure_reconnect_watcher_running = MagicMock()
+    stale, closed = StubAdapter(), StubAdapter()
+    stale._set_fatal_error("network", "lost", retryable=True)
+    runner.adapters[Platform.TELEGRAM] = closed
+    await runner._handle_adapter_fatal_error_impl(stale)
+    assert Platform.TELEGRAM not in runner.adapters
+    assert Platform.TELEGRAM in runner._failed_platforms
+
+
+@pytest.mark.asyncio
+async def test_degraded_send_requeues_dead_transport():
+    from gateway.delivery import DeliveryRouter, DeliveryTarget
+
+    runner = _make_runner()
+    runner._ensure_reconnect_watcher_running = MagicMock()
+    adapter = StubAdapter()
+    adapter.send = AsyncMock(return_value=SendResult(success=False, error="send_path_degraded"))
+    runner.adapters[Platform.TELEGRAM] = adapter
+    runner.delivery_router = DeliveryRouter(runner.config, runner.adapters, on_degraded_send=runner._requeue_degraded_send)
+    with pytest.raises(RuntimeError, match="send_path_degraded"):
+        await runner.delivery_router._deliver_to_platform(DeliveryTarget(platform=Platform.TELEGRAM, chat_id="123"), "hello", None)
+    assert Platform.TELEGRAM not in runner.adapters
+    assert Platform.TELEGRAM in runner._failed_platforms
+
+
+@pytest.mark.asyncio
+async def test_startup_reuses_existing_reconnect_watcher():
+    runner = _make_runner()
+    runner._spawn_reconnect_watcher()
+    first = runner._reconnect_watcher_task
+    assert runner._spawn_reconnect_watcher() is first
+    runner._ensure_reconnect_watcher_running()
+    assert runner._reconnect_watcher_task is first
+    first.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await first
+
 
 # --- Startup queueing ---
 

@@ -369,14 +369,30 @@ class GatewayAdapterLifecycleMixin(GatewaySecondaryReconnectMixin):
         ):
             self._queue_retryable_fatal_platform(adapter)
 
+    def _adapter_transport_dead(self, adapter: BasePlatformAdapter) -> bool:
+        client = getattr(adapter, "_client", _UNSET)
+        is_closed = getattr(client, "is_closed", None)
+        return (not adapter.is_connected or (callable(is_closed) and is_closed())
+                or (adapter.platform.value == "discord" and client is None))
+
+    def _requeue_degraded_send(self, adapter: BasePlatformAdapter) -> None:
+        platform = adapter.platform
+        if self.adapters.get(platform) is not adapter or not self._adapter_transport_dead(adapter):
+            return
+        self.adapters.pop(platform)
+        self.delivery_router.adapters = self.adapters
+        self._queue_retryable_fatal_platform(adapter)
+
     async def _handle_adapter_fatal_error_impl(self, adapter: BasePlatformAdapter) -> None:
         # Snapshot the slot owner first: a stale notification must not touch a healthy platform.
         existing = self.adapters.get(adapter.platform)
         if existing is not None and existing is not adapter:
-            logger.debug(
-                "Ignoring stale fatal error from a superseded %s adapter instance: %s",
-                adapter.platform.value, adapter.fatal_error_code or "unknown",
-            )
+            if existing.send_path_degraded or self._adapter_transport_dead(existing):
+                self.adapters.pop(adapter.platform)
+                self.delivery_router.adapters = self.adapters
+                self._queue_retryable_fatal_platform(adapter)
+            else:
+                logger.debug("Ignoring stale fatal error from a superseded %s adapter instance", adapter.platform.value)
             return
         logger.error(
             "Fatal %s adapter error (%s): %s", adapter.platform.value,
@@ -524,6 +540,10 @@ class GatewayAdapterLifecycleMixin(GatewaySecondaryReconnectMixin):
 
             async def _respawn():
                 await asyncio.sleep(backoff)
+                if name == "platform_reconnect_watcher":
+                    current = getattr(self, "_reconnect_watcher_task", None)
+                    if current is not None and not current.done():
+                        return
                 if self._running:
                     self._spawn_supervised(
                         coro_factory, name, restart=restart, _attempt=effective_attempt + 1,
@@ -689,6 +709,9 @@ class GatewayAdapterLifecycleMixin(GatewaySecondaryReconnectMixin):
     def _spawn_reconnect_watcher(self, *, on_give_up=None):
         """Launch the reconnect watcher. ``on_spawn`` is load-bearing: without it a supervised
         respawn leaves ``_reconnect_watcher_task`` dead and ``_ensure_...`` spawns a second one."""
+        current = getattr(self, "_reconnect_watcher_task", None)
+        if current is not None and not current.done():
+            return current
         self._reconnect_watcher_task = self._spawn_supervised(
             self._platform_reconnect_watcher, "platform_reconnect_watcher",
             on_spawn=lambda t: setattr(self, "_reconnect_watcher_task", t),
@@ -806,6 +829,19 @@ class GatewayAdapterLifecycleMixin(GatewaySecondaryReconnectMixin):
         )
 
     async def _reconnect_failed_platform(self, platform, now: float) -> None:
+        """Run at most one reconnect pass per platform."""
+        active = getattr(self, "_reconnecting_platforms", None)
+        if active is None:
+            active = self._reconnecting_platforms = set()
+        if platform in active:
+            return
+        active.add(platform)
+        try:
+            await self._reconnect_failed_platform_once(platform, now)
+        finally:
+            active.remove(platform)
+
+    async def _reconnect_failed_platform_once(self, platform, now: float) -> None:
         """One watcher pass for a queued platform: gate, attempt, and record the outcome."""
         from gateway.run import _dispose_unused_adapter, _platform_has_bot_credential
         info = self._failed_platforms.get(platform)

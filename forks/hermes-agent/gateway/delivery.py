@@ -177,11 +177,12 @@ class DeliveryRouter:
     """Resolves delivery targets and dispatches messages to platform adapters."""
 
     def __init__(self, config: GatewayConfig, adapters: dict[Platform, Any] | None = None,
-                 dead_targets: Optional[DeadTargetRegistry] = None):  # profile-local registry when omitted
+                 dead_targets: Optional[DeadTargetRegistry] = None, on_degraded_send=None):
         self.config = config
         self.adapters = adapters or {}
         self.output_dir = get_hermes_home() / "cron" / "output"
         self.dead_targets = dead_targets or DeadTargetRegistry()
+        self.on_degraded_send = on_degraded_send
 
     async def deliver(self, content: str, targets: list[DeliveryTarget], job_id: Optional[str] = None,
                       job_name: Optional[str] = None, metadata: Optional[dict[str, Any]] = None) -> dict[str, Any]:
@@ -339,6 +340,8 @@ class DeliveryRouter:
             send_metadata["thread_id"] = await _ensure_named_dm_topic(adapter, target.chat_id, named_topic, refresh=True)
             send_metadata["telegram_dm_topic_created_for_send"] = True
         if error is not None:
+            if error == "send_path_degraded" and self.on_degraded_send is not None:
+                self.on_degraded_send(adapter)
             from gateway.platforms.base import BasePlatformAdapter
             if BasePlatformAdapter._is_partial_delivery(result):
                 raise PartialDeliveryError(error, result)

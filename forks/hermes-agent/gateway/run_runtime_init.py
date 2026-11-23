@@ -44,7 +44,7 @@ class GatewayRuntimeInitMixin:
                 key))
         # Loop-side boundary: sync helpers use ``session_store`` directly; async handlers await this facade.
         self._async_session_store = AsyncSessionStore(self.session_store)
-        self.delivery_router = DeliveryRouter(self.config)
+        self.delivery_router = DeliveryRouter(self.config, on_degraded_send=self._requeue_degraded_send)
 
     def _init_lifecycle_state(self) -> None:
         """Initialise run/exit/restart flags, per-session state, and completion-delivery bookkeeping."""

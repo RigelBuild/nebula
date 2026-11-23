@@ -282,6 +282,9 @@ func TestImportPreservesModesSymlinksAndGitlinks(t *testing.T) {
 			t.Errorf("commit blob for %s = %s, want fork blob %s", path, got[path], want[path])
 		}
 	}
+	if mode := commitMode(t, root, "forks/widget/sub"); mode != "" {
+		t.Errorf("gitlink committed mode = %q, want absent", mode)
+	}
 	if mode := commitMode(t, root, "forks/widget/run.sh"); mode != "100755" {
 		t.Errorf("run.sh committed mode = %q, want 100755", mode)
 	}

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -10,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/google/go-github/v93/github"
@@ -110,19 +112,13 @@ func syncFork(ctx context.Context, config forkConfig, dryRun bool) error {
 	if err != nil {
 		return err
 	}
-	for _, path := range gitlinks {
-		warnGitlink(path)
-	}
-	diffArgs := []string{"diff", "--binary", "--find-renames", "--full-index", record.Commit, tip}
-	if len(gitlinks) > 0 {
-		diffArgs = append(diffArgs, "--")
-		for _, path := range gitlinks {
-			diffArgs = append(diffArgs, ":(top,literal,exclude)"+path)
-		}
-	}
-	diff, err := git(ctx, temporary, nil, diffArgs...)
+	diff, err := git(ctx, temporary, nil, "diff", "--binary", "--find-renames", "--full-index", record.Commit, tip)
 	if err != nil {
 		return fmt.Errorf("create upstream diff: %w", err)
+	}
+	diff, skipped := filterGitlinkDiff(diff, gitlinks)
+	for _, path := range skipped {
+		warnGitlink(path)
 	}
 	if err := transferPatchBlobs(ctx, temporary, config.Root, diff); err != nil {
 		return fmt.Errorf("prepare three-way patch blobs: %w", err)
@@ -262,6 +258,95 @@ func changedGitlinkPaths(ctx context.Context, repository, old, new string) ([]st
 	}
 	sort.Strings(result)
 	return result, nil
+}
+
+func filterGitlinkDiff(patch []byte, gitlinks []string) ([]byte, []string) {
+	var filtered bytes.Buffer
+	skipped := make([]string, 0)
+	skippedSet := make(map[string]struct{})
+	for len(patch) > 0 {
+		if !bytes.HasPrefix(patch, []byte("diff --git ")) {
+			start := bytes.Index(patch, []byte("\ndiff --git "))
+			if start < 0 {
+				filtered.Write(patch)
+				break
+			}
+			filtered.Write(patch[:start+1])
+			patch = patch[start+1:]
+		}
+		next := bytes.Index(patch[len("diff --git "):], []byte("\ndiff --git "))
+		end := len(patch)
+		if next >= 0 {
+			end = len("diff --git ") + next + 1
+		}
+		section := patch[:end]
+		paths := gitlinkPatchPaths(section, gitlinks)
+		if len(paths) > 0 {
+			for _, path := range paths {
+				if _, exists := skippedSet[path]; !exists {
+					skippedSet[path] = struct{}{}
+					skipped = append(skipped, path)
+				}
+			}
+		} else {
+			filtered.Write(section)
+		}
+		patch = patch[end:]
+	}
+	return filtered.Bytes(), skipped
+}
+func gitlinkPatchPaths(section []byte, gitlinks []string) []string {
+	newline := bytes.IndexByte(section, '\n')
+	if newline < 0 {
+		return nil
+	}
+	header := section[:newline]
+	isGitlink := false
+	for _, line := range bytes.Split(section[newline+1:], []byte("\n")) {
+		if bytes.HasPrefix(line, []byte("--- ")) || bytes.HasPrefix(line, []byte("+++ ")) || bytes.HasPrefix(line, []byte("@@ ")) {
+			break
+		}
+		switch string(line) {
+		case "new file mode 160000", "deleted file mode 160000", "old mode 160000", "new mode 160000":
+			isGitlink = true
+		}
+		fields := bytes.Fields(line)
+		if len(fields) == 3 && string(fields[0]) == "index" && string(fields[2]) == "160000" {
+			isGitlink = true
+		}
+	}
+	if !isGitlink {
+		return nil
+	}
+	paths := make([]string, 0, 1)
+	for _, path := range gitlinks {
+		if diffHeaderHasPath(header, "a/"+path) || diffHeaderHasPath(header, "b/"+path) {
+			paths = append(paths, path)
+		}
+	}
+	return paths
+}
+
+func diffHeaderHasPath(header []byte, path string) bool {
+	quoted := []byte(strconv.Quote(path))
+	if bytes.Contains(header, quoted) {
+		return true
+	}
+	for offset := 0; offset < len(header); {
+		index := bytes.Index(header[offset:], []byte(path))
+		if index < 0 {
+			return false
+		}
+		start := offset + index
+		end := start + len(path)
+		startsToken := start > 0 && (header[start-1] == ' ' || header[start-1] == '"')
+		endsToken := end == len(header) || header[end] == ' ' || header[end] == '"'
+		if startsToken && endsToken {
+			return true
+		}
+		offset = start + 1
+	}
+	return false
 }
 
 // unshallowUpstream fetches the rest of the upstream history when the temporary repository is shallow. A shallow

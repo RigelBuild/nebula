@@ -7,7 +7,7 @@ images: {
 	}
 }
 release: {
-	base: "18.22.2-rigel.1"
+	base: "18.22.2-rigel.2"
 	artifacts: {
 		"omp-bin": {
 			kind:     "nix"

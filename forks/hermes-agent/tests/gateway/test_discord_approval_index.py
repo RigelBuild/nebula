@@ -877,7 +877,7 @@ async def test_runner_to_discord_redacts_credential_from_prompt_and_index(tmp_pa
         session_key="discord:555", source=SimpleNamespace(platform=SimpleNamespace(value="discord")),
         _loop_for_step=asyncio.get_running_loop(), stream_consumer_holder=[None],
     )
-    runner = TurnRunner(SimpleNamespace(), ctx)
+    runner = TurnRunner(SimpleNamespace(_delivery_adapter_for=lambda _source: adapter), ctx)
     loop = asyncio.get_running_loop()
     runner._schedule = lambda coro, _label: _LoopFuture(asyncio.run_coroutine_threadsafe(coro, loop))
     runner._close_native_stream_boundary = lambda _why: None

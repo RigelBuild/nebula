@@ -24,6 +24,10 @@ class _FakeAllowedMentions:
         self.users = users
         self.replied_user = replied_user
 
+    @classmethod
+    def none(cls):
+        return cls(everyone=False, roles=False, users=False, replied_user=False)
+
     def __repr__(self) -> str:  # pragma: no cover - debug helper
         return (
             f"AllowedMentions(everyone={self.everyone}, roles={self.roles}, "

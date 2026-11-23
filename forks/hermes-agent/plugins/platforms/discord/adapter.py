@@ -3361,8 +3361,16 @@ class DiscordAdapter(DiscordAuthorizationMixin, DiscordMediaMixin, DiscordThread
                     chunk_reference = reference
                 else:  # "first" (default) or "off"
                     chunk_reference = reference if i == 0 else None
+                send_kwargs = {"content": chunk, "reference": chunk_reference}
+                if metadata and metadata.get("_approval_mentions"):
+                    allowed_mentions_cls = getattr(discord, "AllowedMentions", None)
+                    if allowed_mentions_cls is not None:
+                        send_kwargs["allowed_mentions"] = allowed_mentions_cls(
+                            users=[discord.Object(id=int(metadata["_approval_mentions"]))],
+                            roles=False, everyone=False, replied_user=False,
+                        )
                 try:
-                    msg = await channel.send(content=chunk, reference=chunk_reference)
+                    msg = await channel.send(**send_kwargs)
                 except Exception as e:
                     if chunk_reference is not None and self._is_reply_reference_rejected(e):
                         logger.warning(
@@ -3370,7 +3378,8 @@ class DiscordAdapter(DiscordAuthorizationMixin, DiscordMediaMixin, DiscordThread
                             self.name, reply_to,
                         )
                         reference = None
-                        msg = await channel.send(content=chunk, reference=None)
+                        retry_kwargs = {**send_kwargs, "reference": None}
+                        msg = await channel.send(**retry_kwargs)
                     else:
                         raise
                 message_ids.append(str(msg.id))
@@ -5733,7 +5742,7 @@ class DiscordAdapter(DiscordAuthorizationMixin, DiscordMediaMixin, DiscordThread
         """Shared tail for interactive prompts: resolve target channel, call ``build(channel) ->
         (send_kwargs, view)``, send, remember the message on the view. ``fail_log`` labels failures."""
         if not self._client or not DISCORD_AVAILABLE:
-            return SendResult(success=False, error="Not connected")
+            return SendResult(success=False, error="Not connected", retryable=DISCORD_AVAILABLE)
         try:
             client = self._client
             channel = await self._resolve_channel(_prompt_target_id(chat_id, metadata))
@@ -5747,9 +5756,10 @@ class DiscordAdapter(DiscordAuthorizationMixin, DiscordMediaMixin, DiscordThread
                 view.bound_client = client
             return SendResult(success=True, message_id=str(msg.id))
         except Exception as e:
+            retryable = _is_discord_transport_error(e)
             if fail_log:
                 logger.warning("[%s] %s failed: %s", self.name, fail_log, e)
-            return SendResult(success=False, error=str(e))
+            return SendResult(success=False, error=str(e), retryable=retryable)
 
     # Payload lives in plain content: embeds can be invisible/detached on web/mobile. Properties, not
     # class constants: the wording comes from the catalog for the language active at send time.
@@ -5965,22 +5975,21 @@ class DiscordAdapter(DiscordAuthorizationMixin, DiscordMediaMixin, DiscordThread
                            custom_id, exc_info=True)
 
     async def _send_exec_approval_prompt(self, prompt: ExecApprovalPrompt) -> SendResult:
-        """Send an approval card. A card that fails or does not confirm within ``approval_card_confirm_timeout``
-        keeps its request pending: the plain-text prompt goes to the approval's thread, and the request is
-        withdrawn if nobody answers it within the same window."""
+        """Send the card, then fall back to text before withdrawing."""
         view = self._new_exec_approval_view(prompt)
         window = _read_approval_card_confirm_timeout(getattr(self.config, "extra", None))
         try:
             result = await asyncio.wait_for(self._send_exec_approval_card(prompt, view), window)
         except TimeoutError:
             result = SendResult(success=False, error=_CARD_CONFIRM_TIMEOUT_ERROR)
+        except Exception as exc:
+            result = SendResult(success=False, error=str(exc), retryable=_is_discord_transport_error(exc))
         from gateway.relay.egress import declined_send
         if result.success or not view.request_id or declined_send(result):
             return result
         logger.warning("[%s] approval card not delivered (request_id=%s): %s; posting the text prompt",
                        self.name, view.request_id, result.error)
         view.undelivered = True
-        # The withdrawal starts before the fallback send, so a hung send cannot hold the request past the window.
         view.undelivered_withdrawal = task = asyncio.get_running_loop().create_task(
             self._withdraw_undelivered_approval(prompt.session_key, view.request_id, window))
         self._background_tasks.add(task)
@@ -5988,16 +5997,16 @@ class DiscordAdapter(DiscordAuthorizationMixin, DiscordMediaMixin, DiscordThread
         task.add_done_callback(_consume_background_task_result)
         text_failure = await self._send_exec_approval_text_fallback(prompt)
         if text_failure is not None and result.error != _CARD_CONFIRM_TIMEOUT_ERROR:
-            # Card and text fallback both failed: no surface shows the prompt, so a /stop must say so. A reconnect
-            # repost that already showed the card wins: its request is not marked, even if this fallback fails later.
             from tools.approval import mark_gateway_approval_undelivered
-            mark_gateway_approval_undelivered(prompt.session_key, view.request_id, f"{result.error}, then {text_failure}")
-        return SendResult(success=False, error=result.error, raw_response={"approval_text_fallback_posted": True})
+            reason = f"{result.error}, then {text_failure}"
+            if mark_gateway_approval_undelivered(prompt.session_key, view.request_id, reason):
+                logger.error("[%s] approval prompt was never delivered (request_id=%s): %s",
+                             self.name, view.request_id, reason)
+        return SendResult(success=False, error=result.error,
+                          raw_response={"approval_text_fallback_posted": True})
 
     async def _send_exec_approval_text_fallback(self, prompt: ExecApprovalPrompt) -> str | None:
-        """Post the plain-text approval prompt in the approval's own thread. Never raises. Returns ``None`` when the
-        text prompt was delivered, else the failure reason. The request is withdrawn after approval_card_confirm_timeout,
-        so the prompt states that window, not approvals.timeout."""
+        """Post the text fallback in the approval thread with the card's opt-in owner mention."""
         from gateway.run_turn_runner_approval_text import approval_text_prompt
         actions = set(prompt.choices)
         window = _read_approval_card_confirm_timeout(getattr(self.config, "extra", None))
@@ -6005,8 +6014,19 @@ class DiscordAdapter(DiscordAuthorizationMixin, DiscordMediaMixin, DiscordThread
                                     prompt.description, getattr(self, "typed_command_prefix", "/"),
                                     allow_permanent="always" in actions, allow_session="session" in actions,
                                     smart_denied=prompt.smart_denied, deadline_s=math.ceil(window))
+        from tools.approval import list_gateway_approval_authority
+        authority = next((a for a in list_gateway_approval_authority(prompt.session_key)
+                          if a.get("request_id") == prompt.request_id), {})
+        requester = str(authority.get("requester_id") or "")
+        mention = (requester.isdigit() and self._approval_mention_content()
+                   and self._approval_mentions_target() == "session")
+        if mention:
+            text = f"<@{requester}>\n{text}"
         try:
-            metadata = {**(prompt.metadata or {}), "is_approval_prompt": True}
+            thread_id = _prompt_target_id(prompt.chat_id, prompt.metadata)
+            metadata = {**(prompt.metadata or {}), "thread_id": thread_id, "is_approval_prompt": True}
+            if mention:
+                metadata["_approval_mentions"] = requester
             result = await self.send(prompt.chat_id, text, metadata=metadata)
             if not getattr(result, "success", False):
                 return getattr(result, "error", None) or "text prompt send failed"

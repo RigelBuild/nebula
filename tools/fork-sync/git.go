@@ -99,3 +99,7 @@ func transferPatchBlobs(ctx context.Context, source, destination string, patch [
 	}
 	return nil
 }
+
+func warnGitlink(path string) {
+	fmt.Fprintf(os.Stderr, "warning: skipping gitlink %s\n", path)
+}

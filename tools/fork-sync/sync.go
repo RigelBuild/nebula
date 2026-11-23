@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/google/go-github/v93/github"
@@ -105,7 +106,21 @@ func syncFork(ctx context.Context, config forkConfig, dryRun bool) error {
 		fmt.Fprintf(syncOutput(config), "%s: would open sync/%s (%s commits, %s..%s)\n", config.Name, config.Name, commitCount, short(record.Commit), short(tip))
 		return nil
 	}
-	diff, err := git(ctx, temporary, nil, "diff", "--binary", "--find-renames", "--full-index", record.Commit, tip)
+	gitlinks, err := changedGitlinkPaths(ctx, temporary, record.Commit, tip)
+	if err != nil {
+		return err
+	}
+	for _, path := range gitlinks {
+		warnGitlink(path)
+	}
+	diffArgs := []string{"diff", "--binary", "--find-renames", "--full-index", record.Commit, tip}
+	if len(gitlinks) > 0 {
+		diffArgs = append(diffArgs, "--")
+		for _, path := range gitlinks {
+			diffArgs = append(diffArgs, ":(top,literal,exclude)"+path)
+		}
+	}
+	diff, err := git(ctx, temporary, nil, diffArgs...)
 	if err != nil {
 		return fmt.Errorf("create upstream diff: %w", err)
 	}
@@ -149,10 +164,13 @@ func syncFork(ctx context.Context, config forkConfig, dryRun bool) error {
 	} else {
 		return fmt.Errorf("fetch existing sync branch: %w", err)
 	}
-	if len(diff) == 0 {
+	if len(diff) == 0 && len(gitlinks) == 0 {
 		return errors.New("upstream commit advanced but its tree diff is empty")
 	}
-	_, applyErr := git(ctx, config.Root, diff, "apply", "--3way", "--directory=forks/"+config.Name, "-")
+	var applyErr error
+	if len(diff) > 0 {
+		_, applyErr = git(ctx, config.Root, diff, "apply", "--3way", "--directory=forks/"+config.Name, "-")
+	}
 	conflict := applyErr != nil
 	if conflict {
 		unmerged, statusErr := git(ctx, config.Root, nil, "diff", "--name-only", "--diff-filter=U")
@@ -198,6 +216,52 @@ func syncFork(ctx context.Context, config forkConfig, dryRun bool) error {
 		return err
 	}
 	return nil
+}
+
+func changedGitlinkPaths(ctx context.Context, repository, old, new string) ([]string, error) {
+	oldTree, err := git(ctx, repository, nil, "ls-tree", "-r", "-z", old)
+	if err != nil {
+		return nil, fmt.Errorf("list recorded upstream tree: %w", err)
+	}
+	oldEntries, err := parseTreeListing(oldTree)
+	if err != nil {
+		return nil, err
+	}
+	newTree, err := git(ctx, repository, nil, "ls-tree", "-r", "-z", new)
+	if err != nil {
+		return nil, fmt.Errorf("list new upstream tree: %w", err)
+	}
+	newEntries, err := parseTreeListing(newTree)
+	if err != nil {
+		return nil, err
+	}
+	oldByPath := make(map[string]treeEntry, len(oldEntries))
+	for _, entry := range oldEntries {
+		oldByPath[entry.path] = entry
+	}
+	newByPath := make(map[string]treeEntry, len(newEntries))
+	for _, entry := range newEntries {
+		newByPath[entry.path] = entry
+	}
+	paths := make(map[string]struct{})
+	for path, entry := range oldByPath {
+		current, exists := newByPath[path]
+		if entry.mode == "160000" && (!exists || current.mode != entry.mode || current.object != entry.object) {
+			paths[path] = struct{}{}
+		}
+	}
+	for path, entry := range newByPath {
+		previous, exists := oldByPath[path]
+		if entry.mode == "160000" && (!exists || previous.mode != entry.mode || previous.object != entry.object) {
+			paths[path] = struct{}{}
+		}
+	}
+	result := make([]string, 0, len(paths))
+	for path := range paths {
+		result = append(result, path)
+	}
+	sort.Strings(result)
+	return result, nil
 }
 
 // unshallowUpstream fetches the rest of the upstream history when the temporary repository is shallow. A shallow

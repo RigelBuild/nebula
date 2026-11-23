@@ -14,6 +14,62 @@ import (
 	"github.com/google/go-github/v93/github"
 )
 
+func TestSyncSkipsChangedGitlink(t *testing.T) {
+	fixture := newSyncFixture(t, false)
+	prepareSyncGitlinkChange(t, fixture, "0123456789abcdef0123456789abcdef01234567", "1123456789abcdef0123456789abcdef01234567")
+	assertSyncSkipsGitlink(t, fixture)
+}
+
+func TestSyncSkipsAddedGitlink(t *testing.T) {
+	fixture := newSyncFixture(t, false)
+	prepareSyncGitlinkChange(t, fixture, "", "0123456789abcdef0123456789abcdef01234567")
+	assertSyncSkipsGitlink(t, fixture)
+}
+
+func prepareSyncGitlinkChange(t *testing.T, fixture *syncFixture, oldObject, newObject string) {
+	t.Helper()
+	if oldObject != "" {
+		gitTest(t, fixture.upstream, "read-tree", fixture.oldCommit)
+		gitTest(t, fixture.upstream, "update-index", "--add", "--cacheinfo", "160000,"+oldObject+",sub")
+		oldTree := strings.TrimSpace(string(gitOutput(t, fixture.upstream, "write-tree")))
+		fixture.oldCommit = strings.TrimSpace(string(gitOutput(t, fixture.upstream, "commit-tree", oldTree, "-p", fixture.oldCommit, "-m", "recorded gitlink")))
+	}
+	gitTest(t, fixture.upstream, "read-tree", fixture.oldCommit)
+	valueBlob := hashRaw(t, fixture.upstream, "upstream\n")
+	gitTest(t, fixture.upstream, "update-index", "--cacheinfo", "100644,"+valueBlob+",value.txt")
+	gitTest(t, fixture.upstream, "update-index", "--add", "--cacheinfo", "160000,"+newObject+",sub")
+	newTree := strings.TrimSpace(string(gitOutput(t, fixture.upstream, "write-tree")))
+	fixture.newCommit = strings.TrimSpace(string(gitOutput(t, fixture.upstream, "commit-tree", newTree, "-p", fixture.oldCommit, "-m", "update gitlink and value")))
+	gitTest(t, fixture.upstream, "update-ref", "refs/heads/main", fixture.newCommit)
+	if oldObject != "" {
+		fixture.writeRecord(t, fixture.oldCommit)
+		gitTest(t, fixture.root, "add", "forks/widget/upstream.json")
+		gitTest(t, fixture.root, "commit", "-m", "update recorded upstream")
+		gitTest(t, fixture.root, "push", "origin", "main")
+	}
+}
+
+func assertSyncSkipsGitlink(t *testing.T, fixture *syncFixture) {
+	t.Helper()
+	server := fixture.github(t)
+	defer server.Close()
+	fixture.config.Client = newGitHubClient(t, server.URL)
+	stderr := captureStderr(t, func() {
+		if err := syncFork(context.Background(), fixture.config, false); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if want := "warning: skipping gitlink sub\n"; stderr != want {
+		t.Fatalf("stderr = %q, want %q", stderr, want)
+	}
+	if got := strings.TrimSpace(string(mustRead(t, filepath.Join(fixture.root, "forks/widget/value.txt")))); got != "upstream" {
+		t.Fatalf("synced value.txt = %q, want upstream", got)
+	}
+	if mode := commitMode(t, fixture.root, "forks/widget/sub"); mode != "" {
+		t.Fatalf("gitlink was added to sync commit with mode %s", mode)
+	}
+}
+
 func TestSyncUpdatesExistingPR(t *testing.T) {
 	fixture := newSyncFixture(t, false)
 	fixture.existingPR = true

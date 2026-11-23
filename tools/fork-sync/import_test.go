@@ -249,15 +249,25 @@ func TestImportCommitBlobsMatchForkWithoutAttributeFilters(t *testing.T) {
 }
 
 // TestImportPreservesModesSymlinksAndGitlinks: 100755 keeps its exec bit, a 120000 link keeps its target (even one
-// outside the tree), and a 160000 gitlink is staged as a gitlink with no object in the fork store.
+// outside the tree), and a 160000 gitlink is skipped with a warning.
 func TestImportPreservesModesSymlinksAndGitlinks(t *testing.T) {
 	root, forkRepo, upstreamRepo, forkCommit, forkDir := createFilterFixture(t, func(fork string) {
 		gitTest(t, fork, "update-index", "--add", "--cacheinfo", "100755,"+hashRaw(t, fork, "#!/bin/sh\necho hi\n")+",run.sh")
 		gitTest(t, fork, "update-index", "--add", "--cacheinfo", "120000,"+hashRaw(t, fork, "../../../../outside")+",link")
 		gitTest(t, fork, "update-index", "--add", "--cacheinfo", "160000,0123456789abcdef0123456789abcdef01234567,sub")
 	})
-	if err := importFork(context.Background(), root, importOptions{Name: "widget", Fork: forkRepo, Ref: "rigel-release", Upstream: upstreamRepo, UpstreamBranch: "main"}); err != nil {
+	var err error
+	stderr := captureStderr(t, func() {
+		err = importFork(context.Background(), root, importOptions{Name: "widget", Fork: forkRepo, Ref: "rigel-release", Upstream: upstreamRepo, UpstreamBranch: "main"})
+	})
+	if err != nil {
 		t.Fatal(err)
+	}
+	if want := "warning: skipping gitlink sub\n"; stderr != want {
+		t.Fatalf("stderr = %q, want %q", stderr, want)
+	}
+	if _, err := os.Stat(filepath.Join(root, "forks/widget/sub")); !os.IsNotExist(err) {
+		t.Errorf("gitlink path stat error = %v, want path absent", err)
 	}
 	if info, err := os.Stat(filepath.Join(root, "forks/widget/run.sh")); err != nil || info.Mode().Perm()&0o100 == 0 {
 		t.Errorf("run.sh mode = %v, %v; want executable", info, err)
@@ -272,13 +282,8 @@ func TestImportPreservesModesSymlinksAndGitlinks(t *testing.T) {
 			t.Errorf("commit blob for %s = %s, want fork blob %s", path, got[path], want[path])
 		}
 	}
-	if mode := commitMode(t, root, "forks/widget/sub"); mode != "160000" {
-		t.Errorf("forks/widget/sub mode = %q, want 160000 gitlink", mode)
-	} else if id := commitObject(t, root, "forks/widget/sub"); id != "0123456789abcdef0123456789abcdef01234567" {
-		t.Errorf("forks/widget/sub commit = %s, want fork gitlink 0123456789abcdef0123456789abcdef01234567", id)
-	}
 	if mode := commitMode(t, root, "forks/widget/run.sh"); mode != "100755" {
-		t.Errorf("forks/widget/run.sh committed mode = %q, want 100755", mode)
+		t.Errorf("run.sh committed mode = %q, want 100755", mode)
 	}
 }
 

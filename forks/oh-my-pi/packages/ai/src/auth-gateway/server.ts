@@ -79,7 +79,6 @@ import {
 	armBudget,
 	candidateKey,
 	completeAttempt,
-	endWithFailure,
 	type HeldAttempt,
 	holdUntilCommit,
 	sseHoldBody,
@@ -592,9 +591,9 @@ interface FailedOutcome {
 	readonly kind: "failed";
 	readonly model: Model<Api>;
 	readonly failure: GatewayErrorClassification;
-	/** The upstream error message, replayed as-is once headers are sent. */
+	/** The original provider error, before normalization into the client-facing failure. */
 	readonly error?: AssistantMessage;
-	/** Retry delay of a usage-limit answer; sets `Retry-After` when no body is open yet. */
+	/** Retry delay of a usage-limit answer; sets `Retry-After` on the pre-commit response. */
 	readonly retryAfterMs?: number;
 }
 
@@ -659,9 +658,8 @@ function judgeAttempt(
 }
 
 /**
- * Tries candidates in turn until one produces output. A streaming request gets
- * its 200 once the first `streamSimple` returns; the rest of the loop runs
- * behind that open body, so a later failure is written as an SSE error.
+ * Tries candidates in turn until one produces output. Streaming headers wait
+ * until a candidate commits, so a pre-output failure can still answer normally.
  */
 function serveWithFailover(request: FailoverRequest, route: FailoverRoute): Promise<Response> {
 	const { controller, requestId, startedAt } = request;
@@ -673,7 +671,7 @@ function serveWithFailover(request: FailoverRequest, route: FailoverRoute): Prom
 		}
 	};
 	const control: AuthGatewayStreamControl = { signal: controller.signal, onCancel };
-	// Headers can go out before the answering backend is known, so they name only the requested model.
+	// The answering backend is known at commit, but the client-facing model id remains the requested one.
 	const streamHeaders = (model: Model<Api>): Record<string, string> => {
 		const out = gatewayResponseHeaders(model, { requestId });
 		out["x-litellm-model-id"] = route.requestedModelId;
@@ -718,39 +716,20 @@ function serveWithFailover(request: FailoverRequest, route: FailoverRoute): Prom
 				case "committed":
 					body?.resolve(route.encodeStream(outcome.relay, control));
 					return;
-				case "failed": {
-					if (!body) {
-						response.resolve(
-							usageLimitResponse(route.formatError, {
-								failure: outcome.failure,
-								retryAfterMs: outcome.retryAfterMs,
-							}),
-						);
-						return;
-					}
-					const relay = new AssistantMessageEventStream();
-					if (outcome.error) {
-						relay.push({
-							type: "error",
-							reason: outcome.error.stopReason === "aborted" ? "aborted" : "error",
-							error: outcome.error,
-						});
-					} else {
-						endWithFailure(relay, outcome.model, outcome.failure);
-					}
-					body.resolve(route.encodeStream(relay, control));
+				case "failed":
+					response.resolve(
+						usageLimitResponse(route.formatError, {
+							failure: outcome.failure,
+							retryAfterMs: outcome.retryAfterMs,
+						}),
+					);
 					return;
-				}
 				case "aborted":
-					if (body) body.resolve(new ReadableStream({ start: stream => stream.close() }));
-					else response.resolve(route.formatError(499, "request_aborted", "client closed request"));
+					response.resolve(route.formatError(499, "request_aborted", "client closed request"));
 					return;
 			}
 		},
-		error => {
-			if (body) body.reject(error);
-			else response.reject(error);
-		},
+		error => response.reject(error),
 	);
 	return response.promise;
 }
@@ -1013,7 +992,6 @@ async function runFailoverLoop(
 					model = next;
 					continue;
 				}
-				openBody(answering);
 				void events
 					.result()
 					.then(message => {
@@ -1039,12 +1017,13 @@ async function runFailoverLoop(
 				let held: HeldAttempt | undefined;
 				let thrown: unknown;
 				try {
-					held = await holdUntilCommit(events, budget);
+					held = await holdUntilCommit(events, budget, () => openBody(answering));
 				} catch (error) {
 					thrown = error;
 				}
-				if (held?.kind === "committed") return { kind: "committed", relay: held.relay };
-				// An attempt that stopped holding without committing must not keep streaming beside the next one.
+				if (held?.kind === "committed") {
+					return { kind: "committed", relay: held.relay };
+				}
 				attemptController.abort(new Error("Gateway attempt abandoned before commit"));
 				verdict = judgeAttempt(answering, controller.signal, budget.timedOut(), held?.error, thrown);
 			}

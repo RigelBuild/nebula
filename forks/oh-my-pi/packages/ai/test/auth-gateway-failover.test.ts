@@ -827,7 +827,7 @@ describe("auth-gateway candidate failover", () => {
 		}
 	});
 
-	it("writes an SSE error into the open 200 body when B has no credential", async () => {
+	it("answers with B's credential failure (401)", async () => {
 		const up = upstream({
 			[A_HOST]: () => jsonError(503, GOOGLE_503),
 			[B_HOST]: () => googleAnswer("answer from B"),
@@ -842,9 +842,7 @@ describe("auth-gateway candidate failover", () => {
 			const response = await send(gateway.url, PI, true);
 			const body = await response.text();
 
-			expect(response.status).toBe(200);
-			expect(response.headers.get("content-type")).toContain("text/event-stream");
-			expect(body).toContain('"type":"error"');
+			expect(response.status).toBe(401);
 			expect(body).toContain("No credential available for provider google");
 			expect(up.hosts()).toEqual([A_HOST]);
 			expect(kinds(gateway.failures)).toEqual([
@@ -1415,25 +1413,27 @@ describe("auth-gateway candidate failover", () => {
 		}
 	});
 
-	it("cancelling the held SSE body aborts A and starts no follower", async () => {
+	it("returns 499 and starts no follower when the client aborts before the SSE stream commits", async () => {
 		const up = upstream({ [A_HOST]: init => never(init?.signal), [B_HOST]: () => googleAnswer("answer from B") });
 		const gateway = await startFailoverGateway({ candidates: [a, b], fetch: up.fetch });
 		const router = createAuthGatewayRouter(gateway.routeOptions);
 		try {
-			const response = await router.route(
+			const client = new AbortController();
+			const pending = router.route(
 				new Request(`http://gateway.local${CHAT.path}`, {
 					method: "POST",
 					headers: { "Content-Type": "application/json" },
 					body: JSON.stringify(CHAT.body("requested-model", true)),
+					signal: client.signal,
 				}),
 				"test-peer",
 				SHARED_TOKEN_CALLER,
 			);
-			expect(response.status).toBe(200);
 			await up.reached(A_HOST);
-			await response.body?.cancel(new Error("client went away"));
-			await settle();
+			client.abort(new Error("client went away"));
+			const response = await pending;
 
+			expect(response.status).toBe(499);
 			expect(up.calls.find(call => call.host === A_HOST)?.signal?.aborted).toBe(true);
 			expect(up.count(B_HOST)).toBe(0);
 			expect(gateway.failures).toEqual([]);
@@ -1535,7 +1535,7 @@ describe("auth-gateway candidate failover", () => {
 				const response = await send(gateway.url, CHAT, stream);
 				const body = await response.text();
 
-				expect(response.status).toBe(stream ? 200 : 499);
+				expect(response.status).toBe(499);
 				expect(body).not.toContain("answer from B");
 				expect(up.hosts()).toEqual([]);
 				expect(gateway.failures).toEqual([]);

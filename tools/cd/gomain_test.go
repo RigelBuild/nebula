@@ -125,29 +125,25 @@ func TestMainPackageResolvesInsideProject(t *testing.T) {
 	}
 }
 
-// TestRealCmdToolsDeclareTheirMainPackage pins the two tools whose main package
-// lives under cmd/: their declared main must name a real main.go, or CD fails.
+// TestRealCmdToolsDeclareTheirMainPackage checks that every Go binary CD builds has a main.go
+// at its planned main package. A cmd/ tool with no declared main fails here.
 func TestRealCmdToolsDeclareTheirMainPackage(t *testing.T) {
 	repo := filepath.Join("..", "..")
 	binaries, err := listBinaries(repo)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"omp-pool", "wave-seat-holder"} {
-		var got *Binary
-		for i := range binaries {
-			if binaries[i].Package == name {
-				got = &binaries[i]
-			}
+	for _, binary := range binaries {
+		if binary.Kind != kindGo {
+			continue
 		}
-		if got == nil {
-			t.Fatalf("%s: not in the plan", name)
+		if _, err := os.Stat(filepath.Join(repo, binary.Project, "go.mod")); errors.Is(err, os.ErrNotExist) {
+			continue
+		} else if err != nil {
+			t.Fatalf("%s: stat go.mod: %v", binary.Package, err)
 		}
-		if want := "./cmd/" + name; got.Main != want {
-			t.Fatalf("%s main = %q, want %q", name, got.Main, want)
-		}
-		if _, err := os.Stat(filepath.Join(repo, got.Project, got.Main, "main.go")); err != nil {
-			t.Fatalf("%s: declared main has no main.go: %v", name, err)
+		if _, err := os.Stat(filepath.Join(repo, binary.Project, binary.Main, "main.go")); err != nil {
+			t.Errorf("%s: planned main %q has no main.go: %v", binary.Package, binary.Main, err)
 		}
 	}
 }

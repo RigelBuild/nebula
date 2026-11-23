@@ -6,6 +6,7 @@ release: {
 			kind:     "binary"
 			package:  "local:transcript-archive"
 			binaries: ["transcript-archive"]
+			main:     "./cmd/transcript-archive"
 		}
 	}
 }

@@ -701,8 +701,7 @@ jobs:
           CGO_ENABLED: '0'
           MIRROR_TOKEN: ${{ steps.sync.outputs.token }}
         run: |
-          # Fast-forwards the mirror to the tools/jj-hooks split. A mirror tip with
-          # unrelated history is skipped with a warning (RIG-10830); the push never forces.
+          # Advances the mirror by fast-forward. Unrelated history gets one bridge merge; pushes never force.
           go -C tools/cd build -o "$RUNNER_TEMP/cd" .
           "$RUNNER_TEMP/cd" mirror -repo . -prefix tools/jj-hooks \
             -url https://github.com/mattwilkinsonn/jj-hooks.git -branch main > "$RUNNER_TEMP/mirror.txt"

@@ -143,7 +143,7 @@ func TestCleanWorkspacesRealJJ(t *testing.T) {
 				backdate(t, dir, ancient)
 				return dir
 			},
-			wantGone: true,
+			wantReport: true,
 		},
 		{
 			name: "unpushed",
@@ -202,11 +202,10 @@ func TestCleanWorkspacesRealJJ(t *testing.T) {
 				backdate(t, dir, ancient)
 				return dir
 			},
-			wantGone: true,
+			wantReport: true,
 		},
 		{
-			// The forget never ran: name still registered, unpushed work. The stale marker is dropped and the
-			// workspace is kept and reported in the same run.
+			// Workspace deletion is disabled; report only and keep the marker.
 			name: "marker-registered",
 			setup: func(t *testing.T, f *jjFixture) string {
 				dir := f.secondary("marker-registered")
@@ -216,11 +215,10 @@ func TestCleanWorkspacesRealJJ(t *testing.T) {
 				backdate(t, dir, ancient)
 				return dir
 			},
-			wantMarkerGone: true,
-			wantReport:     true,
+			wantReport: true,
 		},
 		{
-			// The forget ran before a crash: name already gone from the store, so the leftover is deleted.
+			// A forgotten marked workspace is kept and reported.
 			name: "marker-forgotten",
 			setup: func(t *testing.T, f *jjFixture) string {
 				dir := f.secondary("marker-forgotten")
@@ -229,10 +227,10 @@ func TestCleanWorkspacesRealJJ(t *testing.T) {
 				backdate(t, dir, ancient)
 				return dir
 			},
-			wantGone: true,
+			wantReport: true,
 		},
 		{
-			// A trash dir a crash left behind: its name is still registered, so the next run forgets it and removes it.
+			// A leftover trash directory is kept and reported.
 			name: "trash-leftover",
 			setup: func(t *testing.T, f *jjFixture) string {
 				dir := f.secondary("trash-leftover")
@@ -244,7 +242,7 @@ func TestCleanWorkspacesRealJJ(t *testing.T) {
 				backdate(t, trash, ancient)
 				return trash
 			},
-			wantGone: true,
+			wantReport: true,
 		},
 		{
 			name: "recent",
@@ -317,31 +315,28 @@ func keptFor(kepts []kept, dir string) bool {
 	return false
 }
 
-// TestDeleteReleasesWorktree checks a deleted workspace leaves no jj name and no git worktree entry, so the same
-// path can be added again. Before the forget ran first, git kept a stale "missing but registered" worktree here.
-func TestDeleteReleasesWorktree(t *testing.T) {
+// TestApplyKeepsWorktree checks the sweep retains the workspace registration and git worktree.
+func TestApplyKeepsWorktree(t *testing.T) {
 	f := newJJFixture(t)
 	dir := f.secondary("reuse")
 	if _, err := os.Stat(filepath.Join(f.primary, ".git", "worktrees", "reuse")); err != nil {
 		t.Fatalf("setup did not register a git worktree; the absence check below would prove nothing: %v", err)
 	}
 	backdate(t, dir, time.Now().Add(-100*time.Hour))
-	sweep(t, sweepConfig(f, true), nil)
-	if _, err := os.Stat(dir); !os.IsNotExist(err) {
-		t.Fatalf("workspace not deleted: stat err = %v\nverdicts:\n%s", err, lastSweepLog)
+	kept := sweep(t, sweepConfig(f, true), nil)
+	if _, err := os.Stat(dir); err != nil || !keptFor(kept, dir) {
+		t.Fatalf("workspace not retained and reported: %v\nverdicts:\n%s", err, lastSweepLog)
 	}
-	if names := f.jj(f.primary, "workspace", "list", "-T", `name ++ "\n"`); strings.Contains(names, "reuse") {
-		t.Fatalf("jj still lists the forgotten name: %q", names)
+	if names := f.jj(f.primary, "workspace", "list", "-T", `name ++ "\n"`); !strings.Contains(names, "reuse") {
+		t.Fatalf("jj no longer lists the workspace: %q", names)
 	}
-	if _, err := os.Stat(filepath.Join(f.primary, ".git", "worktrees", "reuse")); !os.IsNotExist(err) {
-		t.Fatalf("git worktree entry survives the delete: stat err = %v", err)
+	if _, err := os.Stat(filepath.Join(f.primary, ".git", "worktrees", "reuse")); err != nil {
+		t.Fatalf("git worktree entry removed: %v", err)
 	}
-	f.jj(f.primary, "workspace", "add", dir, "--name", "reuse", "-r", "main")
 }
 
-// TestStaleMarkerReclassifiedOnSecondSweep checks a stale marker is dropped on the first run and the workspace is
-// judged normally on the next. A workspace with unpushed work must be kept and reported, never deleted.
-func TestStaleMarkerReclassifiedOnSecondSweep(t *testing.T) {
+// TestStaleMarkerHeldOnEverySweep checks workspace deletion is disabled; report only.
+func TestStaleMarkerHeldOnEverySweep(t *testing.T) {
 	ancient := time.Now().Add(-100 * time.Hour)
 	f := newJJFixture(t)
 	dir := f.secondary("stale")
@@ -350,8 +345,8 @@ func TestStaleMarkerReclassifiedOnSecondSweep(t *testing.T) {
 	mustWrite(t, filepath.Join(dir, workspaceMarker), f.primary+"\tstale\n")
 	backdate(t, dir, ancient)
 	sweep(t, sweepConfig(f, true), nil)
-	if _, err := os.Stat(filepath.Join(dir, workspaceMarker)); !os.IsNotExist(err) {
-		t.Fatalf("stale marker not removed on the first sweep: stat err = %v\nverdicts (first sweep):\n%s", err, lastSweepLog)
+	if _, err := os.Stat(filepath.Join(dir, workspaceMarker)); err != nil {
+		t.Fatalf("marker removed on the first sweep: %v\nverdicts:\n%s", err, lastSweepLog)
 	}
 	backdate(t, dir, ancient)
 	kept := sweep(t, sweepConfig(f, true), nil)

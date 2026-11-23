@@ -624,6 +624,7 @@ def _no_spawn_targets(monkeypatch, runtime, *, reserved=None, second="absent"):
     monkeypatch.setattr(runtime, "_missing_owner_verdict", lambda home: runtime.GatewayDiscovery(second))
 
 
+
 @pytest.mark.parametrize("idle_exit", [True, False], ids=["client", "dashboard"])
 def test_gateway_no_spawn_refuses_when_service_is_absent(fast_runway, tmp_path, monkeypatch, idle_exit):
     runtime, _ = fast_runway
@@ -633,10 +634,31 @@ def test_gateway_no_spawn_refuses_when_service_is_absent(fast_runway, tmp_path, 
     monkeypatch.setenv("HERMES_GATEWAY_NO_SPAWN", "1")
     monkeypatch.setattr(start, "spawn_unmanaged_gateway",
                         lambda *args, **kwargs: pytest.fail("unmanaged gateway spawn was not disabled"))
+    before = time.monotonic()
 
     result = runtime.ensure_gateway_runtime(tmp_path, idle_exit=idle_exit)
 
+    assert time.monotonic() - before >= 0.45
     assert (result.state, result.reason_code) == ("inaccessible", "spawn_disabled")
+    assert result.detail == ("The gateway must be started by its service manager (launchd or systemd); "
+                             "HERMES_GATEWAY_NO_SPAWN=1 disables client starts.")
+
+
+def test_gateway_no_spawn_waits_for_a_managed_gateway_restart(fast_runway, tmp_path, monkeypatch):
+    from hermes_cli import gateway_runtime_start as start
+    runtime, _ = fast_runway
+
+    _no_spawn_targets(monkeypatch, runtime)
+    monkeypatch.setenv("HERMES_GATEWAY_NO_SPAWN", "1")
+    monkeypatch.setattr(start, "spawn_unmanaged_gateway",
+                        lambda *args, **kwargs: pytest.fail("unmanaged gateway spawn was not disabled"))
+    probes = iter([runtime.GatewayDiscovery("absent"), runtime.GatewayDiscovery("ready")])
+    monkeypatch.setattr(runtime, "_observe_replacing_stale", lambda *args: next(probes))
+
+    result = runtime.ensure_gateway_runtime(tmp_path)
+
+    assert result.state == "ready"
+
 
 
 def test_gateway_spawn_is_unchanged_when_no_spawn_is_unset(fast_runway, tmp_path, monkeypatch):

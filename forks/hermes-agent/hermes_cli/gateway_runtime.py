@@ -446,6 +446,9 @@ def ensure_gateway_runtime(profile_home: str | Path, *, timeout: float | None = 
     requested = False
     child = None
     child_home, child_offset = home, 0
+    no_spawn = os.environ.get("HERMES_GATEWAY_NO_SPAWN") == "1"
+    spawn_disabled_waiting = False
+    observed: GatewayDiscovery | None = None
     waiting: dict[Path, None] = {}  # the homes whose pending start this call awaits: their owners are sampled
     # A gateway ending through its own idle exit is not a refusal: wait for it to go (its lock is
     # still held for a moment after its control socket closes, which reads as "starting"), then
@@ -464,7 +467,7 @@ def ensure_gateway_runtime(profile_home: str | Path, *, timeout: float | None = 
             # starting (a wedged READY gateway, which may spin forever) is never sampled: its control
             # timeout is a deadline, as before. A progressing owner moves this loop's deadline, and a
             # macOS launchd job's, whose poll() would otherwise stop reporting an exit at the old one.
-            deadline = runway.extend(tuple(waiting), child)
+            deadline = runway.extend((), child) if spawn_disabled_waiting else runway.extend(tuple(waiting), child)
             if isinstance(child, GatewayJob):
                 child.extend_deadline(deadline)
             # Poll BEFORE discovering: an exit observed first, then "absent", cannot be a child that
@@ -489,17 +492,19 @@ def ensure_gateway_runtime(profile_home: str | Path, *, timeout: float | None = 
                                         detail=startup_failure_report(child_home, child_offset, status, child.pid))
             if observed.state == "starting" and not retiring:
                 requested = True
-                waiting[home] = None
-            if observed.state == "absent":
+                if not no_spawn and not spawn_disabled_waiting:
+                    waiting[home] = None
+
+            if observed.state == "absent" and not spawn_disabled_waiting:
                 retiring = False
             reserved = _starting_multiplexer_root(home) if observed.state == "absent" and not requested else None
             # Every pass, not only before joining: a root reserves before it publishes a standalone
             # refusal, and its CPU (now sampled) must not stretch a doomed wait.
-            if reason := _awaited_root_refusal(home, reserved, waiting):
+            if not spawn_disabled_waiting and (reason := _awaited_root_refusal(home, reserved, waiting)):
                 return GatewayDiscovery("inaccessible", reason_code="profile_parked", detail=reason)
             # A default multiplexer that is still starting will serve this named profile; never
             # spawn a competing per-profile daemon while its reservation is pending.
-            if reserved is not None:
+            if reserved is not None and not spawn_disabled_waiting:
                 requested = True
                 waiting[reserved] = None
             if observed.state == "absent" and not requested:
@@ -521,20 +526,28 @@ def ensure_gateway_runtime(profile_home: str | Path, *, timeout: float | None = 
                     continue
                 if service is not None:
                     start_existing_gateway_service(service, deadline=deadline)
-                elif os.environ.get("HERMES_GATEWAY_NO_SPAWN") == "1":
-                    return GatewayDiscovery("inaccessible", reason_code="spawn_disabled")
+                    requested = True
+                    waiting[target] = None
+                elif no_spawn:
+                    # Another service manager owns this start; keep polling during its restart window.
+                    requested = True
+                    spawn_disabled_waiting = True
                 else:
                     from hermes_cli.gateway_runtime_start import spawn_unmanaged_gateway, stdio_log_size
                     child_home, child_offset = target, stdio_log_size(target)
                     child = spawn_unmanaged_gateway(target, deadline=deadline, idle_exit=idle_exit)
-                requested = True
-                waiting[target] = None
+                    requested = True
+                    waiting[target] = None
             # Never raises: an exhausted budget gets one more sample (top of loop) before its verdict.
             time.sleep(min(delay, max(0.0, deadline - time.monotonic())))
             # Capped low: each probe is a lock-file read or one local identify, and READY is noticed
             # within ~50 ms instead of up to 250 ms later on every cold start.
             delay = min(delay * 1.5, 0.05)
     except TimeoutError:
+        if spawn_disabled_waiting and observed is not None and observed.state == "absent":
+            return GatewayDiscovery("inaccessible", reason_code="spawn_disabled",
+                                    detail="The gateway must be started by its service manager (launchd or systemd); "
+                                           "HERMES_GATEWAY_NO_SPAWN=1 disables client starts.")
         return GatewayDiscovery("starting", reason_code="deadline")
     except RuntimeStartError as exc:
         return GatewayDiscovery(exc.state, reason_code=exc.reason)

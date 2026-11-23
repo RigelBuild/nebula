@@ -147,9 +147,8 @@ func steppingClock() func() time.Time {
 	}
 }
 
-// TestHomeIdleWalkBoundFallsBackToTopLevel judges a tree past the time or depth bound
-// by its top-level entries: idle ones are pruned, one fresh top-level entry keeps it.
-func TestHomeIdleWalkBoundFallsBackToTopLevel(t *testing.T) {
+// TestHomeIdleWalkBoundKeepsTree keeps trees whose walk exceeds its bounds.
+func TestHomeIdleWalkBoundKeepsTree(t *testing.T) {
 	deep := "harness/job"
 	for range idleWalkMaxDepth + 1 {
 		deep += "/d"
@@ -157,24 +156,17 @@ func TestHomeIdleWalkBoundFallsBackToTopLevel(t *testing.T) {
 	cases := []struct {
 		name      string
 		tree      string
-		freshTop  bool
 		timeBound bool
 		removed   bool
 	}{
-		{"time bound idle", "harness/job/a", false, true, true},
-		{"time bound fresh top-level entry", "harness/job/a", true, true, false},
-		{"depth bound idle", deep, false, false, true},
-		{"depth bound fresh top-level entry", deep, true, false, false},
+		{"time bound idle", "harness/job/a", true, false},
+		{"depth bound idle", deep, false, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			home := t.TempDir()
 			idleTree(t, home, tc.tree)
 			job := filepath.Join(home, "harness", "job")
-			if tc.freshTop {
-				touchAt(t, filepath.Join(job, "out.log"), testNow.Add(-time.Hour))
-				setMtime(t, job, homeOld)
-			}
 			opts := homeOpts(t, home, makeProcTable(t))
 			if tc.timeBound {
 				opts.walk = homeWalk{budget: time.Nanosecond, clock: steppingClock()}
@@ -206,20 +198,6 @@ func TestHomePruneDryRunRemovesNothing(t *testing.T) {
 	}
 	if !strings.Contains(out, "would remove harness/old-run") {
 		t.Fatalf("output %q does not report the dry-run candidate", out)
-	}
-}
-
-// TestHomePruneSkipsWhileSlotLockHeld removes nothing while rbuild/.locks holds a live slot.
-func TestHomePruneSkipsWhileSlotLockHeld(t *testing.T) {
-	home := t.TempDir()
-	job := idleTree(t, home, "harness/old-run")
-	writeSlotOwner(t, filepath.Join(home, "rbuild"), 0, "run held 4242\n")
-	out := pruneHome(t, homeOpts(t, home, makeProcTable(t, "4242")))
-	if _, err := os.Stat(job); err != nil {
-		t.Fatalf("idle job removed while a slot lock was held: %v", err)
-	}
-	if !strings.Contains(out, "skip all: slot lock slot-0 held") {
-		t.Fatalf("output %q does not report the held lock", out)
 	}
 }
 

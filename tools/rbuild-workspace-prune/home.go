@@ -15,9 +15,6 @@ import (
 // homeCache holds per-task dirs, which are pruned; homeCacheKept are shared build caches.
 const homeCache = ".cache"
 
-// homeLockDir is rbuild's slot lock dir under the home; its locks are host-wide.
-const homeLockDir = "rbuild/" + lockDirName
-
 // homeContainers are job dirs. Their children are pruned; the containers stay.
 // Under rjc-hook only tmp holds per-run dirs.
 var homeContainers = []string{"harness", "build", "rjc-hook/tmp", "work", "workspaces", "tmp", "agents-ci"}
@@ -46,14 +43,15 @@ type homeWalk struct {
 	clock  func() time.Time
 }
 
-// homeScan selects home candidates. A walk past its bound falls back to top-level mtimes.
+// homeScan selects home candidates and keeps trees whose walks exceed their bounds.
 type homeScan struct {
-	root    *os.Root
-	now     time.Time
-	maxIdle time.Duration
-	budget  time.Duration
-	clock   func() time.Time
-	out     *printer
+	root      *os.Root
+	now       time.Time
+	maxIdle   time.Duration
+	budget    time.Duration
+	clock     func() time.Time
+	out       *printer
+	entryInfo func(fs.DirEntry) (fs.FileInfo, error)
 }
 
 // selectCandidates returns the idle workspaces and staged leftovers to prune.
@@ -72,11 +70,78 @@ func selectCandidates(root *os.Root, now time.Time, opts options, out *printer) 
 		leftovers, err = s.leftovers()
 		return candidates, leftovers, err
 	}
-	if candidates, err = idleCandidates(root, now, opts.maxIdle); err != nil {
+	if opts.pattern != "" {
+		matches, err := fs.Glob(root.FS(), filepath.ToSlash(opts.pattern))
+		if err != nil {
+			return nil, nil, err
+		}
+		for _, rel := range matches {
+			ok, err := safeGlobPath(root, rel, false)
+			if err != nil {
+				return nil, nil, err
+			}
+			if !ok {
+				continue
+			}
+			idle, err := idleLongerThan(root, rel, now, opts.maxIdle, out)
+			if err != nil {
+				return nil, nil, err
+			}
+			if idle {
+				candidates = append(candidates, rel)
+			}
+		}
+		stagedPattern := filepath.Join(filepath.Dir(opts.pattern), pruneStagePrefix+filepath.Base(opts.pattern)+"-*")
+		staged, err := fs.Glob(root.FS(), filepath.ToSlash(stagedPattern))
+		if err != nil {
+			return nil, nil, err
+		}
+		for _, rel := range staged {
+			ok, err := safeGlobPath(root, rel, true)
+			if err != nil {
+				return nil, nil, err
+			}
+			if !ok {
+				continue
+			}
+			idle, err := idleLongerThan(root, rel, now, opts.maxIdle, out)
+			if err != nil {
+				return nil, nil, err
+			}
+			if idle {
+				leftovers = append(leftovers, rel)
+			}
+		}
+		return candidates, leftovers, nil
+	}
+	if candidates, err = idleCandidates(root, now, opts.maxIdle, out); err != nil {
 		return nil, nil, err
 	}
-	leftovers, err = stagedLeftovers(root, now, opts.maxIdle)
+	leftovers, err = stagedLeftovers(root, now, opts.maxIdle, out)
 	return candidates, leftovers, err
+}
+
+// safeGlobPath refuses hidden components, bare caches and symlinked paths.
+func safeGlobPath(root *os.Root, rel string, staged bool) (bool, error) {
+	parts := strings.Split(filepath.ToSlash(rel), "/")
+	path := ""
+	for i, part := range parts {
+		if strings.HasSuffix(part, ".git") || (strings.HasPrefix(part, ".") && !(staged && i == len(parts)-1 && strings.HasPrefix(part, pruneStagePrefix))) {
+			return false, nil
+		}
+		path = filepath.Join(path, part)
+		info, err := root.Lstat(path)
+		if errors.Is(err, fs.ErrNotExist) {
+			return false, nil
+		}
+		if err != nil {
+			return false, err
+		}
+		if !info.IsDir() || info.Mode()&fs.ModeSymlink != 0 {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 // candidates returns the home entries idle longer than maxIdle: top-level entries
@@ -192,9 +257,8 @@ func (s homeScan) stagedIn(dir string) ([]string, error) {
 	return out, nil
 }
 
-// treeIdle reports whether the newest mtime anywhere under rel is older than maxIdle.
-// Symlinks are not followed. A walk past idleWalkMaxDepth or the time budget judges
-// rel by its own and its top-level entries' mtimes instead, and logs one line.
+// treeIdle checks all descendants without following symlinks. A tree whose walk
+// exceeds the depth or time bound is kept.
 func (s homeScan) treeIdle(rel string) (bool, error) {
 	info, err := s.root.Lstat(rel)
 	if err != nil {
@@ -219,7 +283,12 @@ func (s homeScan) treeIdle(rel string) (bool, error) {
 		if strings.Count(path, "/")-baseDepth > idleWalkMaxDepth || s.clock().After(deadline) {
 			return errWalkBound
 		}
-		info, err := entry.Info()
+		var info fs.FileInfo
+		if s.entryInfo != nil {
+			info, err = s.entryInfo(entry)
+		} else {
+			info, err = entry.Info()
+		}
 		if errors.Is(err, fs.ErrNotExist) {
 			return nil
 		}
@@ -233,34 +302,13 @@ func (s homeScan) treeIdle(rel string) (bool, error) {
 		return nil
 	})
 	if errors.Is(err, errWalkBound) {
-		s.out.printf("walk bound reached in %s; judging by top-level entries\n", rel)
-		return s.topLevelIdle(rel)
+		s.out.printf("walk bound reached in %s; keeping tree\n", rel)
+		return false, nil
 	}
 	if err != nil {
 		return false, err
 	}
 	return !fresh, nil
-}
-
-// topLevelIdle reports whether every direct entry of rel is older than maxIdle.
-func (s homeScan) topLevelIdle(rel string) (bool, error) {
-	entries, err := readDirFS(s.root, rel)
-	if err != nil {
-		return false, fmt.Errorf("read %s: %w", rel, err)
-	}
-	for _, entry := range entries {
-		info, err := entry.Info()
-		if errors.Is(err, fs.ErrNotExist) {
-			continue
-		}
-		if err != nil {
-			return false, fmt.Errorf("stat %s/%s: %w", rel, entry.Name(), err)
-		}
-		if !s.idleAt(info.ModTime()) {
-			return false, nil
-		}
-	}
-	return true, nil
 }
 
 // idleAt reports whether mtime is older than maxIdle.
@@ -273,11 +321,11 @@ func protectedHome(name string) bool {
 	return strings.HasPrefix(name, ".") || slices.Contains(homeKept, name)
 }
 
-// scanBusy returns the root-relative cwds of live processes. Home mode also counts open files.
+// scanBusy returns root-relative process working directories and open files.
 func scanBusy(opts options) ([]string, error) {
 	busy, err := busyRelative(opts.procDir, opts.root, opts.readCwd)
-	if err != nil || !opts.home {
-		return busy, err
+	if err != nil {
+		return nil, err
 	}
 	open, err := openFilesRelative(opts.procDir, opts.root)
 	return append(busy, open...), err
@@ -317,13 +365,4 @@ func openFilesRelative(procDir, root string) ([]string, error) {
 		}
 	}
 	return open, nil
-}
-
-// heldSlot returns the held rbuild slot lock. Home mode reads it from rbuild/.locks under the home.
-func heldSlot(root *os.Root, opts options, now time.Time) (string, error) {
-	dir := lockDirName
-	if opts.home {
-		dir = homeLockDir
-	}
-	return slotLockHeld(root, dir, opts.procDir, now)
 }

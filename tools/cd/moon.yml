@@ -9,7 +9,7 @@ tasks:
   test:
     command: "go"
     args: ["test", "./..."]
-    inputs: ["*.go", "go.mod", "go.sum"]
+    inputs: ["*.go", "go.mod", "go.sum", "release-pending.cue", "/forks/*/component.cue", "/tools/*/component.cue"]
   vet:
     command: "go"
     args: ["vet", "./..."]

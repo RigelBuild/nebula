@@ -67,3 +67,16 @@ def test_unparseable_json_still_degrades_and_preserves_a_copy(store_file):
 def test_healthy_store_is_returned_unchanged(store_file):
     result = auth._load_auth_store(store_file)
     assert result["providers"]["nous"]["api_key"] == "secret"
+
+
+@pytest.mark.parametrize("error", [errno.EPERM, errno.EACCES])
+def test_sandboxed_auth_permission_error_returns_empty_only_for_eperm(store_file, monkeypatch, error):
+    from pathlib import Path
+
+    monkeypatch.setenv("HERMES_SECRET_SANDBOX", "1")
+    monkeypatch.setattr(Path, "read_text", _fail_read(PermissionError(error, "denied")))
+    if error == errno.EPERM:
+        assert auth._load_auth_store(store_file) == {"version": auth.AUTH_STORE_VERSION, "providers": {}}
+    else:
+        with pytest.raises(PermissionError):
+            auth._load_auth_store(store_file)

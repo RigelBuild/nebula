@@ -58,7 +58,7 @@ await db.close(save=True)
 - IDA additionally preloads `db` (ida_domain Database), `ida_domain`, `ida_*`, `idautils`; `help_ida()` lists its helpers. `setType`/`set_type` accepts a C declaration.
 - Ghidra additionally preloads `program` / `currentProgram`, `project`, `flat`, `monitor`, `pyghidra`, `jpype`; `help_ghidra()` lists its helpers. Types are C prototypes at function entries and type expressions (`char[16]`, `uint32_t *`) elsewhere.
 - Default exec timeout is 120 s; an unresponsive worker is killed after cancellation. Ghidra pseudocode falls back to disassembly when its decompiler is unavailable.
-- Retained references pin against idle-close and LRU eviction; close every owned handle when done. `disassembler.maxOpen` bounds databases across both backends; unreferenced idle databases may be evicted or closed by `disassembler.idleCloseSec`.
+- Retained references pin against idle-close and LRU eviction; close every owned handle when done. `disassembler.maxOpen` bounds databases across both backends; unreferenced idle databases may be evicted or closed by `disassembler.idleCloseSec`. `disassembler.memoryMax` sets the Linux memory limit for each host (default `6G`; empty disables it).
 </instruction>
 
 <critical>

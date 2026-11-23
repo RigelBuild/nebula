@@ -74,3 +74,36 @@ export const cfgDisasmIdleCloseSec = register({
 		],
 	},
 });
+
+/** Maximum memory per disassembler host; empty disables the Linux systemd scope. */
+export const cfgDisasmMemoryMax = register({
+	id: "disassembler.memoryMax",
+	type: "string",
+	default: "6G",
+	validate: raw => {
+		if (typeof raw !== "string") throw new Error("disassembler.memoryMax must be a systemd memory value");
+		if (raw === "" || raw === "infinity") return;
+		const match = /^(\d+(?:\.\d+)?)([KMGTPE%]?)$/.exec(raw);
+		const number = match?.[1];
+		const suffix = match?.[2];
+		let valid = false;
+		if (number && suffix === "%") {
+			valid = /^\d+(?:\.\d{1,2})?$/.test(number) && Number(number) > 0 && Number(number) <= 100;
+		} else if (number && suffix !== undefined) {
+			const [whole = "0", fraction = ""] = number.split(".");
+			const scale = 1024n ** BigInt(" KMGTPE".indexOf(suffix || " "));
+			const denominator = 10n ** BigInt(fraction.length);
+			const bytes = ((BigInt(whole) * denominator + BigInt(fraction || "0")) * scale) / denominator;
+			valid = bytes >= 1n && bytes <= 18446744073709551615n;
+		}
+		if (!valid) {
+			throw new Error("disassembler.memoryMax must be empty, infinity, a positive size, or a percentage up to 100%");
+		}
+	},
+	ui: {
+		tab: "tools",
+		group: "Disassembler",
+		label: "Host Memory Limit",
+		description: "Maximum memory for each disassembler host on Linux; empty disables the systemd scope",
+	},
+});

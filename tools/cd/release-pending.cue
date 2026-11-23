@@ -19,6 +19,7 @@ pending: {
 	"forks/terraform-provider-googleworkspace": issue: "RIG-12303"
 	"forks/virtual": issue:                            "RIG-12303"
 	"forks/wails": issue:                              "RIG-12303"
+	"tools/docs-bundle": issue:                        "RIG-10796"
 }
 
 sidePaths: [=~"^(tools|forks)/[a-z0-9-]+$"]: {

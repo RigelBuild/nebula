@@ -11,7 +11,7 @@ type branchParserFixture struct {
 }
 
 func (b branchParserFixture) IssueRefPattern() *regexp.Regexp { return b.pattern }
-func (b branchParserFixture) CanonicalRef(ref string) string { return strings.ToUpper(ref) }
+func (b branchParserFixture) CanonicalRef(ref string) string  { return strings.ToUpper(ref) }
 
 func TestParseBranchClaim(t *testing.T) {
 	refs := branchParserFixture{pattern: regexp.MustCompile(`(?i)\bRIG-\d+\b`)}

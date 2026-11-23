@@ -113,8 +113,8 @@ func TestResolveOwnerChainAndTruncated(t *testing.T) {
 		},
 		{
 			name:      "unowned chain is reported whole and not truncated",
-		in:        OwnerInput{Parents: []ParentOwner{{Identifier: "EX-1"}, {Identifier: "EX-2"}}},
-		wantChain: []string{"EX-1", "EX-2"},
+			in:        OwnerInput{Parents: []ParentOwner{{Identifier: "EX-1"}, {Identifier: "EX-2"}}},
+			wantChain: []string{"EX-1", "EX-2"},
 		},
 		{
 			name:          "truncated walk with no owner reports truncation",

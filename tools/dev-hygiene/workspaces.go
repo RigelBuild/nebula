@@ -101,7 +101,7 @@ func cleanWorkspaces(ctx context.Context, cfg config, live []string, out *printe
 			return nil, errors.Join(append(errs, ctxErr)...)
 		}
 		if !cfg.apply {
-			out.printf("leftover %s: would finish deletion (dry run)\n", dir)
+			out.printf("leftover %s: would report and keep (dry run)\n", dir)
 			continue
 		}
 		// A leftover trash dir from an interrupted deletion is reported but never removed.
@@ -193,7 +193,7 @@ func sweepWorkspace(ctx context.Context, cfg config, dir string, live []string, 
 			return kept{}, false, nil
 		}
 		if !cfg.apply {
-			out.printf("workspace %s: interrupted deletion, would finish (dry run)\n", resolved)
+			out.printf("workspace %s: interrupted deletion, would report and keep (dry run)\n", resolved)
 			return kept{}, false, nil
 		}
 		out.printf("workspace %s: interrupted deletion, report only\n", resolved)
@@ -204,7 +204,7 @@ func sweepWorkspace(ctx context.Context, cfg config, dir string, live []string, 
 		return kept{}, false, fmt.Errorf("stat marker in %s: %w", resolved, err)
 	}
 	ws := workspace{Root: resolved, LiveCwd: hasLiveCwd(resolved, live)}
-	// The one walk of this tree provides the activity clock, stamp, and files for the untracked check.
+	// The one walk of this tree provides the activity clock and files for the untracked check.
 	scan, err := scanTree(resolved, true)
 	if err != nil {
 		return kept{}, false, fmt.Errorf("activity of %s: %w", resolved, err)
@@ -212,8 +212,6 @@ func sweepWorkspace(ctx context.Context, cfg config, dir string, live []string, 
 	ws.LastActive = scan.newest
 	// Live and recent verdicts need no jj call: a snapshot would itself change the workspace.
 	first := classify(ws, now, cfg.idle)
-	out.debugf("workspace %s: live=%t last-active=%s idle-cutoff=%s verdict=%s\n",
-		resolved, ws.LiveCwd, ws.LastActive.Format(time.RFC3339), now.Add(-cfg.idle).Format(time.RFC3339), first)
 	switch first {
 	case verdictLive:
 		out.printf("workspace %s: skipped, a process has its cwd inside\n", resolved)
@@ -359,15 +357,8 @@ type treeScan struct {
 	nested bool
 }
 
-// newestMtime returns the newest modification time in the tree, excluding .jj and build output.
-// It also counts .jj/working_copy, so jj commands a live agent runs count as activity (fleet-gc-roots rule).
-func newestMtime(root string) (time.Time, error) {
-	scan, err := scanTree(root, false)
-	return scan.newest, err
-}
-
-// scanTree walks root once. It finds the newest mtime as newestMtime describes and, when collect is set, the
-// files unclaimedFiles judges. A nested build tree is walked, since only the tracked list says whether to skip it.
+// scanTree walks root once. It finds the newest mtime and, when collect is set, the files unclaimedFiles judges.
+// A nested build tree is walked, since only the tracked list says whether to skip it.
 func scanTree(root string, collect bool) (treeScan, error) {
 	var scan treeScan
 	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
@@ -476,8 +467,8 @@ func inspectWorkspace(ctx context.Context, ws *workspace, scan treeScan) (skippe
 	}
 	ws.Name = name
 	ws.Clean = true
-	// The snapshot below bumps the .jj/working_copy dir mtime even when nothing changed, and newestMtime counts that
-	// mtime as activity. Restore it on every return, error paths included, so inspection never resets the idle clock.
+	// The snapshot below bumps the .jj/working_copy dir mtime even when nothing changed, and scanTree counts that.
+	// Restore it on every return, error paths included, so inspection never resets the idle clock.
 	wcDir := filepath.Join(ws.Root, jjDir, "working_copy")
 	wcBefore, err := os.Stat(wcDir)
 	if err != nil {
@@ -535,9 +526,6 @@ func inspectWorkspace(ctx context.Context, ws *workspace, scan treeScan) (skippe
 	if err := restore(); err != nil {
 		return "", err
 	}
-	// The stamp is the scan's clock, taken before any jj call. The restore undoes the snapshot's only counted
-	// change, so inspection never moves the stamp.
-	ws.Stamp = scan.newest
 	return "", nil
 }
 

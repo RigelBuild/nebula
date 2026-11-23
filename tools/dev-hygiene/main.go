@@ -161,7 +161,7 @@ func parseFlags(args []string, stderr io.Writer) (config, error) {
 	flags.StringVar(&cfg.creds, "creds", "", "NATS credentials file for cotal send. Empty uses the cotal config.")
 	flags.DurationVar(&cfg.idle, "idle", defaultIdle, "Idle window before a workspace is eligible for cleanup.")
 	flags.DurationVar(&cfg.cacheAge, "cache-age", defaultCacheAge, "Go cache files untouched this long are pruned.")
-	flags.BoolVar(&cfg.apply, "apply", false, "Delete workspaces, prune caches and send the report DM. Default: dry run.")
+	flags.BoolVar(&cfg.apply, "apply", false, "Prune caches, trim build output, and report idle workspaces. Default: dry run.")
 	if err := flags.Parse(args); err != nil {
 		return config{}, err
 	}

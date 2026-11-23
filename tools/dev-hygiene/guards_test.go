@@ -87,7 +87,7 @@ func TestKeptTextCapsTheNamedWorkspaces(t *testing.T) {
 	}
 }
 
-func TestNewestMtimeCountsWorkingCopy(t *testing.T) {
+func TestScanTreeCountsWorkingCopy(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
 	old := time.Now().Add(-100 * time.Hour)
@@ -101,12 +101,12 @@ func TestNewestMtimeCountsWorkingCopy(t *testing.T) {
 	if err := os.Chtimes(wc, recent, recent); err != nil {
 		t.Fatal(err)
 	}
-	got, err := newestMtime(root)
+	scan, err := scanTree(root, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Before(recent.Add(-time.Second)) {
-		t.Fatalf("newestMtime = %s, ignores working_copy mtime %s", got, recent)
+	if scan.newest.Before(recent.Add(-time.Second)) {
+		t.Fatalf("scanTree newest = %s, ignores working_copy mtime %s", scan.newest, recent)
 	}
 }
 

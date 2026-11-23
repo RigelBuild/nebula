@@ -20,12 +20,12 @@ func TestClassifyWorkspace(t *testing.T) {
 		want verdict
 	}{
 		{
-			name: "old clean fully pushed is deleted",
+			name: "old clean fully pushed is reported, never deleted",
 			ws:   workspace{LastActive: old, Clean: true},
 			want: verdictDelete,
 		},
 		{
-			name: "idle exactly at the limit is deleted",
+			name: "idle exactly at the limit is reported, never deleted",
 			ws:   workspace{LastActive: boundary, Clean: true},
 			want: verdictDelete,
 		},

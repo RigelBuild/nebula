@@ -56,6 +56,9 @@ func TestFrozenMarkerDirNeverRemovedUnderApply(t *testing.T) {
 			t.Fatalf("delete path reached (%q):\n%s", word, stdout.String())
 		}
 	}
+	if got := summaryLines(stdout.String(), "report frozen: "); len(got) != 1 || !strings.HasPrefix(got[0], "report frozen: 1 workspace(s), ") {
+		t.Fatalf("frozen summary = %q\nstdout:\n%s", got, stdout.String())
+	}
 }
 
 // TestFrozenTrashDirNeverRemovedUnderApply checks a leftover trash dir survives an apply sweep. Deletion is frozen, so

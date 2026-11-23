@@ -18,12 +18,11 @@ const (
 	verdictOrphaned verdict = "orphaned-store"
 	// verdictForgotten: the store no longer lists this workspace, so jj cannot inspect it. Kept in place.
 	verdictForgotten verdict = "forgotten"
-	// verdictReclaimable: an orphaned or forgotten workspace idle past reclaimAge. Report only; never deleted here.
+	// verdictReclaimable counts clean, pushed workspaces idle past the idle window and orphaned or forgotten ones idle past seven days.
 	verdictReclaimable verdict = "reclaimable"
 )
 
 // workspace is the state classify decides on. Unpushed holds change IDs not yet on any remote bookmark.
-// Stamp is the activity clock taken by the sweep's scan, before any jj call; a later move means a file edit since.
 type workspace struct {
 	Name         string
 	Root         string
@@ -32,7 +31,6 @@ type workspace struct {
 	Unpushed     []string
 	LiveCwd      bool
 	Notes        []string
-	Stamp        time.Time
 	StoreMissing string
 	// Forgotten is set when the store no longer lists this workspace. jj cannot judge it.
 	Forgotten bool

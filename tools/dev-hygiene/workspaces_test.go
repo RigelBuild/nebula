@@ -381,11 +381,11 @@ func TestInspectionKeepsIdleClock(t *testing.T) {
 	mustWrite(t, filepath.Join(dir, "work.txt"), "local only\n")
 	backdate(t, dir, ancient)
 	sweep(t, sweepConfig(f, false), nil)
-	got, err := newestMtime(dir)
+	scan, err := scanTree(dir, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.After(ancient.Add(time.Hour)) {
-		t.Fatalf("inspection moved the activity clock to %s\nverdicts:\n%s", got, lastSweepLog)
+	if scan.newest.After(ancient.Add(time.Hour)) {
+		t.Fatalf("inspection moved the activity clock to %s\nverdicts:\n%s", scan.newest, lastSweepLog)
 	}
 }

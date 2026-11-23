@@ -47,7 +47,7 @@ func liveCwdsProc() ([]string, error) {
 }
 
 // liveCwdsLsof lists cwd records as lsof -F n lines. Any non-zero exit is an error: lsof lists its own cwd,
-// so exit 1 means it failed, and an empty result on failure would wrongly allow deletion.
+// so exit 1 means it failed; an empty result would treat workspaces as not live.
 func liveCwdsLsof(ctx context.Context) ([]string, error) {
 	result, err := commandRun(ctx, "", nil, lsofPath, "-a", "-d", "cwd", "-Fn", "-w")
 	if err != nil {

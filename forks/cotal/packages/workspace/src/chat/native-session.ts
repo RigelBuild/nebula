@@ -115,15 +115,8 @@ export function grantRefusal(grant: readonly string[], channel: string, use: "re
   return { outcome: "refused", code: "PERMISSION_DENIED", message };
 }
 
-/**
- * Resolve a DM target before any effect. A `{ principal }` target, or a typed string that parses as
- * a principal `<owner>.<actor>`, goes to that principal as is, whether or not it is present or was
- * heard from. It is never matched against display names, so a peer whose display name spells a
- * principal cannot capture it; that peer is reached by its own principal or `/reply`. Any other
- * string is a display name, which must name one principal across the roster and the heard senders:
- * a name both carry refuses and lists them instead of picking the present one. Absence is a verdict
- * only on a current roster (endpoint.ts:2816-2823).
- */
+/** Resolve a DM target before effects. Exact principals bypass names; names include roster peers and heard senders.
+ * A current roster may ignore an offline heard sender beside a present peer only for an agent row with lifecycle UID. */
 export function resolveDmTarget(
   to: DmTarget,
   roster: readonly Presence[],
@@ -147,7 +140,14 @@ export function resolveDmTarget(
   }
   const named = new Map<string, { id: string; name: string }>();
   if (peer) named.set(peer.card.id, { id: peer.card.id, name: peer.card.name });
-  for (const sender of engine.sendersNamed(to)) if (!named.has(sender.id)) named.set(sender.id, sender);
+  const presentPeer = peer !== undefined && peer.status !== "offline";
+  for (const sender of engine.sendersNamed(to)) {
+    if (named.has(sender.id)) continue;
+    const rosterEntry = rosterState === "current" ? roster.find((p) => p.card.id === sender.id) : undefined;
+    const isOfflineManagedSeat = rosterEntry?.status === "offline" && rosterEntry.card.kind === "agent" && rosterEntry.lifecycleUid !== undefined;
+    if (presentPeer && isOfflineManagedSeat) continue;
+    named.set(sender.id, sender);
+  }
   if (named.size > 1) {
     const ids = [...named.keys()];
     // Each one-shot `cotal send` signs with its own principal and exits once it has sent, so a

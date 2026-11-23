@@ -378,6 +378,22 @@ const task = msg({ id: "t1", kind: "anycast", service: "reviewer", from: { id: "
   const bob = resolveDmTarget("bob", roster, "current", engine, me);
   check("a name one principal carries still resolves", !("outcome" in bob) && bob.id === "o.bob", bob);
   const went = resolveDmTarget("alice", [presence("u_c.alice", "alice"), presence("u_a.alice", "alice", "offline")], "current", engine, me);
+  const presentSeat = { ...presence("u_c.alice", "alice"), lifecycleUid: "01hyyyyyyyyyyyyyyyyyyyyyyy" };
+  const deadSeat = { ...presence("u_a.alice", "alice", "offline"), lifecycleUid: "01hzzzzzzzzzzzzzzzzzzzzzzz" };
+  const managed = resolveDmTarget("alice", [presentSeat, deadSeat], "current", heard(["u_a.alice", "alice"]), me);
+  check("an offline heard managed seat does not make a present peer's name ambiguous",
+    !("outcome" in managed) && managed.id === "u_c.alice", managed);
+  const offlineHuman = { ...presence("u_a.alice", "alice", "offline"), lifecycleUid: "01hzzzzzzzzzzzzzzzzzzzzzzz", card: { ...presence("u_a.alice", "alice").card, kind: "endpoint" as const, meta: { sessionKind: "chat" } } };
+  const humanSender = resolveDmTarget("alice", [presence("u_c.alice", "alice"), offlineHuman], "current", heard(["u_a.alice", "alice"]), me);
+  check("an offline heard human sender still makes a present peer's name ambiguous",
+    "outcome" in humanSender && humanSender.code === "TARGET_AMBIGUOUS", humanSender);
+  const staticSender = resolveDmTarget("alice", [presence("u_c.alice", "alice"), presence("u_a.alice", "alice", "offline")], "current", heard(["u_a.alice", "alice"]), me);
+  check("an offline static agent without a lifecycle uid still makes a present peer's name ambiguous",
+    "outcome" in staticSender && staticSender.code === "TARGET_AMBIGUOUS", staticSender);
+  const unrostered = resolveDmTarget("alice", [presence("u_c.alice", "alice")], "current", heard(["u_a.alice", "alice"]), me);
+  check("an offline heard sender without a roster row still makes a present peer's name ambiguous",
+    "outcome" in unrostered && unrostered.code === "TARGET_AMBIGUOUS", unrostered);
+
   check("a heard sender now offline still makes its name ambiguous beside a live peer", "outcome" in went && went.code === "TARGET_AMBIGUOUS", went);
   const reply = resolveDmTarget({ principal: "u_a.alice" }, roster, "current", engine, me);
   check("an exact principal is sent as is and keeps the name this session heard", !("outcome" in reply) && reply.id === "u_a.alice" && reply.name === "alice", reply);

@@ -521,6 +521,8 @@ def ensure_gateway_runtime(profile_home: str | Path, *, timeout: float | None = 
                     continue
                 if service is not None:
                     start_existing_gateway_service(service, deadline=deadline)
+                elif os.environ.get("HERMES_GATEWAY_NO_SPAWN") == "1":
+                    return GatewayDiscovery("inaccessible", reason_code="spawn_disabled")
                 else:
                     from hermes_cli.gateway_runtime_start import spawn_unmanaged_gateway, stdio_log_size
                     child_home, child_offset = target, stdio_log_size(target)

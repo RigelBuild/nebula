@@ -624,6 +624,62 @@ def _no_spawn_targets(monkeypatch, runtime, *, reserved=None, second="absent"):
     monkeypatch.setattr(runtime, "_missing_owner_verdict", lambda home: runtime.GatewayDiscovery(second))
 
 
+@pytest.mark.parametrize("idle_exit", [True, False], ids=["client", "dashboard"])
+def test_gateway_no_spawn_refuses_when_service_is_absent(fast_runway, tmp_path, monkeypatch, idle_exit):
+    runtime, _ = fast_runway
+    from hermes_cli import gateway_runtime_start as start
+
+    _no_spawn_targets(monkeypatch, runtime)
+    monkeypatch.setenv("HERMES_GATEWAY_NO_SPAWN", "1")
+    monkeypatch.setattr(start, "spawn_unmanaged_gateway",
+                        lambda *args, **kwargs: pytest.fail("unmanaged gateway spawn was not disabled"))
+
+    result = runtime.ensure_gateway_runtime(tmp_path, idle_exit=idle_exit)
+
+    assert (result.state, result.reason_code) == ("inaccessible", "spawn_disabled")
+
+
+def test_gateway_spawn_is_unchanged_when_no_spawn_is_unset(fast_runway, tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    runtime, _ = fast_runway
+    from hermes_cli import gateway_runtime_start as start
+
+    _no_spawn_targets(monkeypatch, runtime)
+    monkeypatch.delenv("HERMES_GATEWAY_NO_SPAWN", raising=False)
+    child = SimpleNamespace(poll=lambda: None)
+    spawned = []
+    monkeypatch.setattr(start, "spawn_unmanaged_gateway",
+                        lambda target, **kwargs: spawned.append((Path(target), kwargs["idle_exit"])) or child)
+    probes = iter([runtime.GatewayDiscovery("absent"), runtime.GatewayDiscovery("ready")])
+    monkeypatch.setattr(runtime, "_observe_replacing_stale", lambda *args: next(probes))
+
+    result = runtime.ensure_gateway_runtime(tmp_path, idle_exit=False)
+
+    assert result.state == "ready"
+    assert spawned == [(tmp_path.resolve(), False)]
+
+
+def test_gateway_no_spawn_still_starts_discovered_service(fast_runway, tmp_path, monkeypatch):
+    from hermes_cli import gateway_runtime_service as service, gateway_runtime_start as start
+    runtime, _ = fast_runway
+    _no_spawn_targets(monkeypatch, runtime)
+    monkeypatch.setenv("HERMES_GATEWAY_NO_SPAWN", "1")
+    found = service.ExistingService("launchd", ("launchctl", "kickstart"))
+    monkeypatch.setattr(service, "discover_existing_gateway_service", lambda *args, **kwargs: found)
+    started = []
+    monkeypatch.setattr(service, "start_existing_gateway_service",
+                        lambda item, **kwargs: started.append(item))
+    monkeypatch.setattr(start, "spawn_unmanaged_gateway",
+                        lambda *args, **kwargs: pytest.fail("unmanaged gateway spawn was not disabled"))
+    probes = iter([runtime.GatewayDiscovery("absent"), runtime.GatewayDiscovery("ready")])
+    monkeypatch.setattr(runtime, "_observe_replacing_stale", lambda *args: next(probes))
+
+    result = runtime.ensure_gateway_runtime(tmp_path, idle_exit=False)
+
+    assert result.state == "ready"
+    assert started == [found]
+
+
 def test_a_start_seen_only_by_the_race_closing_probe_is_still_sampled(fast_runway, tmp_path, monkeypatch):
     runtime, progress = fast_runway
     _no_spawn_targets(monkeypatch, runtime, second="starting")

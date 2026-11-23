@@ -331,6 +331,8 @@ DEFAULT_CONFIG = {
         # go first because n/nvm/asdf write PATH exports there without an interactivity guard. Turn
         # off if an rc file misbehaves when sourced non-interactively (exits on TTY check).
         "auto_source_bashrc": True,
+        # Hide local macOS terminal commands from Hermes credential files when sandbox-exec exists.
+        "sandbox_macos_secrets": True,
         # The default sandbox for every container backend: the nikolaik/python-nodejs base
         # (Python 3.13 / Node 26) plus a display stack, so Bot Screen, computer_use and the
         # bot's browser run INSIDE the sandbox and the pane can watch them (see bot_desktop).

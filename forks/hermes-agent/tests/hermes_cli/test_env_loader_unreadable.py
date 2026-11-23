@@ -7,6 +7,7 @@ still stops the load.
 """
 
 import builtins
+import errno
 import io
 import logging
 import os
@@ -132,3 +133,46 @@ def test_reload_still_removes_keys_a_readable_env_dropped(monkeypatch):
     assert reload_env() == 2
     assert "OPENAI_API_KEY" not in os.environ
     assert os.environ["ANTHROPIC_API_KEY"] == "from-file"
+
+
+@pytest.mark.parametrize("sandboxed,error,ignored", [(True, errno.EPERM, True), (True, errno.EACCES, False),
+                                                     (False, errno.EPERM, False)])
+def test_sandboxed_user_dotenv_permission_error(monkeypatch, tmp_path, sandboxed, error, ignored):
+    from hermes_cli import env_loader
+
+    def deny(*args, **kwargs):
+        raise PermissionError(error, "denied")
+    monkeypatch.setattr(env_loader, "_load_dotenv_with_fallback", deny)
+    monkeypatch.setattr(managed_scope, "pinned_terminal_backend", lambda: None)
+    if sandboxed:
+        monkeypatch.setenv("HERMES_SECRET_SANDBOX", "1")
+    else:
+        monkeypatch.delenv("HERMES_SECRET_SANDBOX", raising=False)
+    if ignored:
+        assert env_loader._load_user_dotenv(tmp_path / ".env", load_pass=1) is False
+    else:
+        with pytest.raises(PermissionError):
+            env_loader._load_user_dotenv(tmp_path / ".env", load_pass=1)
+
+
+@pytest.mark.parametrize("sandboxed,error,ignored", [(True, errno.EPERM, True), (True, errno.EACCES, False),
+                                                     (False, errno.EPERM, False)])
+def test_sandboxed_op_dotenv_permission_error(monkeypatch, tmp_path, sandboxed, error, ignored):
+    from hermes_cli import env_loader
+
+    op_env = tmp_path / ".op.env"
+    op_env.touch()
+    monkeypatch.delenv("OP_SERVICE_ACCOUNT_TOKEN", raising=False)
+    if sandboxed:
+        monkeypatch.setenv("HERMES_SECRET_SANDBOX", "1")
+    else:
+        monkeypatch.delenv("HERMES_SECRET_SANDBOX", raising=False)
+    def deny(path, **kwargs):
+        if path == op_env:
+            raise PermissionError(error, "denied")
+    monkeypatch.setattr(env_loader, "_load_dotenv_with_fallback", deny)
+    if ignored:
+        load_hermes_dotenv(hermes_home=tmp_path, load_external_secrets=False)
+    else:
+        with pytest.raises(PermissionError):
+            load_hermes_dotenv(hermes_home=tmp_path, load_external_secrets=False)

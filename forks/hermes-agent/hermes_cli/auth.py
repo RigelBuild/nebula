@@ -769,6 +769,10 @@ def _load_auth_store(auth_file: Optional[Path] = None) -> dict[str, Any]:
         return _empty_auth_store()
     try:
         raw = json.loads(auth_file.read_text(encoding="utf-8-sig"))
+    except PermissionError as exc:
+        if exc.errno == errno.EPERM and os.environ.get("HERMES_SECRET_SANDBOX") == "1":
+            return _empty_auth_store()
+        raise
     except OSError:
         # Exists but unreadable (EMFILE, EACCES, EIO, stalled mount): contents are not bad, and this
         # module read-modify-writes everywhere, so an empty store here is one _save_auth_store()

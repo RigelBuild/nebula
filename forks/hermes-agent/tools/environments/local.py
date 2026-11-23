@@ -1,6 +1,7 @@
 """Local execution environment — spawn-per-call with session snapshot."""
 
 import contextlib
+import json
 import logging
 import ntpath
 import os
@@ -17,7 +18,7 @@ import time
 from collections.abc import Mapping
 from pathlib import Path
 
-from hermes_constants import get_process_hermes_home
+from hermes_constants import get_hermes_home, get_process_hermes_home
 from tools.environments.base import BaseEnvironment
 from tools.environments.base_output import _pipe_stdin
 from hermes_cli._subprocess_compat import windows_hide_flags
@@ -844,6 +845,59 @@ def _read_terminal_shell_init_config() -> tuple[list[str], bool]:
         return [], True
 
 
+def _local_macos_secret_profile() -> str:
+    """Protect credential files; IPC to unsandboxed services remains outside this sandbox."""
+    from agent.file_safety import _CREDENTIAL_FILE_NAMES, _READ_DENIED_DIRS
+    from hermes_constants import get_default_hermes_root
+
+    home = get_hermes_home().absolute()
+    root = get_default_hermes_root(home=home).absolute()
+    secrets = [home / name for name in (*_CREDENTIAL_FILE_NAMES, ".op.env", ".rr-token")]
+    secrets.append(root / "auth.json")
+
+    def aliases(paths):
+        return dict.fromkeys(alias for path in paths for alias in (path, path.resolve()))
+
+    def literal(path):
+        value = str(path)
+        if any(ord(char) < 32 or ord(char) == 127 for char in value):
+            raise ValueError("sandbox paths cannot contain control characters")
+        return json.dumps(value, ensure_ascii=False)
+
+    rules = [f"(deny file-read* file-write* file-link (literal {literal(path)}))"
+             for path in aliases(secrets)]
+    rules.extend(f"(deny file-read* file-write* file-link (subpath {literal(path)}))"
+                 for path in aliases(home / name for name, _, _ in _READ_DENIED_DIRS))
+    rules.extend(f"(deny file-write* (literal {literal(path)}))"
+                 for path in aliases((home / "config.yaml", home, *home.parents)))
+    return "\n".join(["(version 1)", "(allow default)", *rules])
+
+
+_sandbox_missing_warned = False
+
+
+def _sandbox_local_macos_argv(args: list[str]) -> list[str]:
+    """Hide Hermes secrets from local macOS terminal shells when sandbox-exec is available."""
+    global _sandbox_missing_warned
+    if sys.platform != "darwin":
+        return args
+    try:
+        from hermes_cli.config_effective import load_user_config_effective
+        terminal_cfg = (load_user_config_effective() or {}).get("terminal") or {}
+        if terminal_cfg.get("sandbox_macos_secrets", True) is False:
+            return args
+    except Exception:
+        pass  # An unreadable config must not prevent terminal execution.
+    sandbox_exec = "/usr/bin/sandbox-exec"
+    if not os.path.exists(sandbox_exec):
+        if not _sandbox_missing_warned:
+            _sandbox_missing_warned = True
+            logger.warning(
+                "sandbox-exec is unavailable; running local macOS terminal command without secret-file sandboxing")
+        return args
+    return [sandbox_exec, "-p", _local_macos_secret_profile(), "/usr/bin/env", "HERMES_SECRET_SANDBOX=1", *args]
+
+
 def _resolve_shell_init_files() -> list[str]:
     """Files to source before the login-shell snapshot (``~``/``${VAR}`` expanded,
     missing dropped). ``auto_source_bashrc`` applies only without an explicit list:
@@ -1157,6 +1211,7 @@ class LocalEnvironment(BaseEnvironment):
             cmd_string = _append_dropped_path_entries(cmd_string, run_env.get("PATH", ""))
             cmd_string = _prepend_shell_init(cmd_string, _resolve_shell_init_files())
         args = [bash, *(["-l"] if login else []), "-c", cmd_string]
+        args = _sandbox_local_macos_argv(args)
         self._recover_cwd()
         # Not spawn_owned: an awaited command needs no spawn-ledger entry; own_process_groups below hands
         # its group to the owner-death supervisor and _wait_for_process releases it.

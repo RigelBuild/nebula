@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import codecs
+import errno
 import io
 import itertools
 import logging
@@ -637,7 +638,9 @@ def _load_user_dotenv(path: Path, *, load_pass: int) -> bool:
     be the only place the backend is set, and skipping it would run terminal commands on the host."""
     try:
         _load_dotenv_with_fallback(path, override=True, load_pass=load_pass)
-    except PermissionError:
+    except PermissionError as exc:
+        if exc.errno == errno.EPERM and os.environ.get("HERMES_SECRET_SANDBOX") == "1":
+            return False
         from hermes_cli import managed_scope
 
         if managed_scope.pinned_terminal_backend() is None:
@@ -722,7 +725,11 @@ def load_hermes_dotenv(
     # the committed .env. override=False lets a systemd `EnvironmentFile=-…/.op.env` token win.
     op_env = home_path / ".op.env"
     if op_env.exists() and not os.environ.get("OP_SERVICE_ACCOUNT_TOKEN"):
-        _load_dotenv_with_fallback(op_env, override=False, load_pass=load_pass)
+        try:
+            _load_dotenv_with_fallback(op_env, override=False, load_pass=load_pass)
+        except PermissionError as exc:
+            if exc.errno != errno.EPERM or os.environ.get("HERMES_SECRET_SANDBOX") != "1":
+                raise
 
     if project_env_path and project_env_path.exists():
         _load_dotenv_with_fallback(project_env_path, override=not user_env.exists(), load_pass=load_pass)

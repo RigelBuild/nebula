@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"io"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -124,4 +125,21 @@ func captureStderr(t *testing.T, run func()) string {
 	}
 	readerClosed = true
 	return string(output)
+}
+
+func captureSlog(t *testing.T, run func()) string {
+	t.Helper()
+	var output strings.Builder
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&output, nil)))
+	defer slog.SetDefault(previous)
+	run()
+	return output.String()
+}
+
+func assertGitlinkWarning(t *testing.T, log, path string) {
+	t.Helper()
+	if strings.Count(log, `msg="skipping gitlink"`) != 1 || !strings.Contains(log, "path="+path) {
+		t.Fatalf("warning log = %q, want one gitlink warning for %q", log, path)
+	}
 }

@@ -257,15 +257,13 @@ func TestImportPreservesModesSymlinksAndGitlinks(t *testing.T) {
 		gitTest(t, fork, "update-index", "--add", "--cacheinfo", "160000,0123456789abcdef0123456789abcdef01234567,sub")
 	})
 	var err error
-	stderr := captureStderr(t, func() {
+	log := captureSlog(t, func() {
 		err = importFork(context.Background(), root, importOptions{Name: "widget", Fork: forkRepo, Ref: "rigel-release", Upstream: upstreamRepo, UpstreamBranch: "main"})
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := "warning: skipping gitlink sub\n"; stderr != want {
-		t.Fatalf("stderr = %q, want %q", stderr, want)
-	}
+	assertGitlinkWarning(t, log, "sub")
 	if _, err := os.Stat(filepath.Join(root, "forks/widget/sub")); !os.IsNotExist(err) {
 		t.Errorf("gitlink path stat error = %v, want path absent", err)
 	}
@@ -400,16 +398,6 @@ func commitMode(t *testing.T, root, path string) string {
 		return ""
 	}
 	return fields[0]
-}
-
-// commitObject returns the object ID of path in the HEAD commit of root.
-func commitObject(t *testing.T, root, path string) string {
-	t.Helper()
-	fields := strings.Fields(string(gitOutput(t, root, "ls-tree", "HEAD", "--", path)))
-	if len(fields) < 3 {
-		return ""
-	}
-	return fields[2]
 }
 
 // blobsByPath maps each blob under prefix in rev to its object ID. Keys are relative to prefix; an empty prefix means the whole tree.

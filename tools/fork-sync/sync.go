@@ -10,7 +10,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 
@@ -108,15 +107,22 @@ func syncFork(ctx context.Context, config forkConfig, dryRun bool) error {
 		fmt.Fprintf(syncOutput(config), "%s: would open sync/%s (%s commits, %s..%s)\n", config.Name, config.Name, commitCount, short(record.Commit), short(tip))
 		return nil
 	}
-	gitlinks, err := changedGitlinkPaths(ctx, temporary, record.Commit, tip)
+	rawDiff, err := git(ctx, temporary, nil, "diff", "--raw", "-z", "--find-renames", "--full-index", record.Commit, tip)
 	if err != nil {
-		return err
+		return fmt.Errorf("create upstream raw diff: %w", err)
+	}
+	entries, err := parseRawDiff(rawDiff)
+	if err != nil {
+		return fmt.Errorf("parse upstream raw diff: %w", err)
 	}
 	diff, err := git(ctx, temporary, nil, "diff", "--binary", "--find-renames", "--full-index", record.Commit, tip)
 	if err != nil {
 		return fmt.Errorf("create upstream diff: %w", err)
 	}
-	diff, skipped := filterGitlinkDiff(diff, gitlinks)
+	diff, skipped, err := filterGitlinkDiff(diff, entries)
+	if err != nil {
+		return fmt.Errorf("filter upstream diff: %w", err)
+	}
 	for _, path := range skipped {
 		warnGitlink(path)
 	}
@@ -160,7 +166,7 @@ func syncFork(ctx context.Context, config forkConfig, dryRun bool) error {
 	} else {
 		return fmt.Errorf("fetch existing sync branch: %w", err)
 	}
-	if len(diff) == 0 && len(gitlinks) == 0 {
+	if len(diff) == 0 && len(entries) == 0 {
 		return errors.New("upstream commit advanced but its tree diff is empty")
 	}
 	var applyErr error
@@ -214,139 +220,150 @@ func syncFork(ctx context.Context, config forkConfig, dryRun bool) error {
 	return nil
 }
 
-func changedGitlinkPaths(ctx context.Context, repository, old, new string) ([]string, error) {
-	oldTree, err := git(ctx, repository, nil, "ls-tree", "-r", "-z", old)
-	if err != nil {
-		return nil, fmt.Errorf("list recorded upstream tree: %w", err)
-	}
-	oldEntries, err := parseTreeListing(oldTree)
-	if err != nil {
-		return nil, err
-	}
-	newTree, err := git(ctx, repository, nil, "ls-tree", "-r", "-z", new)
-	if err != nil {
-		return nil, fmt.Errorf("list new upstream tree: %w", err)
-	}
-	newEntries, err := parseTreeListing(newTree)
-	if err != nil {
-		return nil, err
-	}
-	oldByPath := make(map[string]treeEntry, len(oldEntries))
-	for _, entry := range oldEntries {
-		oldByPath[entry.path] = entry
-	}
-	newByPath := make(map[string]treeEntry, len(newEntries))
-	for _, entry := range newEntries {
-		newByPath[entry.path] = entry
-	}
-	paths := make(map[string]struct{})
-	for path, entry := range oldByPath {
-		current, exists := newByPath[path]
-		if entry.mode == "160000" && (!exists || current.mode != entry.mode || current.object != entry.object) {
-			paths[path] = struct{}{}
-		}
-	}
-	for path, entry := range newByPath {
-		previous, exists := oldByPath[path]
-		if entry.mode == "160000" && (!exists || previous.mode != entry.mode || previous.object != entry.object) {
-			paths[path] = struct{}{}
-		}
-	}
-	result := make([]string, 0, len(paths))
-	for path := range paths {
-		result = append(result, path)
-	}
-	sort.Strings(result)
-	return result, nil
+type rawDiffEntry struct {
+	sourcePath, destinationPath string
+	sourceMode, destinationMode string
+	status                      byte
 }
 
-func filterGitlinkDiff(patch []byte, gitlinks []string) ([]byte, []string) {
+func parseRawDiff(raw []byte) ([]rawDiffEntry, error) {
+	fields := bytes.Split(raw, []byte{0})
+	entries := make([]rawDiffEntry, 0)
+	for i := 0; i < len(fields) && len(fields[i]) > 0; {
+		metadata := strings.Fields(string(fields[i]))
+		if len(metadata) != 5 || !strings.HasPrefix(metadata[0], ":") || metadata[4] == "" {
+			return nil, fmt.Errorf("parse raw diff metadata %q", fields[i])
+		}
+		entry := rawDiffEntry{
+			sourceMode:      metadata[0][1:],
+			destinationMode: metadata[1],
+			status:          metadata[4][0],
+		}
+		i++
+		if i >= len(fields) {
+			return nil, errors.New("raw diff is missing path")
+		}
+		entry.sourcePath = string(fields[i])
+		i++
+		entry.destinationPath = entry.sourcePath
+		if entry.status == 'R' || entry.status == 'C' {
+			if i >= len(fields) {
+				return nil, errors.New("raw rename diff is missing destination path")
+			}
+			entry.destinationPath = string(fields[i])
+			i++
+		}
+		if entry.status == 'T' {
+			deleted := entry
+			deleted.destinationMode = "000000"
+			added := entry
+			added.sourceMode = "000000"
+			entries = append(entries, deleted, added)
+			continue
+		}
+		entries = append(entries, entry)
+	}
+	return entries, nil
+}
+
+func filterGitlinkDiff(patch []byte, entries []rawDiffEntry) ([]byte, []string, error) {
 	var filtered bytes.Buffer
 	skipped := make([]string, 0)
 	skippedSet := make(map[string]struct{})
-	for len(patch) > 0 {
-		if !bytes.HasPrefix(patch, []byte("diff --git ")) {
-			start := bytes.Index(patch, []byte("\ndiff --git "))
-			if start < 0 {
-				filtered.Write(patch)
-				break
-			}
-			filtered.Write(patch[:start+1])
-			patch = patch[start+1:]
+	offset := 0
+	for len(entries) > 0 {
+		start := bytes.Index(patch[offset:], []byte("diff --git "))
+		if start < 0 {
+			return nil, nil, fmt.Errorf("raw diff entry for %q has no patch section", entries[0].sourcePath)
 		}
-		next := bytes.Index(patch[len("diff --git "):], []byte("\ndiff --git "))
+		start += offset
+		filtered.Write(patch[offset:start])
+		remainder := patch[start+len("diff --git "):]
+		next := bytes.Index(remainder, []byte("\ndiff --git "))
 		end := len(patch)
 		if next >= 0 {
-			end = len("diff --git ") + next + 1
+			end = start + len("diff --git ") + next + 1
 		}
-		section := patch[:end]
-		paths := gitlinkPatchPaths(section, gitlinks)
-		if len(paths) > 0 {
-			for _, path := range paths {
-				if _, exists := skippedSet[path]; !exists {
-					skippedSet[path] = struct{}{}
-					skipped = append(skipped, path)
-				}
+		section := patch[start:end]
+		match := -1
+		for i, candidate := range entries {
+			if !diffHeaderMatches(section, candidate) {
+				continue
 			}
-		} else {
-			filtered.Write(section)
-		}
-		patch = patch[end:]
-	}
-	return filtered.Bytes(), skipped
-}
-func gitlinkPatchPaths(section []byte, gitlinks []string) []string {
-	newline := bytes.IndexByte(section, '\n')
-	if newline < 0 {
-		return nil
-	}
-	header := section[:newline]
-	isGitlink := false
-	for _, line := range bytes.Split(section[newline+1:], []byte("\n")) {
-		if bytes.HasPrefix(line, []byte("--- ")) || bytes.HasPrefix(line, []byte("+++ ")) || bytes.HasPrefix(line, []byte("@@ ")) {
+			if bytes.Contains(section, []byte("\ndeleted file mode ")) && candidate.destinationMode != "000000" {
+				continue
+			}
+			if bytes.Contains(section, []byte("\nnew file mode ")) && candidate.sourceMode != "000000" {
+				continue
+			}
+			match = i
 			break
 		}
-		switch string(line) {
-		case "new file mode 160000", "deleted file mode 160000", "old mode 160000", "new mode 160000":
-			isGitlink = true
+		if match < 0 {
+			return nil, nil, fmt.Errorf("patch section has no matching raw diff entry: %q", bytes.SplitN(section, []byte{'\n'}, 2)[0])
 		}
-		fields := bytes.Fields(line)
-		if len(fields) == 3 && string(fields[0]) == "index" && string(fields[2]) == "160000" {
-			isGitlink = true
+		entry := entries[match]
+		entries = append(entries[:match], entries[match+1:]...)
+		if entry.sourceMode == "160000" || entry.destinationMode == "160000" {
+			path := entry.sourcePath
+			if entry.destinationMode == "160000" {
+				path = entry.destinationPath
+			}
+			if _, exists := skippedSet[path]; !exists {
+				skippedSet[path] = struct{}{}
+				skipped = append(skipped, path)
+			}
+			offset = end
+			continue
 		}
+		filtered.Write(section)
+		offset = end
 	}
-	if !isGitlink {
-		return nil
+	if bytes.Index(patch[offset:], []byte("diff --git ")) >= 0 {
+		return nil, nil, errors.New("patch has more sections than raw diff")
 	}
-	paths := make([]string, 0, 1)
-	for _, path := range gitlinks {
-		if diffHeaderHasPath(header, "a/"+path) || diffHeaderHasPath(header, "b/"+path) {
-			paths = append(paths, path)
-		}
-	}
-	return paths
+	filtered.Write(patch[offset:])
+	return filtered.Bytes(), skipped, nil
 }
 
-func diffHeaderHasPath(header []byte, path string) bool {
-	quoted := []byte(strconv.Quote(path))
-	if bytes.Contains(header, quoted) {
-		return true
+func diffHeaderMatches(section []byte, entry rawDiffEntry) bool {
+	lineEnd := bytes.IndexByte(section, '\n')
+	if lineEnd < 0 || !bytes.HasPrefix(section, []byte("diff --git ")) {
+		return false
 	}
-	for offset := 0; offset < len(header); {
-		index := bytes.Index(header[offset:], []byte(path))
-		if index < 0 {
-			return false
-		}
-		start := offset + index
-		end := start + len(path)
-		startsToken := start > 0 && (header[start-1] == ' ' || header[start-1] == '"')
-		endsToken := end == len(header) || header[end] == ' ' || header[end] == '"'
-		if startsToken && endsToken {
-			return true
-		}
-		offset = start + 1
+	header := section[len("diff --git "):lineEnd]
+	oldPath, rest, ok := parseDiffPathToken(header, "a/"+entry.sourcePath)
+	if !ok || oldPath != "a/"+entry.sourcePath || len(rest) == 0 || rest[0] != ' ' {
+		return false
 	}
-	return false
+	newPath, rest, ok := parseDiffPathToken(rest[1:], "b/"+entry.destinationPath)
+	return ok && newPath == "b/"+entry.destinationPath && len(rest) == 0
+}
+
+func parseDiffPathToken(input []byte, expected string) (string, []byte, bool) {
+	if len(input) == 0 {
+		return "", nil, false
+	}
+	if input[0] != '"' {
+		if !bytes.HasPrefix(input, []byte(expected)) {
+			return "", nil, false
+		}
+		return expected, input[len(expected):], true
+	}
+	for i := 1; i < len(input); i++ {
+		if input[i] == '\\' {
+			i++
+			continue
+		}
+		if input[i] == '"' {
+			path, err := strconv.Unquote(string(input[:i+1]))
+			if err != nil {
+				return "", nil, false
+			}
+			return path, input[i+1:], true
+		}
+	}
+	return "", nil, false
 }
 
 // unshallowUpstream fetches the rest of the upstream history when the temporary repository is shallow. A shallow

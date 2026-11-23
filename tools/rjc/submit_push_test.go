@@ -17,7 +17,7 @@ import (
 // The last head repeats. Pre-push reads fall through to the fixture.
 func pushedHeadFixture(t *testing.T, heads func(bookmark, tip string) []Metadata) (*fixture, preparedChange, *atomic.Int32, *[]time.Duration) {
 	t.Helper()
-	f := fixtureRepo(t)
+	f := parallelFixtureRepo(t)
 	bookmark := f.new(t, "EX-1", "feat(rjc): confirm pushed head", "")
 	f.commit(t, "next.txt")
 	jjTest(t, f.repo, "bookmark", "move", bookmark, "--to", "@-")
@@ -77,6 +77,7 @@ func pushedCandidate(t *testing.T, f *fixture, item *preparedChange) {
 }
 
 func TestPushLagThenMatchSucceeds(t *testing.T) {
+	t.Parallel()
 	const stale = "0000000000000000000000000000000000000000"
 	f, item, _, waits := pushedHeadFixture(t, func(bookmark, tip string) []Metadata {
 		lagging := Metadata{HeadRef: bookmark, HeadSHA: stale, BaseRef: "main"}
@@ -100,6 +101,7 @@ func TestPushLagThenMatchSucceeds(t *testing.T) {
 }
 
 func TestUnconfirmedPushNamesObservedHead(t *testing.T) {
+	t.Parallel()
 	const observed = "1111111111111111111111111111111111111111"
 	f, item, reads, waits := pushedHeadFixture(t, func(bookmark, _ string) []Metadata {
 		return []Metadata{{HeadRef: bookmark, HeadSHA: observed, BaseRef: "main"}}
@@ -118,6 +120,7 @@ func TestUnconfirmedPushNamesObservedHead(t *testing.T) {
 }
 
 func TestUnconfirmedPushNamesObservedRefWhenHeadMatches(t *testing.T) {
+	t.Parallel()
 	const otherRef = "home/ex-9-other"
 	f, item, _, _ := pushedHeadFixture(t, func(_, tip string) []Metadata {
 		return []Metadata{{HeadRef: otherRef, HeadSHA: tip, BaseRef: "main"}}
@@ -130,6 +133,7 @@ func TestUnconfirmedPushNamesObservedRefWhenHeadMatches(t *testing.T) {
 }
 
 func TestPushCancelledHeadWaitIsInterruptFailure(t *testing.T) {
+	t.Parallel()
 	const stale = "2222222222222222222222222222222222222222"
 	f, item, reads, _ := pushedHeadFixture(t, func(bookmark, _ string) []Metadata {
 		return []Metadata{{HeadRef: bookmark, HeadSHA: stale, BaseRef: "main"}}
@@ -154,7 +158,8 @@ func TestPushCancelledHeadWaitIsInterruptFailure(t *testing.T) {
 }
 
 func TestPushMetadataErrorIsNotRetried(t *testing.T) {
-	f := fixtureRepo(t)
+	t.Parallel()
+	f := parallelFixtureRepo(t)
 	reads := &atomic.Int32{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		reads.Add(1)

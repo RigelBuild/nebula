@@ -36,7 +36,7 @@ func (f *fakeRootChecks) run(_ context.Context, root string, names []string) (ro
 // p0Submit submits one change with the given skip and profile skipChecks, using the fake root-checks runner.
 func p0Submit(t *testing.T, skip string, skipChecks []string, fake *fakeRootChecks) (*fixture, *bytes.Buffer, error) {
 	t.Helper()
-	f := fixtureRepo(t)
+	f := parallelFixtureRepo(t)
 	f.repo.profile.SkipChecks = skipChecks
 	f.repo.rootChecks = fake.run
 	f.repo.lookupLinearPriority = func(context.Context, string) (int, string, bool, error) { return 1, "started", true, nil }
@@ -48,6 +48,7 @@ func p0Submit(t *testing.T, skip string, skipChecks []string, fake *fakeRootChec
 }
 
 func TestP0SkipRunsRootChecksOnHeadCheckout(t *testing.T) {
+	t.Parallel()
 	fake := &fakeRootChecks{}
 	f, log, err := p0Submit(t, p0Reason, exampleRootChecks, fake)
 	if err != nil || len(f.pushes) != 1 {
@@ -68,6 +69,7 @@ func TestP0SkipRunsRootChecksOnHeadCheckout(t *testing.T) {
 }
 
 func TestP0SkipRefusesFailingRootChecks(t *testing.T) {
+	t.Parallel()
 	fake := &fakeRootChecks{result: rootChecksResult{code: 1, output: "biome: src/app.ts formatter would have printed changes\n"}}
 	f, _, err := p0Submit(t, p0Reason, exampleRootChecks, fake)
 	var fail *failure
@@ -83,6 +85,7 @@ func TestP0SkipRefusesFailingRootChecks(t *testing.T) {
 }
 
 func TestFreeTextSkipRunsNoRootChecks(t *testing.T) {
+	t.Parallel()
 	fake := &fakeRootChecks{result: rootChecksResult{code: 1}}
 	f, _, err := p0Submit(t, "flaky runner", exampleRootChecks, fake)
 	if err != nil || len(f.pushes) != 1 || len(fake.names) != 0 {
@@ -91,6 +94,7 @@ func TestFreeTextSkipRunsNoRootChecks(t *testing.T) {
 }
 
 func TestP0SkipWithoutSkipChecksRunsNoRootChecks(t *testing.T) {
+	t.Parallel()
 	fake := &fakeRootChecks{result: rootChecksResult{code: 1}}
 	f, _, err := p0Submit(t, p0Reason, nil, fake)
 	if err != nil || len(f.pushes) != 1 || len(fake.names) != 0 {
@@ -129,8 +133,9 @@ func TestRootChecksFixHintCoversEveryFailure(t *testing.T) {
 // TestP0SkipNonUrgentRefusedBeforeRootChecks checks that checkSkip refuses a p0 reason whose Linear issue is not
 // Urgent before any root-checks run, so the slow checks never start for a skip that cannot push.
 func TestP0SkipNonUrgentRefusedBeforeRootChecks(t *testing.T) {
+	t.Parallel()
 	fake := &fakeRootChecks{}
-	f := fixtureRepo(t)
+	f := parallelFixtureRepo(t)
 	f.repo.profile.SkipChecks = exampleRootChecks
 	f.repo.rootChecks = fake.run
 	f.repo.lookupLinearPriority = func(context.Context, string) (int, string, bool, error) { return 2, "started", true, nil }
@@ -147,6 +152,7 @@ func TestP0SkipNonUrgentRefusedBeforeRootChecks(t *testing.T) {
 }
 
 func TestP0SkipInvalidReasonRunsNoRootChecks(t *testing.T) {
+	t.Parallel()
 	fake := &fakeRootChecks{}
 	f, _, err := p0Submit(t, "p0:EX-0", exampleRootChecks, fake)
 	var fail *failure

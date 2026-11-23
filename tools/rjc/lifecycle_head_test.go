@@ -6,6 +6,7 @@ import (
 )
 
 func TestLifecycleStaleLocalHead(t *testing.T) {
+	t.Parallel()
 	l := newLifecycleFixture(t)
 	l.clear("agent", l.head, "main")
 	l.f.commit(t, "later.txt")

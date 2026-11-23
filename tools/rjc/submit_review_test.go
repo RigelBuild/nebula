@@ -17,6 +17,7 @@ import (
 const reviewSubmitTitle = "feat(rjc): request review rounds"
 
 func TestSubmitWithoutReviewDoesNotAddLabel(t *testing.T) {
+	t.Parallel()
 	f, bookmark := reviewSubmitFixture(t)
 	code, output := runReviewSubmit(t, f, bookmark, false, false)
 	if code != 0 || f.labelPosts != 0 {
@@ -28,6 +29,7 @@ func TestSubmitWithoutReviewDoesNotAddLabel(t *testing.T) {
 }
 
 func TestSubmitReviewOnCreateAddsLabel(t *testing.T) {
+	t.Parallel()
 	f, bookmark := reviewSubmitFixture(t)
 	code, output := runReviewSubmit(t, f, bookmark, true, false)
 	if code != 0 || f.labelPosts != 1 {
@@ -44,6 +46,7 @@ func TestSubmitReviewOnCreateAddsLabel(t *testing.T) {
 }
 
 func TestSubmitReviewSkipsExistingLabel(t *testing.T) {
+	t.Parallel()
 	f, bookmark := reviewSubmitFixture(t)
 	if err := f.repo.submit(f.ctx, submitOptions{bookmark: bookmark, title: reviewSubmitTitle, bodyFile: f.bodyFile}, f, io.Discard); err != nil {
 		t.Fatal(err)
@@ -63,7 +66,8 @@ func TestSubmitReviewSkipsExistingLabel(t *testing.T) {
 }
 
 func TestSubmitReviewDoesNotLabelStackSibling(t *testing.T) {
-	f := fixtureRepo(t)
+	t.Parallel()
+	f := parallelFixtureRepo(t)
 	parent := f.new(t, "EX-1", reviewSubmitTitle, "")
 	f.commit(t, "parent-review.txt")
 	if err := f.repo.submit(f.ctx, submitOptions{bookmark: parent, title: reviewSubmitTitle, bodyFile: f.bodyFile}, f, io.Discard); err != nil {
@@ -81,6 +85,7 @@ func TestSubmitReviewDoesNotLabelStackSibling(t *testing.T) {
 }
 
 func TestSubmitReviewRetargetAddsLabelAndKeepsRetargetReview(t *testing.T) {
+	t.Parallel()
 	f := trackingFixture(t, "main", false)
 	bookmark := f.new(t, "EX-1", reviewSubmitTitle, "")
 	f.commit(t, "initial-retarget.txt")
@@ -106,6 +111,7 @@ func TestSubmitReviewRetargetAddsLabelAndKeepsRetargetReview(t *testing.T) {
 }
 
 func TestSubmitReviewPushFailureSkipsLabel(t *testing.T) {
+	t.Parallel()
 	f, bookmark := reviewSubmitFixture(t)
 	f.pushError = errors.New("fixture push failure")
 	code, output := runReviewSubmit(t, f, bookmark, true, false)
@@ -115,6 +121,7 @@ func TestSubmitReviewPushFailureSkipsLabel(t *testing.T) {
 }
 
 func TestSubmitReviewReconcileFailureSkipsLabel(t *testing.T) {
+	t.Parallel()
 	f, bookmark := reviewSubmitFixture(t)
 	opt := submitOptions{bookmark: bookmark, title: reviewSubmitTitle, bodyFile: f.bodyFile}
 	if err := f.repo.submit(f.ctx, opt, f, io.Discard); err != nil {
@@ -143,6 +150,7 @@ func TestSubmitReviewReconcileFailureSkipsLabel(t *testing.T) {
 }
 
 func TestSubmitReviewLabelFailureKeepsMovedErrorVisible(t *testing.T) {
+	t.Parallel()
 	f, bookmark := reviewSubmitFixture(t)
 	opt := submitOptions{bookmark: bookmark, title: reviewSubmitTitle, bodyFile: f.bodyFile}
 	if err := f.repo.submit(f.ctx, opt, f, io.Discard); err != nil {
@@ -160,6 +168,7 @@ func TestSubmitReviewLabelFailureKeepsMovedErrorVisible(t *testing.T) {
 }
 
 func TestSubmitReviewLabelFailureReportsRecovery(t *testing.T) {
+	t.Parallel()
 	f, bookmark := reviewSubmitFixture(t)
 	f.labelStatus = 500
 	code, output := runReviewSubmit(t, f, bookmark, true, false)
@@ -178,6 +187,7 @@ func TestSubmitReviewLabelFailureReportsRecovery(t *testing.T) {
 }
 
 func TestSubmitReviewDryRunMakesNoForgeWrite(t *testing.T) {
+	t.Parallel()
 	f, bookmark := reviewSubmitFixture(t)
 	code, output := runReviewSubmit(t, f, bookmark, true, true)
 	if code != 0 || f.labelPosts != 0 || len(f.pushes) != 0 || len(f.prs) != 0 {
@@ -186,6 +196,7 @@ func TestSubmitReviewDryRunMakesNoForgeWrite(t *testing.T) {
 }
 
 func TestSubmitUpstreamSyncAddsUpstreamSyncLabel(t *testing.T) {
+	t.Parallel()
 	f, bookmark, opt := upstreamSyncSubmitFixture(t)
 	if err := f.repo.submit(f.ctx, opt, f, io.Discard); err != nil {
 		t.Fatal(err)
@@ -197,6 +208,7 @@ func TestSubmitUpstreamSyncAddsUpstreamSyncLabel(t *testing.T) {
 }
 
 func TestSubmitUpstreamSyncSkipsExistingLabel(t *testing.T) {
+	t.Parallel()
 	f, bookmark, opt := upstreamSyncSubmitFixture(t)
 	if err := f.repo.submit(f.ctx, opt, f, io.Discard); err != nil {
 		t.Fatal(err)
@@ -216,6 +228,7 @@ func TestSubmitUpstreamSyncSkipsExistingLabel(t *testing.T) {
 }
 
 func TestSubmitNonSyncTrackingBookmarkAddsNoUpstreamSyncLabel(t *testing.T) {
+	t.Parallel()
 	f := trackingFixture(t, "main", false)
 	bookmark := f.new(t, "EX-1", reviewSubmitTitle, "")
 	f.commit(t, "plain-tracking.txt")
@@ -228,6 +241,7 @@ func TestSubmitNonSyncTrackingBookmarkAddsNoUpstreamSyncLabel(t *testing.T) {
 }
 
 func TestSubmitUpstreamSyncLabelFailureIsLoud(t *testing.T) {
+	t.Parallel()
 	f, _, opt := upstreamSyncSubmitFixture(t)
 	f.labelStatus = http.StatusInternalServerError
 	err := f.repo.submit(f.ctx, opt, f, io.Discard)
@@ -238,6 +252,7 @@ func TestSubmitUpstreamSyncLabelFailureIsLoud(t *testing.T) {
 }
 
 func TestSubmitUpstreamRecordReadFailureNamesPushedPR(t *testing.T) {
+	t.Parallel()
 	f, bookmark, opt := upstreamSyncSubmitFixture(t)
 	if err := f.repo.submit(f.ctx, opt, f, io.Discard); err != nil {
 		t.Fatal(err)
@@ -261,7 +276,8 @@ func TestSubmitUpstreamRecordReadFailureNamesPushedPR(t *testing.T) {
 }
 
 func TestSubmitDesignOnlyPRAddsDesignLabel(t *testing.T) {
-	f := fixtureRepo(t)
+	t.Parallel()
+	f := parallelFixtureRepo(t)
 	bookmark := f.new(t, "EX-1", reviewSubmitTitle, "")
 	f.commit(t, "docs/designs/record.md")
 	if err := f.repo.submit(f.ctx, submitOptions{bookmark: bookmark, title: reviewSubmitTitle, bodyFile: f.bodyFile}, f, io.Discard); err != nil {
@@ -274,7 +290,8 @@ func TestSubmitDesignOnlyPRAddsDesignLabel(t *testing.T) {
 }
 
 func TestSubmitMixedDesignPRAddsNoDesignLabel(t *testing.T) {
-	f := fixtureRepo(t)
+	t.Parallel()
+	f := parallelFixtureRepo(t)
 	bookmark := f.new(t, "EX-1", reviewSubmitTitle, "")
 	f.commit(t, "docs/designs/record.md")
 	f.commit(t, "tools/y.go")
@@ -287,7 +304,8 @@ func TestSubmitMixedDesignPRAddsNoDesignLabel(t *testing.T) {
 }
 
 func TestSubmitDesignLabelSkipsExistingLabel(t *testing.T) {
-	f := fixtureRepo(t)
+	t.Parallel()
+	f := parallelFixtureRepo(t)
 	bookmark := f.new(t, "EX-1", reviewSubmitTitle, "")
 	f.commit(t, "docs/designs/record.md")
 	opt := submitOptions{bookmark: bookmark, title: reviewSubmitTitle, bodyFile: f.bodyFile}
@@ -309,7 +327,8 @@ func TestSubmitDesignLabelSkipsExistingLabel(t *testing.T) {
 }
 
 func TestSubmitDesignRenameFromCodeAddsNoDesignLabel(t *testing.T) {
-	f := fixtureRepo(t)
+	t.Parallel()
+	f := parallelFixtureRepo(t)
 	writeTestFile(t, filepath.Join(f.repo.root, "tools/y.go"), "package tools\n")
 	jjTest(t, f.repo, "commit", "-m", "chore: add tool file")
 	jjTest(t, f.repo, "bookmark", "move", "main", "--to", "@-")
@@ -350,7 +369,8 @@ func designStackFixture(t *testing.T, f *fixture, lowerPath, upperPath string) (
 }
 
 func TestSubmitDesignLabelFailureKeepsStackPushing(t *testing.T) {
-	f := fixtureRepo(t)
+	t.Parallel()
+	f := parallelFixtureRepo(t)
 	lower, upper := designStackFixture(t, f, "docs/designs/parent.md", "docs/designs/child.md")
 	f.labelStatus = http.StatusInternalServerError
 
@@ -361,7 +381,8 @@ func TestSubmitDesignLabelFailureKeepsStackPushing(t *testing.T) {
 }
 
 func TestSubmitDesignLabelOnlyOnDesignOnlyUpperPR(t *testing.T) {
-	f := fixtureRepo(t)
+	t.Parallel()
+	f := parallelFixtureRepo(t)
 	lower, upper := designStackFixture(t, f, "tools/parent.go", "docs/designs/child.md")
 
 	code, output := runReviewSubmit(t, f, upper, false, false)
@@ -372,7 +393,8 @@ func TestSubmitDesignLabelOnlyOnDesignOnlyUpperPR(t *testing.T) {
 }
 
 func TestSubmitDesignLabelNeedsRepoOptIn(t *testing.T) {
-	f := fixtureRepo(t)
+	t.Parallel()
+	f := parallelFixtureRepo(t)
 	bookmark := f.new(t, "EX-1", reviewSubmitTitle, "")
 	f.commit(t, "docs/designs/record.md")
 	f.repo.profile.DesignLabel = false
@@ -399,7 +421,7 @@ func upstreamSyncSubmitFixture(t *testing.T) (*fixture, string, submitOptions) {
 
 func reviewSubmitFixture(t *testing.T) (*fixture, string) {
 	t.Helper()
-	f := fixtureRepo(t)
+	f := parallelFixtureRepo(t)
 	bookmark := f.new(t, "EX-1", reviewSubmitTitle, "")
 	f.commit(t, "review-round.txt")
 	return f, bookmark

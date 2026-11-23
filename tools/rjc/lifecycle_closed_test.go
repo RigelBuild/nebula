@@ -6,6 +6,7 @@ import (
 )
 
 func TestLifecycleClosedMainRedReference(t *testing.T) {
+	t.Parallel()
 	l := newLifecycleFixture(t)
 	l.clear("agent", l.head, "main")
 	store := localPrePush{root: l.f.repo.stateDir}

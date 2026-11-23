@@ -6,6 +6,7 @@ import (
 )
 
 func TestLifecycleMainRedTarget(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name, status string
 		code         int
@@ -15,9 +16,10 @@ func TestLifecycleMainRedTarget(t *testing.T) {
 		{name: "passing trunk", status: "passed", code: 1, output: "not-red-on-main"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			l := newLifecycleFixture(t)
 			l.clear("agent", l.head, "main")
-			t.Setenv("RJC_TEST_RECHECK_STATUS", tc.status)
+			l.f.repo.env = append(l.f.repo.env, "RJC_TEST_RECHECK_STATUS="+tc.status)
 			store := localPrePush{root: l.f.repo.stateDir}
 			rec, ok, err := store.Read(l.f.ctx, l.f.repo.profile.Name, 1, l.head)
 			if err != nil || !ok {

@@ -8,7 +8,8 @@ import (
 )
 
 func TestNewUsesLiteralBookmarkForWorkingCopy(t *testing.T) {
-	f := fixtureRepo(t)
+	t.Parallel()
+	f := parallelFixtureRepo(t)
 	foreign := f.new(t, "EX-1", "feat(rjc): unrelated alias destination", "")
 	title := "feat(rjc): create literal working copy"
 	bookmark, err := f.repo.keys.BookmarkName(f.repo.codename, 2, title)

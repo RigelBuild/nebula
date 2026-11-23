@@ -162,7 +162,8 @@ func TestSubmitRetargetStackBottomThenTop(t *testing.T) {
 }
 
 func TestSubmitRetargetStackWithFastLocalHooks(t *testing.T) {
-	f := fixtureRepo(t)
+	t.Parallel()
+	f := parallelFixtureRepo(t)
 	installFastTrunk(t, f)
 	lower := f.new(t, "EX-1", "feat(rjc): rebuilt lower", "")
 	f.commit(t, "lower-old.txt")
@@ -179,8 +180,7 @@ func TestSubmitRetargetStackWithFastLocalHooks(t *testing.T) {
 	if err := f.repo.submit(f.ctx, submitOptions{bookmark: upper, title: "feat(rjc): rebuilt upper", bodyFile: f.bodyFile}, f, io.Discard); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("RJC_HOOK_LOCAL", "refuse")
-	t.Setenv("RJC_HOOK_SSH", "")
+	f.repo.env = append(f.repo.env, "RJC_HOOK_LOCAL=refuse", "RJC_HOOK_SSH=")
 	jjTest(t, f.repo, "new", mainOrigin)
 	f.commit(t, "lower-new.txt")
 	newLower := jjTest(t, f.repo, "log", "--no-graph", "-r", "@-", "-T", "commit_id")
@@ -199,6 +199,7 @@ func TestSubmitRetargetStackWithFastLocalHooks(t *testing.T) {
 }
 
 func TestSubmitRetargetRefusesUnsafeLocalHooksBeforeMutation(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name         string
 		path         string
@@ -209,7 +210,8 @@ func TestSubmitRetargetRefusesUnsafeLocalHooksBeforeMutation(t *testing.T) {
 		{name: "unsafe intermediate bookmark", path: "hk.pkl", intermediate: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			f := fixtureRepo(t)
+			t.Parallel()
+			f := parallelFixtureRepo(t)
 			installFastTrunk(t, f)
 			bookmark := f.new(t, "EX-1", "feat(rjc): rebuild submitted change", "")
 			f.commit(t, "old.txt")
@@ -232,8 +234,7 @@ func TestSubmitRetargetRefusesUnsafeLocalHooksBeforeMutation(t *testing.T) {
 			}
 			newTip := jjTest(t, f.repo, "log", "--no-graph", "-r", "@-", "-T", "commit_id")
 			oldTip := jjTest(t, f.repo, "log", "--no-graph", "-r", quoteRev(bookmark), "-T", "commit_id")
-			t.Setenv("RJC_HOOK_LOCAL", "refuse")
-			t.Setenv("RJC_HOOK_SSH", "")
+			f.repo.env = append(f.repo.env, "RJC_HOOK_LOCAL=refuse", "RJC_HOOK_SSH=")
 			before := opLogID(t, f)
 			err := f.repo.submit(f.ctx, submitOptions{bookmark: bookmark, at: newTip, title: "feat(rjc): rebuild submitted change", bodyFile: f.bodyFile}, f, io.Discard)
 			assertRefusalGate(t, err, "local-hooks-refused")
@@ -251,7 +252,8 @@ func TestSubmitRetargetRefusesUnsafeLocalHooksBeforeMutation(t *testing.T) {
 }
 
 func TestSubmitRetargetRefusesForeignIntermediateBookmarkBeforeMutation(t *testing.T) {
-	f := fixtureRepo(t)
+	t.Parallel()
+	f := parallelFixtureRepo(t)
 	installFastTrunk(t, f)
 	bookmark := f.new(t, "EX-1", "feat(rjc): rebuild submitted change", "")
 	f.commit(t, "old.txt")

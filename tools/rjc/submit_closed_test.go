@@ -10,6 +10,7 @@ import (
 )
 
 func TestSubmitRefusesClosedLedgerPRBeforeMutation(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		discover bool
@@ -25,6 +26,7 @@ func TestSubmitRefusesClosedLedgerPRBeforeMutation(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			f := parallelFixtureRepo(t)
 			title := "feat(rjc): refuse a closed PR"
 			bookmark := f.new(t, "EX-1", title, "")
@@ -70,7 +72,8 @@ func TestSubmitRefusesClosedLedgerPRBeforeMutation(t *testing.T) {
 }
 
 func TestSubmitAllowsOpenLedgerPR(t *testing.T) {
-	f := fixtureRepo(t)
+	t.Parallel()
+	f := parallelFixtureRepo(t)
 	title := "feat(rjc): submit an open PR"
 	bookmark := f.new(t, "EX-1", title, "")
 	f.commit(t, "open-pr.txt")
@@ -89,7 +92,8 @@ func TestSubmitAllowsOpenLedgerPR(t *testing.T) {
 }
 
 func TestSubmitAllowsOpenPRWhenLedgerPointsToClosedPR(t *testing.T) {
-	f := fixtureRepo(t)
+	t.Parallel()
+	f := parallelFixtureRepo(t)
 	title := "feat(rjc): submit with a stale closed ledger PR"
 	bookmark := f.new(t, "EX-1", title, "")
 	f.commit(t, "stale-ledger.txt")

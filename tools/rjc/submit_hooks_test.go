@@ -7,6 +7,7 @@ import (
 )
 
 func TestSubmitHooksBeforePush(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name, phase, gate string
 		fail              bool
@@ -18,12 +19,13 @@ func TestSubmitHooksBeforePush(t *testing.T) {
 		{name: "fixup", phase: "fixup", gate: "hooks-fixup"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			f := fixtureRepo(t)
+			t.Parallel()
+			f := parallelFixtureRepo(t)
 			bookmark := f.new(t, "EX-1", "feat(rjc): add submit test", "")
 			f.commit(t, "hook-change.txt")
-			t.Setenv("RJC_TEST_HOOK_PHASE", tc.phase)
+			f.repo.env = append(f.repo.env, "RJC_TEST_HOOK_PHASE="+tc.phase)
 			if tc.fail {
-				t.Setenv("RJC_TEST_HOOK_FAIL", "1")
+				f.repo.env = append(f.repo.env, "RJC_TEST_HOOK_FAIL=1")
 			}
 			err := f.repo.submit(f.ctx, submitOptions{bookmark: bookmark, title: "feat(rjc): add submit test (EX-1)", bodyFile: f.bodyFile}, f, io.Discard)
 			if tc.gate != "" {
@@ -40,7 +42,8 @@ func TestSubmitHooksBeforePush(t *testing.T) {
 }
 
 func TestSubmitRigelProfileSkipsAbsentHooks(t *testing.T) {
-	f := fixtureRepo(t)
+	t.Parallel()
+	f := parallelFixtureRepo(t)
 	profile, err := ProfileFor(loadExampleConfig(t), "https://github.com/example/factory.git")
 	if err != nil {
 		t.Fatal(err)
@@ -79,7 +82,8 @@ func TestSubmitRigelProfileSkipsAbsentHooks(t *testing.T) {
 }
 
 func TestSubmitJJVineProfileSkipsAbsentHooks(t *testing.T) {
-	f := fixtureRepo(t)
+	t.Parallel()
+	f := parallelFixtureRepo(t)
 	profile, err := ProfileFor(loadExampleConfig(t), "https://github.com/example/jj-vine.git")
 	if err != nil {
 		t.Fatal(err)

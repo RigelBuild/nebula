@@ -8,6 +8,7 @@ import (
 )
 
 func TestLifecycleTrackingRedTrunk(t *testing.T) {
+	t.Parallel()
 	l := newLifecycleFixture(t)
 	f := l.f
 	jjTest(t, f.repo, "bookmark", "create", "rigel-release", "-r", "main@origin")
@@ -39,7 +40,7 @@ func TestLifecycleTrackingRedTrunk(t *testing.T) {
 	if trunk == mirror {
 		t.Fatal("mirror must differ from the trunk")
 	}
-	t.Setenv("RJC_TEST_FAIL_AT", trunk)
+	f.repo.env = append(f.repo.env, "RJC_TEST_FAIL_AT="+trunk)
 	code, out := l.command(t, "ready", l.bookmark, "--main-red")
 	if code != 0 {
 		t.Fatalf("%d %s", code, out)

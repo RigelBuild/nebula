@@ -915,13 +915,14 @@ func TestPickHostTiesKeepListOrder(t *testing.T) {
 }
 
 func TestPickHostAllBadIsToolFailure(t *testing.T) {
+	t.Parallel()
 	hosts := []string{"down@a", "full@b"}
 	probe := fakeProbe(t, map[string]hostStatus{"full@b": {nproc: 4, load1: 0.1, freeGiB: 1}}, map[string]bool{"down@a": true})
 	_, err := pickHost(t.Context(), hosts, probe)
 	if err == nil {
 		t.Fatal("no qualifying host must fail")
 	}
-	runner := sshHookRunner{hosts: hosts, probe: probe, repo: fixtureRepo(t).repo}
+	runner := sshHookRunner{hosts: hosts, probe: probe, repo: parallelFixtureRepo(t).repo}
 	_, _, err = runner.pickRunnerHost(t.Context(), io.Discard)
 	fail, ok := errors.AsType[*failure](err)
 	if !ok || fail.stage != "hook-ssh-no-host" || fail.code != 3 {

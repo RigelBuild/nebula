@@ -44,7 +44,8 @@ func TestNewAndDryRunSmoke(t *testing.T) {
 }
 
 func TestNewPRIsCreatedNonDraftByDefault(t *testing.T) {
-	f := fixtureRepo(t)
+	t.Parallel()
+	f := parallelFixtureRepo(t)
 	bookmark := f.new(t, "EX-1", "feat(rjc): open ready by default", "")
 	f.commit(t, "ready-by-default.txt")
 	opt := submitOptions{bookmark: bookmark, title: "feat(rjc): open ready by default", bodyFile: f.bodyFile}
@@ -57,7 +58,8 @@ func TestNewPRIsCreatedNonDraftByDefault(t *testing.T) {
 }
 
 func TestDraftOptionCreatesDraft(t *testing.T) {
-	f := fixtureRepo(t)
+	t.Parallel()
+	f := parallelFixtureRepo(t)
 	bookmark := f.new(t, "EX-1", "feat(rjc): keep work in progress", "")
 	f.commit(t, "wip.txt")
 	opt := submitOptions{bookmark: bookmark, title: "feat(rjc): keep work in progress", bodyFile: f.bodyFile, draft: true}
@@ -70,6 +72,7 @@ func TestDraftOptionCreatesDraft(t *testing.T) {
 }
 
 func TestResubmitPreservesDraftState(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name          string
 		initialDraft  bool
@@ -79,7 +82,7 @@ func TestResubmitPreservesDraftState(t *testing.T) {
 		{name: "draft without draft flag", initialDraft: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			f := fixtureRepo(t)
+			f := parallelFixtureRepo(t)
 			bookmark := f.new(t, "EX-1", "feat(rjc): preserve draft state", "")
 			f.commit(t, "state.txt")
 			opt := submitOptions{bookmark: bookmark, title: "feat(rjc): preserve draft state", bodyFile: f.bodyFile, draft: tc.initialDraft}
@@ -729,7 +732,8 @@ func holdBodies(comments []map[string]any) []string {
 }
 
 func TestHoldCommentExistsWhenSubmitReturns(t *testing.T) {
-	f := fixtureRepo(t)
+	t.Parallel()
+	f := parallelFixtureRepo(t)
 	bookmark := f.new(t, "EX-10694", "feat(rjc): post a Hold comment from submit", "")
 	f.commit(t, "hold.txt")
 	opt := submitOptions{bookmark: bookmark, title: "feat(rjc): post a Hold comment from submit", bodyFile: f.bodyFile, hold: "review pending"}
@@ -742,7 +746,8 @@ func TestHoldCommentExistsWhenSubmitReturns(t *testing.T) {
 }
 
 func TestHoldPostedWhenHeadWaitFails(t *testing.T) {
-	f := fixtureRepo(t)
+	t.Parallel()
+	f := parallelFixtureRepo(t)
 	bookmark := f.new(t, "EX-10694", "feat(rjc): post Hold before waiting", "")
 	f.commit(t, "hold-order.txt")
 	stop := errors.New("stop before head confirmation")
@@ -762,7 +767,8 @@ func TestHoldPostedWhenHeadWaitFails(t *testing.T) {
 }
 
 func TestHoldPostFailureFailsSubmitNamingPR(t *testing.T) {
-	f := fixtureRepo(t)
+	t.Parallel()
+	f := parallelFixtureRepo(t)
 	bookmark := f.new(t, "EX-10694", "feat(rjc): fail loudly without a Hold", "")
 	f.commit(t, "hold-fail.txt")
 	f.holdStatus = http.StatusInternalServerError
@@ -777,7 +783,8 @@ func TestHoldPostFailureFailsSubmitNamingPR(t *testing.T) {
 }
 
 func TestHoldIsIdempotentUntilAllClear(t *testing.T) {
-	f := fixtureRepo(t)
+	t.Parallel()
+	f := parallelFixtureRepo(t)
 	bookmark := f.new(t, "EX-10694", "feat(rjc): keep one Hold per reason", "")
 	f.commit(t, "hold-idem.txt")
 	opt := submitOptions{bookmark: bookmark, title: "feat(rjc): keep one Hold per reason", bodyFile: f.bodyFile, hold: "review pending"}
@@ -800,7 +807,8 @@ func TestHoldIsIdempotentUntilAllClear(t *testing.T) {
 }
 
 func TestHoldFlagPostsThroughCLI(t *testing.T) {
-	f := fixtureRepo(t)
+	t.Parallel()
+	f := parallelFixtureRepo(t)
 	bookmark := f.new(t, "EX-10694", "feat(rjc): post a Hold comment from submit", "")
 	f.commit(t, "hold-cli.txt")
 	var out bytes.Buffer
@@ -811,7 +819,8 @@ func TestHoldFlagPostsThroughCLI(t *testing.T) {
 }
 
 func TestHoldFlagFailureExitsNonZero(t *testing.T) {
-	f := fixtureRepo(t)
+	t.Parallel()
+	f := parallelFixtureRepo(t)
 	bookmark := f.new(t, "EX-10694", "feat(rjc): fail loudly from the CLI", "")
 	f.commit(t, "hold-cli-fail.txt")
 	f.holdStatus = http.StatusInternalServerError
@@ -823,7 +832,8 @@ func TestHoldFlagFailureExitsNonZero(t *testing.T) {
 }
 
 func TestHoldBlankReasonRefusedBeforeWrites(t *testing.T) {
-	f := fixtureRepo(t)
+	t.Parallel()
+	f := parallelFixtureRepo(t)
 	bookmark := f.new(t, "EX-10694", "feat(rjc): refuse a blank Hold", "")
 	f.commit(t, "hold-blank.txt")
 	var out bytes.Buffer
@@ -844,7 +854,8 @@ func lastCommentBody(t *testing.T, comments []map[string]any) string {
 }
 
 func TestHoldPostedAfterHeadMovedComment(t *testing.T) {
-	f := fixtureRepo(t)
+	t.Parallel()
+	f := parallelFixtureRepo(t)
 	bookmark := f.new(t, "EX-10694", "feat(rjc): hold after head moved", "")
 	f.commit(t, "moved-1.txt")
 	opt := submitOptions{bookmark: bookmark, title: "feat(rjc): hold after head moved", bodyFile: f.bodyFile, hold: "review pending"}
@@ -871,7 +882,8 @@ func TestHoldPostedAfterHeadMovedComment(t *testing.T) {
 }
 
 func TestHoldPostedAfterRetargetComment(t *testing.T) {
-	f := fixtureRepo(t)
+	t.Parallel()
+	f := parallelFixtureRepo(t)
 	bookmark := f.new(t, "EX-10694", "feat(rjc): hold after retarget", "")
 	jjTest(t, f.repo, "git", "push", "--bookmark", bookmark)
 	old := jjTest(t, f.repo, "log", "--no-graph", "-r", quoteRev(bookmark), "-T", "commit_id")
@@ -890,7 +902,8 @@ func TestHoldPostedAfterRetargetComment(t *testing.T) {
 }
 
 func TestHoldStaysAfterLaterViewerComment(t *testing.T) {
-	f := fixtureRepo(t)
+	t.Parallel()
+	f := parallelFixtureRepo(t)
 	bookmark := f.new(t, "EX-10694", "feat(rjc): keep a Hold in force", "")
 	f.commit(t, "in-force.txt")
 	opt := submitOptions{bookmark: bookmark, title: "feat(rjc): keep a Hold in force", bodyFile: f.bodyFile, hold: "review pending"}
@@ -968,7 +981,8 @@ func TestHoldInForceMatchesNemoMerge(t *testing.T) {
 }
 
 func TestHoldMarkReadyFailureNamesDraftPR(t *testing.T) {
-	f := fixtureRepo(t)
+	t.Parallel()
+	f := parallelFixtureRepo(t)
 	bookmark := f.new(t, "EX-10694", "feat(rjc): name a held draft", "")
 	f.commit(t, "ready-fail.txt")
 	f.readyStatus = http.StatusInternalServerError
@@ -984,7 +998,8 @@ func TestHoldMarkReadyFailureNamesDraftPR(t *testing.T) {
 }
 
 func TestHoldPostedOnEveryStackPR(t *testing.T) {
-	f := fixtureRepo(t)
+	t.Parallel()
+	f := parallelFixtureRepo(t)
 	parent := f.new(t, "EX-1", "feat(rjc): add held parent", "")
 	f.commit(t, "held-parent.txt")
 	jjTest(t, f.repo, "bookmark", "move", parent, "--to", "@-")
@@ -1006,7 +1021,8 @@ func TestHoldPostedOnEveryStackPR(t *testing.T) {
 }
 
 func TestHoldChangedReasonPostsNewHold(t *testing.T) {
-	f := fixtureRepo(t)
+	t.Parallel()
+	f := parallelFixtureRepo(t)
 	bookmark := f.new(t, "EX-10694", "feat(rjc): new reason new Hold", "")
 	f.commit(t, "reason.txt")
 	opt := submitOptions{bookmark: bookmark, title: "feat(rjc): new reason new Hold", bodyFile: f.bodyFile, hold: "review pending"}
@@ -1023,7 +1039,8 @@ func TestHoldChangedReasonPostsNewHold(t *testing.T) {
 }
 
 func TestHoldNewPRCreatedDraftThenReady(t *testing.T) {
-	f := fixtureRepo(t)
+	t.Parallel()
+	f := parallelFixtureRepo(t)
 	bookmark := f.new(t, "EX-10694", "feat(rjc): draft until held", "")
 	f.commit(t, "draft-hold.txt")
 	opt := submitOptions{bookmark: bookmark, title: "feat(rjc): draft until held", bodyFile: f.bodyFile, hold: "review pending"}
@@ -1043,7 +1060,8 @@ func TestHoldNewPRCreatedDraftThenReady(t *testing.T) {
 }
 
 func TestHoldExistingDraftStaysDraft(t *testing.T) {
-	f := fixtureRepo(t)
+	t.Parallel()
+	f := parallelFixtureRepo(t)
 	bookmark := f.new(t, "EX-10694", "feat(rjc): keep an existing draft", "")
 	f.commit(t, "keep-draft.txt")
 	opt := submitOptions{bookmark: bookmark, title: "feat(rjc): keep an existing draft", bodyFile: f.bodyFile, draft: true}
@@ -1060,7 +1078,8 @@ func TestHoldExistingDraftStaysDraft(t *testing.T) {
 }
 
 func TestHoldPostFailureLeavesNewPRDraft(t *testing.T) {
-	f := fixtureRepo(t)
+	t.Parallel()
+	f := parallelFixtureRepo(t)
 	bookmark := f.new(t, "EX-10694", "feat(rjc): stay draft without a Hold", "")
 	f.commit(t, "draft-fail.txt")
 	f.holdStatus = http.StatusInternalServerError

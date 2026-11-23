@@ -66,7 +66,8 @@ func TestRunRootChecksRealCommandSeesTrackedFiles(t *testing.T) {
 // TestHeadWorktreeIsRemovedOnEveryPath checks that the worktree and its registration are gone after a failing
 // run, the path that most needs cleanup.
 func TestHeadWorktreeIsRemovedOnEveryPath(t *testing.T) {
-	f := fixtureRepo(t)
+	t.Parallel()
+	f := parallelFixtureRepo(t)
 	f.new(t, "EX-1", "feat(rjc): worktree cleanup", "")
 	f.commit(t, "hk.pkl")
 	head := jjTest(t, f.repo, "log", "--no-graph", "-r", "@-", "-T", "commit_id")
@@ -129,7 +130,8 @@ func TestHeadWorktreeAddFailureReturnsAddError(t *testing.T) {
 // TestHeadWorktreeRemovedWhenContextCancelled checks cleanup after a cancelled submit: the worktree is unregistered
 // and its directory deleted even though the command context is done.
 func TestHeadWorktreeRemovedWhenContextCancelled(t *testing.T) {
-	f := fixtureRepo(t)
+	t.Parallel()
+	f := parallelFixtureRepo(t)
 	f.new(t, "EX-1", "feat(rjc): cancelled worktree cleanup", "")
 	f.commit(t, "hk.pkl")
 	head := jjTest(t, f.repo, "log", "--no-graph", "-r", "@-", "-T", "commit_id")

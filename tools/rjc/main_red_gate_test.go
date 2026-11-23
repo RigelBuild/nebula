@@ -6,7 +6,8 @@ import (
 )
 
 func TestMainRedGateBuildFailureCleansWorkspace(t *testing.T) {
-	f := fixtureRepo(t)
+	t.Parallel()
+	f := parallelFixtureRepo(t)
 	f.repo.profile.HookReports = true
 	tip := jjTest(t, f.repo, "log", "--no-graph", "-r", mainOrigin, "-T", "commit_id")
 	rec := HookRecord{Result: hookSkipped, Skip: "main-red:#1", FailedGates: []string{"sea-ref"}}

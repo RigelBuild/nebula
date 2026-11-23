@@ -11,7 +11,7 @@ import (
 
 func trackingFixture(t *testing.T, mirror string, conflict bool) *fixture {
 	t.Helper()
-	f := fixtureRepo(t)
+	f := parallelFixtureRepo(t)
 	r := f.repo
 	r.profile.Posture = forkTracking
 	r.profile.Trunk = "rigel-release"
@@ -43,7 +43,8 @@ func trackingFixture(t *testing.T, mirror string, conflict bool) *fixture {
 }
 
 func TestUpstreamSyncRejectsNonTracking(t *testing.T) {
-	f := fixtureRepo(t)
+	t.Parallel()
+	f := parallelFixtureRepo(t)
 	for _, posture := range []ForkPosture{forkNone, "owned"} {
 		f.repo.profile.Posture = posture
 		_, err := f.repo.upstreamSync(f.ctx, upstreamSyncOptions{issue: "EX-1"}, io.Discard)
@@ -59,8 +60,10 @@ func TestUpstreamSyncRejectsNonTracking(t *testing.T) {
 }
 
 func TestUpstreamSyncCreatesRecordedMerge(t *testing.T) {
+	t.Parallel()
 	for _, mirror := range []string{"main", "master"} {
 		t.Run(mirror, func(t *testing.T) {
+			t.Parallel()
 			f := trackingFixture(t, mirror, false)
 			bookmark, err := f.repo.upstreamSync(f.ctx, upstreamSyncOptions{issue: "EX-1"}, io.Discard)
 			if err != nil {
@@ -99,6 +102,7 @@ func TestUpstreamSyncCreatesRecordedMerge(t *testing.T) {
 }
 
 func TestUpstreamSyncAlreadySynced(t *testing.T) {
+	t.Parallel()
 	f := trackingFixture(t, "main", false)
 	u := jjTest(t, f.repo, "log", "--no-graph", "-r", "rigel-release@origin", "-T", "commit_id")
 	bookmark, err := f.repo.upstreamSync(f.ctx, upstreamSyncOptions{issue: "EX-1", upstream: u}, io.Discard)
@@ -108,6 +112,7 @@ func TestUpstreamSyncAlreadySynced(t *testing.T) {
 }
 
 func TestUpstreamSyncConflict(t *testing.T) {
+	t.Parallel()
 	f := trackingFixture(t, "main", true)
 	_, err := f.repo.upstreamSync(f.ctx, upstreamSyncOptions{issue: "EX-1"}, io.Discard)
 	assertRefusalGate(t, err, "conflict")
@@ -117,8 +122,10 @@ func TestUpstreamSyncConflict(t *testing.T) {
 }
 
 func TestUpstreamMergeRejectsUnrecordedAndStacked(t *testing.T) {
+	t.Parallel()
 	for _, scenario := range []string{"unrecorded", "stacked", "extra commit", "wrong parent", "third parent"} {
 		t.Run(scenario, func(t *testing.T) {
+			t.Parallel()
 			f := trackingFixture(t, "main", false)
 			bookmark, err := f.repo.upstreamSync(f.ctx, upstreamSyncOptions{issue: "EX-1"}, io.Discard)
 			if err != nil {
@@ -172,6 +179,7 @@ func TestUpstreamMergeRejectsUnrecordedAndStacked(t *testing.T) {
 }
 
 func TestUpstreamMergeRejectsSecondParentOutsideMirror(t *testing.T) {
+	t.Parallel()
 	f := trackingFixture(t, "main", false)
 	bookmark, err := f.repo.upstreamSync(f.ctx, upstreamSyncOptions{issue: "EX-1"}, io.Discard)
 	if err != nil {
@@ -206,6 +214,7 @@ func TestUpstreamMergeRejectsSecondParentOutsideMirror(t *testing.T) {
 }
 
 func TestUpstreamMergeHooksValidateReleaseDiff(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name, file string
 		fails      bool
@@ -214,6 +223,7 @@ func TestUpstreamMergeHooksValidateReleaseDiff(t *testing.T) {
 		{name: "unchanged file passes", file: "unrelated.txt"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			f := trackingFixture(t, "main", false)
 			bookmark, err := f.repo.upstreamSync(f.ctx, upstreamSyncOptions{issue: "EX-1"}, io.Discard)
 			if err != nil {
@@ -228,8 +238,7 @@ func TestUpstreamMergeHooksValidateReleaseDiff(t *testing.T) {
 				t.Fatal(err)
 			}
 			envPath := filepath.Join(t.TempDir(), "hook-env.json")
-			t.Setenv("RJC_TEST_HOOK_ENV", envPath)
-			t.Setenv("RJC_TEST_HOOK_FAIL_FILE", tc.file)
+			f.repo.env = append(f.repo.env, "RJC_TEST_HOOK_ENV="+envPath, "RJC_TEST_HOOK_FAIL_FILE="+tc.file)
 			store := localPrePush{root: f.repo.stateDir}
 			err = f.repo.runHooks(f.ctx, line, nil, localHookRunner{repo: f.repo}, store)
 			if tc.fails {

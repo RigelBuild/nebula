@@ -18,7 +18,8 @@ func repoState(t *testing.T, f *fixture) string {
 // TestAuthoredIssueRefusedBeforeWrites proves new, meta and submit each run the authored-title issue check, which
 // uses the profile's issuePrefix, before any write. composeTitle no longer checks for issue references itself.
 func TestAuthoredIssueRefusedBeforeWrites(t *testing.T) {
-	f := fixtureRepo(t)
+	t.Parallel()
+	f := parallelFixtureRepo(t)
 	bookmark := f.new(t, "EX-1", "feat(rjc): linked change", "")
 	f.commit(t, "linked.txt")
 	for _, args := range [][]string{
@@ -42,9 +43,10 @@ func TestAuthoredIssueRefusedBeforeWrites(t *testing.T) {
 // TestBadP0ReasonRefusedBeforeWrites proves a p0: reason whose prefix is not the repository's issuePrefix, or whose
 // shape is wrong, is refused before any rebase, bookmark change, push, Linear lookup or forge call.
 func TestBadP0ReasonRefusedBeforeWrites(t *testing.T) {
+	t.Parallel()
 	for _, skip := range []string{"p0:OTHER-1", "p0:EX-0", "p0:EX-1 x", "p0:"} {
 		t.Run(skip, func(t *testing.T) {
-			f := fixtureRepo(t)
+			f := parallelFixtureRepo(t)
 			bookmark := f.new(t, "EX-1", "feat(rjc): urgent change", "")
 			f.commit(t, "urgent.txt")
 			// newChange put the bookmark on the empty working copy. Move it to the commit so ownership passes and
@@ -81,7 +83,8 @@ func TestBadP0ReasonRefusedBeforeWrites(t *testing.T) {
 // TestValidP0ReasonPassesSkipReasonGate is the positive control for TestBadP0ReasonRefusedBeforeWrites: the same
 // fixture with p0:EX-1 gets past the skip-reason gate and reaches the Linear priority lookup.
 func TestValidP0ReasonPassesSkipReasonGate(t *testing.T) {
-	f := fixtureRepo(t)
+	t.Parallel()
+	f := parallelFixtureRepo(t)
 	bookmark := f.new(t, "EX-1", "feat(rjc): urgent change", "")
 	f.commit(t, "urgent.txt")
 	jjTest(t, f.repo, "bookmark", "move", bookmark, "--to", "@-")

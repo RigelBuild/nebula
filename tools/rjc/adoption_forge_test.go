@@ -9,8 +9,10 @@ import (
 )
 
 func TestAdoptionRefusesMergedDeletedParent(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"new --at", "submit --issue"} {
 		t.Run(mode, func(t *testing.T) {
+			t.Parallel()
 			f, parent, parentTip, at := remoteParentAdoptionFixture(t)
 			parentCommits, err := f.repo.revisions(f.ctx, "main@origin.."+quoteRev(parentTip))
 			if err != nil {

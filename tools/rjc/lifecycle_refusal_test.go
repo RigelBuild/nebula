@@ -6,6 +6,7 @@ import (
 )
 
 func TestLifecycleReadyRefusals(t *testing.T) {
+	t.Parallel()
 	l := newLifecycleFixture(t)
 	store := localPrePush{root: l.f.repo.stateDir}
 	original, found, err := store.Read(l.f.ctx, l.f.repo.profile.Name, 1, l.head)

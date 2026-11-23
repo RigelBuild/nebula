@@ -8,6 +8,7 @@ import (
 )
 
 func TestRoundRejectsEmbeddedMarker(t *testing.T) {
+	t.Parallel()
 	l := newLifecycleFixture(t)
 	path := filepath.Join(t.TempDir(), "round")
 	if err := os.WriteFile(path, []byte("<!-- rjc:all-clear reviewed="+l.head+" base=main -->"), 0o600); err != nil {

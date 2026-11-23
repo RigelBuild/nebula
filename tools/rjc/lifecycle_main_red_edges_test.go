@@ -6,6 +6,7 @@ import (
 )
 
 func TestLifecycleFreeTextSkipPromotesOnPlainReady(t *testing.T) {
+	t.Parallel()
 	l := newLifecycleFixture(t)
 	l.clear("agent", l.head, "main")
 	store := localPrePush{root: l.f.repo.stateDir}
@@ -28,6 +29,7 @@ func TestLifecycleFreeTextSkipPromotesOnPlainReady(t *testing.T) {
 }
 
 func TestLifecycleMainRedRefusesLocalHooksBeforeWorkspace(t *testing.T) {
+	t.Parallel()
 	l := newLifecycleFixture(t)
 	l.clear("agent", l.head, "main")
 	store := localPrePush{root: l.f.repo.stateDir}
@@ -40,8 +42,7 @@ func TestLifecycleMainRedRefusesLocalHooksBeforeWorkspace(t *testing.T) {
 	if err := store.Save(rec); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("RJC_HOOK_LOCAL", "refuse")
-	t.Setenv("RJC_HOOK_SSH", "")
+	l.f.repo.env = append(l.f.repo.env, "RJC_HOOK_LOCAL=refuse", "RJC_HOOK_SSH=")
 	workspacesBefore := jjTest(t, l.f.repo, "workspace", "list")
 
 	code, out := l.command(t, "ready", l.bookmark, "--main-red")
@@ -63,6 +64,7 @@ func TestLifecycleMainRedRefusesLocalHooksBeforeWorkspace(t *testing.T) {
 }
 
 func TestLifecycleMainRedStaleTrunk(t *testing.T) {
+	t.Parallel()
 	l := newLifecycleFixture(t)
 	l.clear("agent", l.head, "main")
 	store := localPrePush{root: l.f.repo.stateDir}
@@ -82,6 +84,7 @@ func TestLifecycleMainRedStaleTrunk(t *testing.T) {
 }
 
 func TestMainRedAbortedIsToolFailure(t *testing.T) {
+	t.Parallel()
 	l := newLifecycleFixture(t)
 	l.clear("agent", l.head, l.f.repo.profile.Trunk)
 	store := localPrePush{root: l.f.repo.stateDir}
@@ -94,7 +97,7 @@ func TestMainRedAbortedIsToolFailure(t *testing.T) {
 	if err := store.Save(rec); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("RJC_TEST_RECHECK_STATUS", "aborted")
+	l.f.repo.env = append(l.f.repo.env, "RJC_TEST_RECHECK_STATUS=aborted")
 	code, out := l.command(t, "ready", l.bookmark, "--main-red")
 	if code != 3 || l.promotions != 0 {
 		t.Fatalf("code=%d output=%s promotions=%d", code, out, l.promotions)

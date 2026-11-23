@@ -10,9 +10,11 @@ import (
 )
 
 func TestSubmitPreflightRefusalsLeaveHistory(t *testing.T) {
+	t.Parallel()
 	for _, kind := range []string{"nonlinear", "foreign-published", "gate-state", "ci-gate", "changed-template", "adoption-ownership", "adoption-foreign-published", "adoption-ci-gate", "adoption-gate-state", "unreadable", "missing section", "duplicate heading", "compose body", "bounds", "missing What section", "missing Why section", "empty What section", "empty Why section"} {
 		t.Run(kind, func(t *testing.T) {
-			f := fixtureRepo(t)
+			t.Parallel()
+			f := parallelFixtureRepo(t)
 			if !slices.Contains([]string{"nonlinear", "foreign-published", "gate-state", "ci-gate", "changed-template", "missing What section", "missing Why section", "empty What section", "empty Why section"}, kind) {
 				testAdoptionRefusalLeavesHistory(t, f, kind)
 				return
@@ -59,7 +61,7 @@ func TestSubmitPreflightRefusalsLeaveHistory(t *testing.T) {
 				f.commit(t, "unbookmarked.txt")
 			case "changed-template":
 				clone := filepath.Join(t.TempDir(), "clone")
-				remote := filepath.Join(os.Getenv("HOME"), "remote.git")
+				remote := filepath.Join(envLookup(f.repo.env, "HOME"), "remote.git")
 				if _, err := f.repo.command(f.ctx, nil, nil, "git", "clone", remote, clone); err != nil {
 					t.Fatal(err)
 				}
@@ -172,7 +174,8 @@ func testAdoptionRefusalLeavesHistory(t *testing.T, f *fixture, kind string) {
 }
 
 func TestSubmitPreflightSelectsTargetWithForeignAuthor(t *testing.T) {
-	f := fixtureRepo(t)
+	t.Parallel()
+	f := parallelFixtureRepo(t)
 	title := "feat(rjc): retain target selection"
 	bookmark := f.new(t, "EX-1", title, "")
 	jjTest(t, f.repo, "config", "set", "--repo", "user.email", "other@example.com")

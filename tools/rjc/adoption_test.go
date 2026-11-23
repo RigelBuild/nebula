@@ -9,7 +9,7 @@ import (
 
 func remoteParentAdoptionFixture(t *testing.T) (*fixture, string, string, string) {
 	t.Helper()
-	f := fixtureRepo(t)
+	f := parallelFixtureRepo(t)
 	parent := f.new(t, "EX-1", "feat(rjc): parent work before adoption", "")
 	f.commit(t, "parent.txt")
 	jjTest(t, f.repo, "bookmark", "move", parent, "--to", "@-")
@@ -27,8 +27,10 @@ func remoteParentAdoptionFixture(t *testing.T) (*fixture, string, string, string
 }
 
 func TestAdoptionRequiresExplicitRemoteParent(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"new --at", "submit --issue"} {
 		t.Run(mode, func(t *testing.T) {
+			t.Parallel()
 			f, parent, parentTip, at := remoteParentAdoptionFixture(t)
 			title := "feat(rjc): adopt an existing foreign child"
 			child, err := f.repo.keys.BookmarkName(f.repo.codename, 2, title)
@@ -75,6 +77,7 @@ func TestAdoptionRequiresExplicitRemoteParent(t *testing.T) {
 }
 
 func TestExplicitParentAdoptionSavesRelationship(t *testing.T) {
+	t.Parallel()
 	f, parent, parentTip, at := remoteParentAdoptionFixture(t)
 	child, err := f.repo.newChange(f.ctx, newOptions{issue: "EX-2", title: "feat(rjc): explicitly adopt existing child work", on: parent, at: quoteRev(at)})
 	if err != nil {

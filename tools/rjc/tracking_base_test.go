@@ -10,6 +10,7 @@ import (
 )
 
 func TestTrackingSubmitCreatesPRAgainstTrunk(t *testing.T) {
+	t.Parallel()
 	f := trackingFixture(t, "main", false)
 	bookmark := f.new(t, "EX-1", "feat(rjc): create against release trunk", "")
 	f.commit(t, "tracking-feature.txt")
@@ -31,6 +32,7 @@ func TestTrackingSubmitCreatesPRAgainstTrunk(t *testing.T) {
 }
 
 func TestTrackingReadyRefusesMirrorBasedPR(t *testing.T) {
+	t.Parallel()
 	l := newLifecycleFixture(t)
 	f := l.f
 	jjTest(t, f.repo, "bookmark", "create", "rigel-release", "-r", "main@origin")

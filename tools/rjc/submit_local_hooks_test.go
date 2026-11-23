@@ -29,6 +29,7 @@ func installFastTrunk(t *testing.T, f *fixture) {
 }
 
 func TestSubmitRefusesNonFastLocalHooks(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name  string
 		opted bool
@@ -44,7 +45,8 @@ func TestSubmitRefusesNonFastLocalHooks(t *testing.T) {
 		{name: "non-opted fast head", fast: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			f := fixtureRepo(t)
+			t.Parallel()
+			f := parallelFixtureRepo(t)
 			// A gate-runner dir other than the default proves the refusal matches the profile's dir.
 			f.repo.profile.GateRunnerDir = "tools/example-gate"
 			installFastTrunk(t, f)
@@ -64,8 +66,7 @@ func TestSubmitRefusesNonFastLocalHooks(t *testing.T) {
 				writeTestFile(t, filepath.Join(f.repo.root, test.local), "override\n")
 			}
 			jjTest(t, f.repo, "commit", "-m", "fix: committed hook")
-			t.Setenv("RJC_HOOK_LOCAL", "refuse")
-			t.Setenv("RJC_HOOK_SSH", "")
+			f.repo.env = append(f.repo.env, "RJC_HOOK_LOCAL=refuse", "RJC_HOOK_SSH=")
 			var log strings.Builder
 			f.repo.log = &log
 			before := opLogID(t, f)

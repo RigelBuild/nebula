@@ -673,6 +673,77 @@ async def test_approval_uses_same_replacement_adapter_as_reply(monkeypatch):
     await live.disconnect()
 
 
+@pytest.mark.asyncio
+async def test_turn_started_before_reconnect_sends_its_approval_card_through_the_live_adapter(monkeypatch, caplog):
+    # A turn that started before a Discord reconnect must send its approval card through the adapter that is
+    # live at send time. The reconnect runs the real install path; the turn's source still names the predecessor.
+    from gateway.config import GatewayConfig, Platform
+    from gateway.run import GatewayRunner
+    from gateway.run_turn_runner import TurnRunner
+    from gateway.session_identity import resolve_identity
+    from gateway.turn_context import TurnContext
+
+    cfg = PlatformConfig(enabled=True, token="test-token", extra={"approval_card_confirm_timeout": 0.5})
+    old, new = DiscordAdapter(cfg), DiscordAdapter(cfg)
+    created: list[_FakeBot] = []
+    thread = _channel_for(777, 1234)
+    monkeypatch.setattr(_FakeBot, "get_channel", lambda self, _cid: thread)
+    await _connect(old, monkeypatch, created)
+    monkeypatch.setattr(new, "_resolve_allowed_usernames", AsyncMock())
+
+    runner = object.__new__(GatewayRunner)
+    runner.config = GatewayConfig(platforms={Platform.DISCORD: cfg})
+    runner.adapters = {Platform.DISCORD: old}
+    runner._profile_adapters = {}
+    runner._failed_platforms = {}
+    runner._running = True
+    runner.delivery_router = MagicMock()
+    runner._create_adapter_off_loop_deps = AsyncMock(return_value=new)
+    runner._run_in_executor_with_context = AsyncMock()
+    runner._wire_adapter_handlers = MagicMock()
+    runner._flag_reconnect_needs_attention = MagicMock()
+    runner._update_platform_runtime_status = MagicMock()
+    runner._sync_voice_mode_state_to_adapter = MagicMock()
+    runner._bind_voice_input_callback = MagicMock()
+    runner._schedule_planned_restart_replay = MagicMock()
+    runner._redeliver_failed_obligations_for_platform = AsyncMock()
+    runner._schedule_resume_pending_sessions_async = AsyncMock()
+
+    session = "agent:other:discord:555"
+    request_id = uuid.uuid4().hex
+    entry = _queue_entry(monkeypatch, session, request_id)
+    source = old.build_source(chat_id="555", chat_type="channel", user_id="11111", thread_id="777")
+    resolve_identity(source, runner=runner, adapter=old)
+    ctx = TurnContext(source=source, session_key=session, _status_adapter=runner._delivery_adapter_for(source),
+                      _status_chat_id="555", _status_thread_metadata={"thread_id": "777"})
+    assert ctx._status_adapter is old
+    turn = TurnRunner(runner, ctx)
+    turn._close_native_stream_boundary = lambda *args: None
+    loop = asyncio.get_running_loop()
+    turn._schedule = lambda coro, message: asyncio.run_coroutine_threadsafe(coro, loop)
+    monkeypatch.setattr("gateway.run_turn_runner_approval_settle.register_approval_index_settle", lambda *args: None)
+    monkeypatch.setattr("gateway.run_turn_runner_approval_settle.register_timeout_notice", lambda *args, **kwargs: None)
+
+    # The connection drops: the fatal path disposes the old client and queues it with the old instance as predecessor.
+    await old.disconnect()
+    runner.adapters.pop(Platform.DISCORD)
+    runner._failed_platforms[Platform.DISCORD] = {"config": cfg, "attempts": 0, "next_retry": 0, "predecessor": old}
+    await runner._reconnect_failed_platform_once(Platform.DISCORD, time.monotonic())
+    assert runner.adapters[Platform.DISCORD] is new and new.is_connected
+
+    try:
+        await asyncio.to_thread(turn._render_approval_sync, {"command": "rm x", "request_id": request_id})
+        cards = [call.kwargs for call in thread.send.await_args_list if "view" in call.kwargs]
+        which = lambda adapter: "new" if adapter is new else "old" if adapter is old else repr(adapter)
+        assert len(cards) == 1, (
+            f"turn started before reconnect: card not delivered; live={which(turn._live_delivery_adapter())}, "
+            f"status_snapshot={which(ctx._status_adapter)}, transport_ref={which(source._transport_adapter_ref())}")
+        assert "approval card not delivered" not in caplog.text
+        assert entry.cancelled is None
+    finally:
+        await new.disconnect()
+
+
 
 @pytest.mark.asyncio
 async def test_failed_card_posts_mentioned_text_in_thread(monkeypatch):

@@ -95,7 +95,7 @@ M.managerInstanceId = "smoke-manager-instance";
   requestDeliveryAdmin: requestDeliveryAdminZeroMemberships,
   getRoster: () => [...M.agents.values()].map((a) => ({ card: { id: principalKey(DEV_OWNER, a.id).key, name: a.name }, status: "idle", lifecycleUid: a.lifecycleUid })),
 };
-const con: Connector = { kind: "connector", name: "smoke-gb", requires: ["node"], eventChannel, buildLaunch: () => ({ command: "true", args: [], env: {} }) };
+const con: Connector = { kind: "connector", name: "smoke-gb", requires: ["node"], eventChannel, supportsResume: true, buildLaunch: () => ({ command: "true", args: [], env: {} }) };
 registry.register(con);
 
 const spawnAs = (caller: EpCaller | undefined, name: string, extra: Record<string, unknown> = {}): Promise<ControlReply> =>
@@ -191,6 +191,10 @@ try {
     check("its credential binds the worker task queue", raw.some((s) => s.startsWith("$JS.API.CONSUMER.MSG.NEXT.") && s.endsWith(".svc_worker")), raw.filter((s) => s.includes("svc_")));
     const w = await spawnAs(issuedCallerOf("dispatcher"), "worker");
     check("it hands the role on", w.ok === true, w);
+    const resume = await spawnAs(caller, "worker", { resume: "existing-worker-session" });
+    check("resuming a worker without its role is refused with the same grant error", resume.ok === false && resume.code === undefined && resume.error === r.error, resume);
+    const allowedResume = await spawnAs(issuedCallerOf("dispatcher"), "worker", { resume: "existing-worker-session" });
+    check("a spawner holding role:worker passes the grant bound with a resume", allowedResume.ok === true, allowedResume);
     const dt = await spawnAs(issuedCallerOf("dispatcher"), "deputy");
     check("and the role:worker token", dt.ok === true, dt);
   }

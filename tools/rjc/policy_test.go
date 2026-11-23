@@ -55,10 +55,10 @@ func TestProfileForDefaultAndOwnerCoAuthor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	profileCUE := string(data) + `
+	profileCUE := strings.Replace(string(data), `owners: ["example"]`, `owners: ["example", "second"]`, 1) + `
 
 default: {
-	issuePrefix: "EX"
+	issuePrefix: "DF"
 	specDirs: ["docs/"]
 }
 coAuthorByOwner: {
@@ -79,14 +79,24 @@ coAuthorByOwner: {
 		wantName   string
 		wantPrefix string
 		wantAuthor string
+		wantHooks  bool
 		wantError  string
 	}{
 		{
 			name:       "unlisted repo gets default",
 			origin:     "https://github.com/example/unlisted.git",
 			wantName:   "example/unlisted",
+			wantPrefix: "DF",
+			wantAuthor: "Org Author <org@example.com>",
+			wantHooks:  true,
+		},
+		{
+			name:       "listed repo gets its own entry",
+			origin:     "https://github.com/example/factory.git",
+			wantName:   "example/factory",
 			wantPrefix: "EX",
 			wantAuthor: "Org Author <org@example.com>",
+			wantHooks:  false,
 		},
 		{
 			name:      "unlisted repo with no default is refused",
@@ -100,6 +110,15 @@ coAuthorByOwner: {
 			wantName:   "example/app",
 			wantPrefix: "EX",
 			wantAuthor: "Org Author <org@example.com>",
+			wantHooks:  true,
+		},
+		{
+			name:       "second owner uses global coauthor",
+			origin:     "https://github.com/second/unlisted.git",
+			wantName:   "second/unlisted",
+			wantPrefix: "DF",
+			wantAuthor: "Example Author <author@example.com>",
+			wantHooks:  true,
 		},
 		{
 			name:       "old profile file still loads",
@@ -108,6 +127,7 @@ coAuthorByOwner: {
 			wantName:   "example/app",
 			wantPrefix: "EX",
 			wantAuthor: "Example Author <author@example.com>",
+			wantHooks:  true,
 		},
 	}
 	for _, tt := range tests {
@@ -129,8 +149,8 @@ coAuthorByOwner: {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if profile.Name != tt.wantName || profile.IssuePrefix != tt.wantPrefix || profile.CoAuthor != tt.wantAuthor {
-				t.Fatalf("profile = %+v, want name %q, issue prefix %q, coauthor %q", profile, tt.wantName, tt.wantPrefix, tt.wantAuthor)
+			if profile.Name != tt.wantName || profile.IssuePrefix != tt.wantPrefix || profile.CoAuthor != tt.wantAuthor || profile.Hooks != tt.wantHooks {
+				t.Fatalf("profile = %+v, want name %q, issue prefix %q, coauthor %q, hooks %t", profile, tt.wantName, tt.wantPrefix, tt.wantAuthor, tt.wantHooks)
 			}
 		})
 	}

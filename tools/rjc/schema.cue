@@ -1,7 +1,7 @@
 package main
 
 // #Config is the caller's whole profile file. Every deployment value is a
-// required field here: nebula supplies no default for any of them.
+// required field here except default and coAuthorByOwner, which are optional.
 #Config: {
 	// owners lists the GitHub owners rjc accepts repositories from.
 	owners: [_, ...string]

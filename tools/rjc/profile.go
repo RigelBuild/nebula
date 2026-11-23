@@ -24,7 +24,7 @@ var schemaCUE []byte
 // Config is the decoded profile file: the deployment values and the repository table.
 type Config struct {
 	Owners          []string           `json:"owners"`
-	CoAuthor        string             `json:"coAuthor,omitempty"`
+	CoAuthor        string             `json:"coAuthor"`
 	CoAuthorByOwner map[string]string  `json:"coAuthorByOwner,omitempty"`
 	Reviewer        string             `json:"reviewer"`
 	AgentEmail      string             `json:"agentEmail"`

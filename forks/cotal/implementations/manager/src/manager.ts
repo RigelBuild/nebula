@@ -13925,9 +13925,11 @@ export class Manager {
       const presenceIdentityVerified = this.isOwnPresence(a, seen);
       const providerMeta = seen?.card.meta?.provider;
       const provider = typeof providerMeta === "string" && providerMeta ? providerMeta : undefined;
-      // The seat's own report of running background work (`meta.background`, SPEC §6): present only
-      // while it is `running`, absent otherwise. Advisory display data, never a routing input.
-      const background = seen?.card.meta?.background === "running" ? "running" : undefined;
+      // The seat's own report of background work (`meta.background`, SPEC §6): `running` while it has
+      // work, `idle` when it has none, and absent for a seat without the publisher. Advisory display
+      // data, never a routing input. Any other value is dropped, so a stray value cannot reach the row.
+      const backgroundMeta = seen?.card.meta?.background;
+      const background = backgroundMeta === "running" || backgroundMeta === "idle" ? backgroundMeta : undefined;
       // The harness-reported condition beside the mesh status (#618): a turn that died upstream reads
       // `waiting` with `rate_limit` here, not a bare `waiting`. Absent when the connector reported none.
       // Projected field by field like `provider`: a malformed peer row must not fail this reply's schema.

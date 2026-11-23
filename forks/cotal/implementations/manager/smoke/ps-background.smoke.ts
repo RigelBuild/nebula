@@ -1,7 +1,8 @@
 /**
- * `cotal ps --json` seats rows carry `background` only while the seat's presence card reports
- * `meta.background = "running"` (SPEC §6). The row is built by the manager's real `list()`, so the
- * test drives that method directly over a roster it controls: no broker, no spawned seat.
+ * `cotal ps --json` seats rows carry `background` while the seat's presence card reports
+ * `meta.background` as `running` or `idle` (SPEC §6). A seat without the publisher carries no key, so
+ * its row omits `background`. The row is built by the manager's real `list()`, so the test drives that
+ * method directly over a roster it controls: no broker, no spawned seat.
  * Run: tsx smoke/ps-background.smoke.ts
  */
 import { strict as assert } from "node:assert";
@@ -62,16 +63,22 @@ check(
   rowFor([seatRow({ background: "running" })])?.background === "running",
 );
 
-// A seat that has cleared its background key carries no background field at all.
+// A seat that has the publisher and no work reports idle on its row.
 {
-  const row = rowFor([seatRow(undefined)]);
-  check("an idle seat's ps row omits background", row !== undefined && !("background" in row));
+  const row = rowFor([seatRow({ background: "idle" })]);
+  check("an idle seat's ps row carries background idle", row?.background === "idle");
 }
 
-// A value other than "running" is never published, so a stray value cannot leak onto the row.
+// A seat without the publisher carries no background key, so its row omits background.
+{
+  const row = rowFor([seatRow(undefined)]);
+  check("a seat without the publisher omits background", row !== undefined && !("background" in row));
+}
+
+// A value other than running or idle is never published, so a stray value cannot leak onto the row.
 {
   const row = rowFor([seatRow({ background: "stopped" })]);
-  check("a background value other than running is not published", row !== undefined && !("background" in row));
+  check("a background value other than running or idle is not published", row !== undefined && !("background" in row));
 }
 
 // The sibling provider field publishes alongside background, unaffected by it.

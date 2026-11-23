@@ -3,6 +3,7 @@
  * the reads at session start, agent start, tool end and agent end, and the older-host guard. The
  * driver's collaborators are stubbed on the runtime cotalMesh registers, so each callback records only
  * what it hands the driver. The event path must re-read `ctx.getBackgroundWork()` and ignore its payload.
+ * A host with the publisher is read at session start, so a seat with no work publishes `idle` at startup.
  * Run: tsx smoke/background-wiring.smoke.ts
  */
 import assert from "node:assert/strict";
@@ -105,6 +106,13 @@ try {
   await emit("session_start", { reason: "startup" }, fakeContext(live));
   assert.deepEqual(calls, ["session_start", "background 0 2"], "session_start reads the live count");
   checks++;
+  // A publisher host with no work reads zero at startup, so the seat publishes idle before any event.
+  live.jobs = 0; live.agents = 0;
+  calls.length = 0;
+  await emit("session_start", { reason: "startup" }, fakeContext(live));
+  assert.deepEqual(calls, ["session_start", "background 0 0"], "a fresh seat with no work reads zero at session start");
+  checks++;
+  live.jobs = 0; live.agents = 2;
   calls.length = 0;
   await emit("agent_start", {}, fakeContext(live));
   assert.deepEqual(calls, ["agent_start", "background 0 2"], "agent_start reads the live count");

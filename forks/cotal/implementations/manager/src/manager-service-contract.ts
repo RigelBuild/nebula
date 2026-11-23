@@ -1268,9 +1268,13 @@ export const MANAGER_STATUS_CONTRACT: { input: CompiledContract; output: Compile
  *  53 = the `ps`/`inspect` row adds `background`, the seat's `meta.background` (`running` while it has
  *  background jobs or subagents). A changed output contract is a changed described surface even though
  *  the command names are unchanged.
+ *
+ *  54 = the `ps`/`inspect` row's `background` also takes `idle`, so a seat with the publisher and no
+ *  work reads `idle`. A changed output contract is a changed described surface even though the command
+ *  names are unchanged.
  */
 export function managerClusterDocument(): ClusterDocument {
-  return buildClusterDocument(MANAGER_CLUSTER_URN, 53, ROWS);
+  return buildClusterDocument(MANAGER_CLUSTER_URN, 54, ROWS);
 }
 
 /** Revision, count, and names from the shipped cluster document. Reached smokes derive surface pins from this. */

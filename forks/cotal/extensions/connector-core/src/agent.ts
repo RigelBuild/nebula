@@ -3332,7 +3332,8 @@ export class MeshAgent extends EventEmitter {
   }
 
   /** Report whether the session has running background work (a subagent or a background job) as the
-   *  advisory `meta.background` key on its presence card. Cleared when none is running. */
+   *  advisory `meta.background` key on its presence card: `"running"` while work runs, `"idle"` when
+   *  none does. The key is never removed while the publisher is live. */
   async setBackgroundWork(running: boolean): Promise<void> {
     await this.inOrder(() => this.ep.setCardBackground(running));
   }

@@ -9,6 +9,7 @@ import (
 	"time"
 )
 
+// summaryLines returns the end-of-sweep summary lines that start with prefix. Per-workspace lines are excluded, so a count checks the summary.
 func summaryLines(stdout, prefix string) []string {
 	var lines []string
 	for line := range strings.SplitSeq(stdout, "\n") {
@@ -19,6 +20,8 @@ func summaryLines(stdout, prefix string) []string {
 	return lines
 }
 
+// TestIdleOrphanReportedReclaimable checks an orphaned workspace idle past reclaimAge is reported reclaimable, not
+// skipped. The clock comes from a tree scan only, so no jj call runs. The summary counts it as reclaimable, not as a skip.
 func TestIdleOrphanReportedReclaimable(t *testing.T) {
 	root, dir, argsFile := orphanFixture(t, "orphan")
 	backdate(t, dir, time.Now().Add(-reclaimAge-time.Hour))
@@ -44,6 +47,7 @@ func TestIdleOrphanReportedReclaimable(t *testing.T) {
 	}
 }
 
+// TestRecentOrphanStillSkipped checks an orphan idle under reclaimAge keeps its orphaned-store skip.
 func TestRecentOrphanStillSkipped(t *testing.T) {
 	root, _, _ := orphanFixture(t, "orphan")
 	var stdout bytes.Buffer
@@ -58,6 +62,8 @@ func TestRecentOrphanStillSkipped(t *testing.T) {
 	}
 }
 
+// TestReclaimableNeverDeleted checks no delete path is reachable for a reclaimable workspace, even with apply on.
+// An idle orphan and an idle forgotten workspace both stay in place with no marker, and no delete line is printed.
 func TestReclaimableNeverDeleted(t *testing.T) {
 	f := newJJFixture(t)
 	forgot := f.secondary("forgot")

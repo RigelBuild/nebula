@@ -194,10 +194,10 @@ func TestCleanWorkspacesRealJJ(t *testing.T) {
 				mustWrite(t, filepath.Join(f.primary, ".git", "info", "exclude"), ".devenv/\n.moon/cache/\n/target/\n/dist/\napps/web/dist/\n")
 				mustWrite(t, filepath.Join(dir, ".devenv", "state"), "cache\n")
 				mustWrite(t, filepath.Join(dir, ".moon", "cache", "x"), "cache\n")
-				// Top-level build output is untracked and must not block deletion or defer the clock.
+				// Top-level build output is untracked; it must not change the workspace's clean verdict or reset its clock.
 				mustWrite(t, filepath.Join(dir, "target", "debug", "app"), "binary\n")
 				mustWrite(t, filepath.Join(dir, "dist", "bundle.js"), "built\n")
-				// A nested build tree is ignored and untracked, so it is regenerable at any depth (M3).
+				// A nested build tree is ignored and untracked, so it is regenerable at any depth.
 				mustWrite(t, filepath.Join(dir, "apps", "web", "dist", "bundle.js"), "built\n")
 				backdate(t, dir, ancient)
 				return dir

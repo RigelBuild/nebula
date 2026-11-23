@@ -9,7 +9,8 @@ import (
 	"time"
 )
 
-// Workspace deletion is disabled; report only.
+// TestCleanPushedIdleNeverDeletedUnderApply checks a clean, pushed, idle workspace survives an apply sweep. Deletion
+// of workspaces is frozen, so the sweep reports the workspace and keeps its directory.
 func TestCleanPushedIdleNeverDeletedUnderApply(t *testing.T) {
 	f := newJJFixture(t)
 	dir := f.secondary("frozen")
@@ -32,6 +33,8 @@ func TestCleanPushedIdleNeverDeletedUnderApply(t *testing.T) {
 	}
 }
 
+// TestFrozenMarkerDirNeverRemovedUnderApply checks a marked workspace left by an interrupted delete survives an apply
+// sweep. Deletion is frozen, so the sweep reports the interrupted delete and keeps the marker.
 func TestFrozenMarkerDirNeverRemovedUnderApply(t *testing.T) {
 	f := newJJFixture(t)
 	dir := f.secondary("marked")
@@ -55,6 +58,8 @@ func TestFrozenMarkerDirNeverRemovedUnderApply(t *testing.T) {
 	}
 }
 
+// TestFrozenTrashDirNeverRemovedUnderApply checks a leftover trash dir survives an apply sweep. Deletion is frozen, so
+// the sweep reports the leftover and keeps the trash directory.
 func TestFrozenTrashDirNeverRemovedUnderApply(t *testing.T) {
 	f := newJJFixture(t)
 	dir := f.secondary("trashed")

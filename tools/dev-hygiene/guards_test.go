@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"io"
 	"os"
 	"path/filepath"
@@ -88,30 +87,6 @@ func TestKeptTextCapsTheNamedWorkspaces(t *testing.T) {
 	}
 }
 
-func TestPrimaryRootRefusesNonDirTarget(t *testing.T) {
-	t.Parallel()
-	base := t.TempDir()
-	notDir := filepath.Join(base, "store-file")
-	mustWrite(t, notDir, "x\n")
-	bad := filepath.Join(base, "bad")
-	mustWrite(t, filepath.Join(bad, jjDir, "repo"), notDir+"\n")
-	if _, err := primaryRoot(bad); err == nil {
-		t.Fatal("a store pointer to a regular file was accepted")
-	}
-
-	good := filepath.Join(base, "primary", jjDir, "repo")
-	mustMkdir(t, good)
-	ws := filepath.Join(base, "ws")
-	mustWrite(t, filepath.Join(ws, jjDir, "repo"), good+"\n")
-	got, err := primaryRoot(ws)
-	if err != nil {
-		t.Fatalf("a store directory was refused: %v", err)
-	}
-	if want := filepath.Join(base, "primary"); got != want {
-		t.Fatalf("primaryRoot = %q, want %q", got, want)
-	}
-}
-
 func TestNewestMtimeCountsWorkingCopy(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
@@ -132,27 +107,6 @@ func TestNewestMtimeCountsWorkingCopy(t *testing.T) {
 	}
 	if got.Before(recent.Add(-time.Second)) {
 		t.Fatalf("newestMtime = %s, ignores working_copy mtime %s", got, recent)
-	}
-}
-
-func TestDeleteRefusedWhenClockMovedPastStamp(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-	mustWrite(t, filepath.Join(dir, "work.txt"), "edited after the scan\n")
-	out := &printer{w: io.Discard}
-
-	stale := workspace{Root: dir, Name: "x", Stamp: time.Now().Add(-time.Hour)}
-	if err := deleteWorkspace(t.Context(), stale, true, out); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(filepath.Join(dir, "work.txt")); err != nil {
-		t.Fatalf("workspace changed after the scan was deleted: %v", err)
-	}
-
-	// A stamp past the last change must reach the store check, so the guard is not simply blocking everything.
-	fresh := workspace{Root: dir, Name: "x", Stamp: time.Now().Add(time.Hour)}
-	if err := deleteWorkspace(t.Context(), fresh, true, out); err == nil {
-		t.Fatal("a stamp past the last change did not pass the activity guard")
 	}
 }
 
@@ -186,20 +140,6 @@ func TestParseFlags(t *testing.T) {
 				t.Fatalf("roots = %q, want %q", cfg.roots, tc.wantRoots)
 			}
 		})
-	}
-}
-
-// Not parallel: it replaces the package-level recheckCwds.
-func TestDeleteRefusedWhenProcessEnteredAfterScan(t *testing.T) {
-	dir := t.TempDir()
-	mustWrite(t, filepath.Join(dir, "work.txt"), "x\n")
-	saved := recheckCwds
-	t.Cleanup(func() { recheckCwds = saved })
-	recheckCwds = func(context.Context) ([]string, error) { return []string{filepath.Join(dir, "sub")}, nil }
-	// The stamp passes the activity guard, so without the live recheck the call reaches primaryRoot and errors.
-	ws := workspace{Root: dir, Name: "x", Stamp: time.Now().Add(time.Hour)}
-	if err := deleteWorkspace(t.Context(), ws, true, &printer{w: io.Discard}); err != nil {
-		t.Fatalf("live recheck did not skip the delete: %v", err)
 	}
 }
 

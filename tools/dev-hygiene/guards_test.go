@@ -123,6 +123,8 @@ func TestParseFlags(t *testing.T) {
 		{name: "default root", args: []string{"-to", testRecipient}, wantRoots: []string{filepath.Join(home, "agents", "workspaces")}},
 		{name: "roots repeat in order", args: []string{"-to", testRecipient, "-root", "/a", "-root", "/b"}, wantRoots: []string{"/a", "/b"}},
 		{name: "zero idle window refused", args: []string{"-to", testRecipient, "-idle", "0s"}, wantErr: true},
+		{name: "zero go cache cap refused", args: []string{"-to", testRecipient, "-go-cache-max-gib", "0"}, wantErr: true},
+		{name: "overflowing go cache cap refused", args: []string{"-to", testRecipient, "-go-cache-max-gib", "9000000000"}, wantErr: true},
 		{name: "stray argument refused", args: []string{"-to", testRecipient, "stray"}, wantErr: true},
 		{name: "missing recipient refused", args: nil, wantErr: true},
 		{name: "empty recipient refused", args: []string{"-to", ""}, wantErr: true},

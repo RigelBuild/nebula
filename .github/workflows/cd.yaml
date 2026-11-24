@@ -108,6 +108,10 @@ jobs:
             runner: macos-latest
             goos: darwin
             goarch: arm64
+          - system: windows-amd64
+            runner: ubuntu-latest
+            goos: windows
+            goarch: amd64
     permissions:
       contents: read
       id-token: write
@@ -148,18 +152,21 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/held"
           : > "$RUNNER_TEMP/held/${{ matrix.system }}"
-          # One eval per job: the devShell names for this system. Kept apart from jq
+          # One eval per job: the devShell names for this system. windows-amd64 has no
+          # devShell, so its tests run in the x86_64-linux shell. Kept apart from jq
           # so a failed eval exits under bash -e (the step has no pipefail).
-          shells_json=$(nix eval --json ".#devShells.${{ matrix.system }}" --apply builtins.attrNames)
+          shell_system="$SYSTEM"
+          if [ "$SYSTEM" = windows-amd64 ]; then shell_system=x86_64-linux; fi
+          shells_json=$(nix eval --json ".#devShells.$shell_system" --apply builtins.attrNames)
           shells=$(jq -r '.[]' <<<"$shells_json")
           for project in $PROJECTS; do
             id=$(basename "$project")
             # A project whose planned binaries all name other systems is not tested on this leg.
-            # A project with no planned binaries is not gated here, so it keeps its test.
+            # A project with no planned binaries keeps its test on every leg except windows-amd64, which only runs projects that name it.
             on_leg=$(jq -r --arg p "$project" --arg s "$SYSTEM" '
               [.binaries[] | select(.project == $p)] as $bins
-              | if ($bins | length) == 0 then "yes"
-                elif any($bins[]; ((.systems // []) | length == 0) or ((.systems // []) | index($s))) then "yes"
+              | if ($bins | length) == 0 then (if $s != "windows-amd64" then "yes" else "no" end)
+                elif any($bins[]; ((.systems // []) | index($s)) or (($s != "windows-amd64") and ((.systems // []) | length == 0))) then "yes"
                 else "no" end' "$RUNNER_TEMP/plan.json")
             if [ "$on_leg" = no ]; then echo "$project does not target $SYSTEM; not tested here"; continue; fi
             # A project with its own devShell (named after the project) enters it; others use default.
@@ -193,11 +200,14 @@ jobs:
         run: |
           GOOS= GOARCH= go -C tools/cd build -o "$RUNNER_TEMP/cd" .
           mkdir -p "$RUNNER_TEMP/assets"
+          # windows-amd64 binaries carry .exe; the asset tar name keeps the .exe too.
+          exe=""; tarExt=""
+          if [ "$SYSTEM" = windows-amd64 ]; then exe=".exe"; tarExt=".exe"; fi
           jq -c '.binaries[] as $b | select(.build | index($b.package)) | $b' "$RUNNER_TEMP/plan.json" |
           while read -r b; do
             pkg=$(jq -r .package <<<"$b")
             # Not built on this leg: the artifact names other systems. This is not a hold.
-            if [ "$(jq -r --arg s "$SYSTEM" 'if (.systems // []) | length == 0 then "yes" elif (.systems | index($s)) then "yes" else "no" end' <<<"$b")" = no ]; then continue; fi
+            if [ "$(jq -r --arg s "$SYSTEM" 'if (.systems | index($s)) then "yes" elif (($s != "windows-amd64") and ((.systems // []) | length == 0)) then "yes" else "no" end' <<<"$b")" = no ]; then continue; fi
             if grep -qx "$pkg" "$RUNNER_TEMP/held/$SYSTEM"; then continue; fi
             project=$(jq -r .project <<<"$b")
             version=$(jq -r .version <<<"$b")
@@ -208,21 +218,21 @@ jobs:
               # Nix-built: nix build .#<attr> in the project's flake. Its bin/ holds the binaries.
               nixOut=$(nix build --no-link --print-out-paths "./$project#$(jq -r .attr <<<"$b")")
               for name in $(jq -r '.binaries[]' <<<"$b"); do
-                install -m 0755 "$nixOut/bin/$name" "$stage/bin/$name"
+                install -m 0755 "$nixOut/bin/$name" "$stage/bin/$name$exe"
               done
             else
               main=$(jq -r .main <<<"$b")
               for name in $(jq -r '.binaries[]' <<<"$b"); do
-                go -C "$project" build -trimpath -o "$stage/bin/$name" "$main"
+                go -C "$project" build -trimpath -o "$stage/bin/$name$exe" "$main"
               done
             fi
             # Every kind: a consumer runs the asset without this build's /nix/store.
             for name in $(jq -r '.binaries[]' <<<"$b"); do
               runtime=()
               while read -r soname; do runtime+=(-runtime "$soname"); done < <(jq -r '.runtimeDeps[]?' <<<"$b")
-              "$RUNNER_TEMP/cd" check-asset -system "$SYSTEM" "${runtime[@]}" "$stage/bin/$name"
+              "$RUNNER_TEMP/cd" check-asset -system "$SYSTEM" "${runtime[@]}" "$stage/bin/$name$exe"
             done
-            tar -C "$stage" -cf - bin | zstd -19 -q -o "$RUNNER_TEMP/assets/$pkg-$version-$SYSTEM.tar.zst"
+            tar -C "$stage" -cf - bin | zstd -19 -q -o "$RUNNER_TEMP/assets/$pkg-$version-$SYSTEM$tarExt.tar.zst"
           done
       - name: Find built assets
         id: built
@@ -626,7 +636,7 @@ jobs:
           commit=$("$RUNNER_TEMP/cd" publish -plan "$RUNNER_TEMP/in/plan/plan.json" -tag "$tag" \
             -assets "$RUNNER_TEMP/assets" -previous-assets "$RUNNER_TEMP/previous" -held "$held" -image "$images" \
             -base-url "https://github.com/$REPOSITORY/releases/download/" \
-            -system x86_64-linux -system aarch64-linux -system aarch64-darwin)
+            -system x86_64-linux -system aarch64-linux -system aarch64-darwin -system windows-amd64)
           "$RUNNER_TEMP/cd" guard "$commit"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "commit=$commit" >> "$GITHUB_OUTPUT"

@@ -6,6 +6,7 @@ release: {
 			kind:     "binary"
 			package:  "local:windows-agent-sync"
 			binaries: ["windows-agent-sync"]
+			systems: ["windows-amd64"]
 		}
 	}
 }

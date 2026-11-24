@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"strings"
 	"testing"
 )
 
@@ -171,5 +172,21 @@ func TestFormulaClass(t *testing.T) {
 		if got := formulaClass(name); got != want {
 			t.Errorf("formulaClass(%q) = %q, want %q", name, got, want)
 		}
+	}
+}
+
+// TestFormulaSkipsWindowsSystem: a Windows asset is not a Homebrew system, so it
+// does not make a formula error, and the formula keeps its macOS block.
+func TestFormulaSkipsWindowsSystem(t *testing.T) {
+	p := Package{Version: "1.2.0", Systems: map[string]Asset{
+		"aarch64-darwin": {URL: testReleaseURL + "gamma-1.2.0-aarch64-darwin.tar.zst", SHA256: sumDarwinArm},
+		windowsAMD64:     {URL: testReleaseURL + "gamma-1.2.0-windows-amd64.exe.tar.zst", SHA256: sumLinuxIntel},
+	}}
+	body, err := renderFormula("gamma", p)
+	if err != nil {
+		t.Fatalf("renderFormula: %v", err)
+	}
+	if strings.Contains(string(body), "windows") {
+		t.Fatalf("formula names Windows:\n%s", body)
 	}
 }

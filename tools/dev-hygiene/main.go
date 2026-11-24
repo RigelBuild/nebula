@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"syscall"
 	"time"
 )
@@ -95,7 +96,11 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	}
 
 	var errs []error
-	errs = append(errs, pruneShm(ctx, cfg.shmRoot, cfg.shmAge, cfg.apply, out, defaultShmDeps()))
+	if runtime.GOOS == "linux" {
+		errs = append(errs, pruneShm(ctx, cfg.shmRoot, cfg.shmAge, cfg.apply, out, defaultShmDeps()))
+	} else {
+		out.printf("shm: skipped (no /dev/shm on %s)\n", runtime.GOOS)
+	}
 	if !cfg.shmOnly {
 		cacheDir, err := os.UserCacheDir()
 		if err != nil {

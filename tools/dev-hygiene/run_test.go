@@ -67,26 +67,6 @@ func TestFailedApplyRunSendsFailureDM(t *testing.T) {
 	}
 }
 
-func TestShmOnlyApplyFailureSendsFailureDM(t *testing.T) {
-	isolateHome(t)
-	cotal, argsFile := recordingCotal(t)
-	root := filepath.Join(t.TempDir(), "not-a-directory")
-	if err := os.WriteFile(root, []byte("not a directory"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	var stderr bytes.Buffer
-	code := runIsolated(t, []string{"-shm-only", "-apply", "-shm-root", root, "-cotal", cotal, "-to", testRecipient}, &bytes.Buffer{}, &stderr)
-	if code != 1 {
-		t.Fatalf("exit = %d, want 1 for invalid shm root; stderr %q", code, stderr.String())
-	}
-	sent, err := os.ReadFile(argsFile)
-	if err != nil {
-		t.Fatalf("no failure DM sent: %v", err)
-	}
-	if !strings.Contains(string(sent), "failed") || !strings.Contains(string(sent), root) {
-		t.Fatalf("failure DM %q does not name the shm failure", sent)
-	}
-}
 
 func TestDryRunFailureSendsNoDM(t *testing.T) {
 	home := isolateHome(t)

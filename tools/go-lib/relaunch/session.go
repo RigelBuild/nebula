@@ -122,10 +122,12 @@ func SessionAttributable(fileSystem FileSystem, file, title, cwd string) bool {
 		fileSystem = NodeFileSystem{}
 	}
 	header, ok := readHeader(fileSystem, file)
-	return ok && headerAttributable(header, title, cwd)
+	return ok && headerMatches(header, title, cwd)
 }
 
-func headerAttributable(header SessionHeader, title, cwd string) bool {
+// headerMatches reports whether a header is the seat's session: its title is the
+// seat name exactly, and its cwd is cwd exactly.
+func headerMatches(header SessionHeader, title, cwd string) bool {
 	return header.ID != "" && header.Title == title && header.CWD == cwd
 }
 
@@ -246,6 +248,8 @@ func SessionDirFor(cwd, home, root string) string {
 	return filepath.Join(root, strings.ReplaceAll(relative, string(filepath.Separator), "-"))
 }
 
+// NewestSession returns the newest session in dir whose header title is title and
+// whose header cwd is cwd, skipping burned session ids. Ties keep the first file.
 func NewestSession(dir, title, cwd string, burned map[string]struct{}, deps SessionDeps) (*SessionPick, error) {
 	fileSystem := deps.FileSystem
 	if fileSystem == nil {
@@ -276,7 +280,7 @@ func NewestSession(dir, title, cwd string, burned map[string]struct{}, deps Sess
 			continue
 		}
 		header, ok := headerValue(fileSystem, file, deps)
-		if !ok || !headerAttributable(header, title, cwd) {
+		if !ok || !headerMatches(header, title, cwd) {
 			continue
 		}
 		if _, isBurned := burned[header.ID]; isBurned {
@@ -287,6 +291,27 @@ func NewestSession(dir, title, cwd string, burned map[string]struct{}, deps Sess
 		}
 	}
 	return best, nil
+}
+
+// NewestSeatSession returns the session a seat at cwd resumes. A continued seat
+// session forks from a header that names the parent workspace root, so it is filed
+// under the parent cwd's session directory, which is scanned too. A parent-cwd
+// session is chosen only when a seat-cwd session exists and the parent session is
+// strictly newer; an mtime tie keeps the seat-cwd session.
+func NewestSeatSession(cwd, home, root, title string, burned map[string]struct{}, deps SessionDeps) (*SessionPick, error) {
+	exact, err := NewestSession(SessionDirFor(cwd, home, root), title, cwd, burned, deps)
+	if err != nil || exact == nil {
+		return exact, err
+	}
+	parentCWD := filepath.Dir(cwd)
+	parent, err := NewestSession(SessionDirFor(parentCWD, home, root), title, parentCWD, burned, deps)
+	if err != nil {
+		return nil, err
+	}
+	if parent != nil && parent.MtimeMS > exact.MtimeMS {
+		return parent, nil
+	}
+	return exact, nil
 }
 
 // Unreadable directories have no session candidate, matching the session scan contract.

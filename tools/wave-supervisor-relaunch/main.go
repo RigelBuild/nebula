@@ -466,8 +466,7 @@ func newestSupervisorSession(deps runDeps, burned []string) string {
 	for _, id := range burned {
 		blocked[id] = struct{}{}
 	}
-	dir := relaunch.SessionDirFor(deps.RootCWD, deps.Paths.Home, deps.Paths.Sessions)
-	pick, err := relaunch.NewestSession(dir, deps.root(), deps.RootCWD, blocked, relaunch.SessionDeps{FileSystem: deps.FS})
+	pick, err := relaunch.NewestSeatSession(deps.RootCWD, deps.Paths.Home, deps.Paths.Sessions, deps.root(), blocked, relaunch.SessionDeps{FileSystem: deps.FS})
 	if err != nil || pick == nil {
 		return ""
 	}

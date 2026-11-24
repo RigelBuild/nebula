@@ -206,6 +206,12 @@
                 meta.mainProgram = mainPrograms.${name} or name;
                 src = pkgs.fetchurl {
                   inherit (package.${system}) url sha256;
+                  # Archive metadata can contain store paths that are not runtime dependencies.
+                  # Discard references on the archive only; the unpacked output is scanned normally.
+                  derivationArgs = {
+                    __structuredAttrs = true;
+                    unsafeDiscardReferences.out = true;
+                  };
                 };
                 nativeBuildInputs = [ pkgs.zstd ];
                 sourceRoot = ".";

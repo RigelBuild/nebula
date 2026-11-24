@@ -1,7 +1,6 @@
 # yaml-language-server: $schema=https://moonrepo.dev/schemas/project.json
 #
-# Tasks run from this project's directory, which is the fork tree root.
-layer: 'application'
+layer: "tool"
 language: 'go'
 tags: ['go']
 tasks:

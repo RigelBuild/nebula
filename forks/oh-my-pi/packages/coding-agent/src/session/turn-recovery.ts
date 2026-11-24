@@ -1891,7 +1891,9 @@ export class TurnRecovery {
 	isClassifierRefusal(message: AssistantMessage): boolean {
 		if (message.stopReason !== "error") return false;
 		const stopType = message.stopDetails?.type;
-		return stopType === "refusal" || stopType === "sensitive";
+		if (stopType === "refusal" || stopType === "sensitive") return true;
+		// LiteLLM wraps refusals in 5xx errors without stop details.
+		return !message.stopDetails && message.errorMessage?.includes("Refusal (") === true;
 	}
 
 	#getRetryFallbackResolutionContext(): RetryFallbackResolutionContext {

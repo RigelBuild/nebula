@@ -827,7 +827,8 @@ impl MuxWriter {
 				let due = *next_check.get_or_insert(now + Duration::from_secs(timing.select));
 				if now >= due {
 					let role = self.state().role;
-					check_timeout(&sh.counters, Some(timing), role, None, 0, false)?;
+					check_timeout(&sh.counters, Some(timing), role, None, 0, false)
+						.map_err(|err| cancel_before_timeout(err, sh.cancel.as_deref()))?;
 					next_check = Some(now + Duration::from_secs(timing.select));
 				}
 			}
@@ -1145,6 +1146,11 @@ fn check_timeout(
 	let chk = counters.last_in.load(Ordering::Relaxed).max(last_out);
 	let idle = idle_secs(now, chk);
 	if idle >= timing.timeout { Err(timeout_error(role, idle)) } else { Ok(()) }
+}
+
+fn cancel_before_timeout(err: io::Error, cancel: Option<&AtomicBool>) -> io::Error {
+	// Cancellation may arrive while the timeout check is sending a keepalive.
+	if cancel.is_some_and(|flag| flag.load(Ordering::Relaxed)) { RsyncError::cancelled_io() } else { err }
 }
 
 /// Reader settings.
@@ -1944,7 +1950,8 @@ impl MuxReader {
 					// to the generator's pipe, and the generator sees socket
 					// activity through the shared counters.
 					let writer = if self.refill_hook.is_some() { None } else { self.writer.as_ref() };
-					check_timeout(&sh.counters, Some(timing), role, writer, 0, false)?;
+					check_timeout(&sh.counters, Some(timing), role, writer, 0, false)
+						.map_err(|err| cancel_before_timeout(err, Some(&sh.cancel)))?;
 					st = sh.lock();
 					next_check = Some(Instant::now() + select);
 					continue;
@@ -1995,6 +2002,25 @@ mod tests {
 
 		fn flush(&mut self) -> io::Result<()> {
 			Ok(())
+		}
+	}
+	/// A test writer that cancels the blocked read after the first keepalive.
+	struct CancelOnKeepalive {
+		sink: Sink,
+		cancel: Arc<AtomicBool>,
+	}
+
+	impl Write for CancelOnKeepalive {
+		fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+			let n = self.sink.write(buf)?;
+			if buf == [0, 0, 0, 7] {
+				self.cancel.store(true, Ordering::Relaxed);
+			}
+			Ok(n)
+		}
+
+		fn flush(&mut self) -> io::Result<()> {
+			self.sink.flush()
 		}
 	}
 
@@ -2607,6 +2633,20 @@ mod tests {
 	}
 
 	#[test]
+	fn timeout_check_sends_due_keepalive_before_timeout() {
+		let sink = Sink::default();
+		let w = writer(&sink, WriteConfig::default());
+		w.start_multiplex().unwrap();
+		let counters = IoCounters::default();
+		let now = clock_ms();
+		counters.last_in.store(now, Ordering::Relaxed);
+		w.shared.counters.last_out.store(now, Ordering::Relaxed);
+		let timing = Timing { timeout: u64::MAX, lull: 0, select: 1 };
+		check_timeout(&counters, Some(timing), Some(Role::Sender), Some(&w), 0, true).unwrap();
+		assert_eq!(sink.take(), [0, 0, 0, 7]);
+	}
+
+	#[test]
 	fn reader_follows_timeout_set_on_linked_writer() {
 		let (mut r, _tx, _) = blocking_reader(None);
 		let sink = Sink::default();
@@ -2868,34 +2908,39 @@ mod tests {
 		assert_eq!(*lock(&calls), [false]);
 	}
 
-	/// `--timeout=2`: keepalives go out every second (lull 1), so the idle check at
-	/// each second sees at most 1 s of silence. (At `--timeout=1` lull equals the
-	/// timeout and upstream itself times out on the second check, because a queued
-	/// keepalive stamps `last_io_out` only once it is written.)
+	#[test]
+	fn cancellation_takes_precedence_over_due_timeout() {
+		let cancel = AtomicBool::new(true);
+		let timing = Timing { timeout: 0, lull: 0, select: 1 };
+		let err = check_timeout(&IoCounters::default(), Some(timing), Some(Role::Sender), None, 0, false)
+			.map_err(|err| cancel_before_timeout(err, Some(&cancel)))
+			.unwrap_err();
+		assert_eq!(RsyncError::from_io(&err, RERR_STREAMIO).code, RERR_SIGNAL);
+		cancel.store(false, Ordering::Relaxed);
+		let err = check_timeout(&IoCounters::default(), Some(timing), Some(Role::Sender), None, 0, false)
+			.map_err(|err| cancel_before_timeout(err, Some(&cancel)))
+			.unwrap_err();
+		assert_eq!(RsyncError::from_io(&err, RERR_STREAMIO).code, RERR_TIMEOUT);
+	}
+
+	/// The mux's first emitted keepalive cancels the blocked read before its next
+	/// timeout check. With keepalive sending disabled, the read times out and fails.
 	#[test]
 	fn blocked_sender_sends_keepalives_instead_of_timing_out() {
 		let (mut r, _tx, cancel) = blocking_reader(Some(Duration::from_secs(2)));
 		let sink = Sink::default();
-		let w = writer(&sink, WriteConfig { timeout: Some(Duration::from_secs(2)), ..WriteConfig::default() });
+		let w = MuxWriter::new(
+			Box::new(CancelOnKeepalive { sink: sink.clone(), cancel }),
+			IoCounters::default(),
+			WriteConfig { timeout: Some(Duration::from_secs(2)), ..WriteConfig::default() },
+		);
 		w.start_multiplex().unwrap();
 		r.set_role(Role::Sender);
 		r.link_writer(w);
-		let flag = Arc::clone(&cancel);
-		let bytes = Arc::clone(&sink.bytes);
-		let t = thread::spawn(move || {
-			// Cancel once two keepalive frames (4 bytes each, empty payload) are
-			// written. The deadline only bounds a regression so the read cannot hang.
-			let deadline = Instant::now() + Duration::from_secs(5);
-			while lock(&bytes).len() < 8 && Instant::now() < deadline {
-				thread::sleep(Duration::from_millis(5));
-			}
-			flag.store(true, Ordering::Relaxed);
-		});
 		let err = r.read(&mut [0u8; 1]).unwrap_err();
-		t.join().unwrap();
 		assert_eq!(RsyncError::from_io(&err, RERR_STREAMIO).code, RERR_SIGNAL);
 		let out = sink.take();
-		assert!(out.len() >= 8 && out.chunks(4).all(|c| c == [0, 0, 0, 7]), "{out:?}");
+		assert!(out.len() >= HDR && out.chunks(HDR).all(|chunk| chunk == [0, 0, 0, 7]), "{out:?}");
 	}
 
 	#[test]

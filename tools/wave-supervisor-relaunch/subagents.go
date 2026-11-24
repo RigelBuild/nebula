@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/RigelBuild/nebula/tools/go-lib/relaunch"
 )
@@ -19,6 +20,8 @@ var errSubagentsGate = errors.New("seat has live subagents")
 
 // subagentTailBytes bounds the read of each subagent file: only its last record decides.
 const subagentTailBytes = 64 * 1024
+
+const subagentHeaderBytes = 8 * 1024
 
 // changesFile is omp's per-session change log. It sits in the stem directory but is not a subagent.
 const changesFile = "changes.jsonl"
@@ -45,12 +48,13 @@ func subagentFinished(data []byte) bool {
 	if record.Type == "custom" && record.CustomType == "session_exit" {
 		return true
 	}
-	return record.Type == "message" && record.Message.Role == "assistant" && record.Message.StopReason == "stop"
+	return record.Type == "message" && record.Message.Role == "assistant" &&
+		(record.Message.StopReason == "stop" || record.Message.StopReason == "aborted")
 }
 
 // liveSubagents counts unfinished session files. A missing stem is zero; an unreadable file,
 // unresolved session, or cancelled context is an error.
-func liveSubagents(ctx context.Context, fileSystem relaunch.FileSystem, seatFile string) (int, error) {
+func liveSubagents(ctx context.Context, fileSystem relaunch.FileSystem, seatFile string, processStart time.Time) (int, error) {
 	if seatFile == "" {
 		return 0, errors.New("seat session file not resolved")
 	}
@@ -67,7 +71,35 @@ func liveSubagents(ctx context.Context, fileSystem relaunch.FileSystem, seatFile
 		if err != nil {
 			return 0, err
 		}
-		if !subagentFinished(data) {
+		if subagentFinished(data) {
+			continue
+		}
+		stale := false
+		if !processStart.IsZero() {
+			var prefix []byte
+			if len(data) < subagentTailBytes {
+				prefix = data[:min(len(data), subagentHeaderBytes)]
+			} else if reader, ok := fileSystem.(relaunch.PrefixReader); ok {
+				prefix, err = reader.ReadPrefix(file, subagentHeaderBytes)
+				if err != nil {
+					return 0, err
+				}
+			}
+			for line := range bytes.SplitSeq(prefix, []byte("\n")) {
+				var header struct {
+					Type      string    `json:"type"`
+					Timestamp time.Time `json:"timestamp"`
+				}
+				if json.Unmarshal(line, &header) != nil {
+					break
+				}
+				if header.Type == "session" {
+					stale = !header.Timestamp.IsZero() && header.Timestamp.Before(processStart.Truncate(time.Second))
+					break
+				}
+			}
+		}
+		if !stale {
 			running++
 		}
 	}
@@ -255,7 +287,7 @@ func processLiveSubagents(ctx context.Context, procRoot string, fileSystem relau
 	if err != nil {
 		return 0, err
 	}
-	return liveSubagents(ctx, fileSystem, seatFile)
+	return liveSubagents(ctx, fileSystem, seatFile, processStartTime(base, fileSystem))
 }
 
 // topLevelSessionFile finds the seat's top-level session file under the session root by filename.

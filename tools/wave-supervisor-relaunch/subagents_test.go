@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/RigelBuild/nebula/tools/go-lib/cotalreach"
 )
@@ -21,7 +22,7 @@ func TestSubagentFinished(t *testing.T) {
 	}{
 		{name: "session exit", tail: finishedSessionRecord, want: true},
 		{name: "assistant stop", tail: `{"type":"message","message":{"role":"assistant","stopReason":"stop"}}` + "\n", want: true},
-		{name: "assistant aborted", tail: `{"type":"message","message":{"role":"assistant","stopReason":"aborted"}}` + "\n", want: false},
+		{name: "assistant aborted", tail: `{"type":"message","message":{"role":"assistant","stopReason":"aborted"}}` + "\n", want: true},
 		{name: "tool use", tail: `{"type":"message","message":{"role":"assistant","stopReason":"toolUse"}}` + "\n"},
 		{name: "unknown", tail: `{"type":"new"}` + "\n"},
 		{name: "partial", tail: "not json\n"},
@@ -34,13 +35,62 @@ func TestSubagentFinished(t *testing.T) {
 		})
 	}
 }
+func TestProcessLiveSubagentsSessionAge(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		header   string
+		procStat string
+		want     int
+	}{
+		{name: "header before process start", header: "1970-01-01T00:16:41Z", procStat: "btime 1000\n", want: 0},
+		{name: "header after process start", header: "1970-01-01T00:16:43Z", procStat: "btime 1000\n", want: 1},
+		{name: "same second remains live", header: "1970-01-01T00:16:42.4Z", procStat: "btime 1000\n", want: 1},
+		{name: "malformed timestamp remains live", header: "invalid", procStat: "btime 1000\n", want: 1},
+		{name: "unknown process start", header: "1970-01-01T00:16:41Z", want: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fileSystem := newMemoryFS()
+			data := `{"type":"title","title":"subagent"}` + "\n" + `{"type":"session","timestamp":"` + tc.header + `"}` + "\n" + `{"type":"tool_execution_start"}` + "\n"
+			waveProcFixture(fileSystem, "123", "seat", "id", data)
+			fileSystem.files["/proc/123/stat"] = []byte("123 (omp) S " + strings.Repeat("0 ", 18) + "250\n")
+			if tc.procStat != "" {
+				fileSystem.files["/proc/stat"] = []byte(tc.procStat)
+			}
+			got, err := processLiveSubagents(t.Context(), "/proc", fileSystem, "/sessions", "123")
+			if err != nil || got != tc.want {
+				t.Fatalf("processLiveSubagents = %d, %v; want %d", got, err, tc.want)
+			}
+		})
+	}
+}
+
+func TestProcessStartTime(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		stat string
+		want time.Time
+	}{
+		{name: "btime and fractional ticks", stat: "cpu 0 0\nbtime 1000\n", want: time.Unix(1002, 500000000)},
+		{name: "missing btime", stat: "cpu 0 0\n"},
+		{name: "invalid btime", stat: "btime invalid\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fileSystem := newMemoryFS()
+			fileSystem.files["/proc/123/stat"] = []byte("123 (omp) S " + strings.Repeat("0 ", 18) + "250\n")
+			fileSystem.files["/proc/stat"] = []byte(tc.stat)
+			if got := processStartTime("/proc/123", fileSystem); !got.Equal(tc.want) {
+				t.Fatalf("processStartTime = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
 
 func TestLiveSubagentsCountsRunningFiles(t *testing.T) {
 	const seatFile = "/sessions/seat.jsonl"
 	const child = "/sessions/seat/Child.jsonl"
 	fsys := newMemoryFS()
 	fsys.files[child] = []byte(`{"type":"model_usage"}` + "\n")
-	if got, err := liveSubagents(t.Context(), fsys, seatFile); err != nil || got != 1 {
+	if got, err := liveSubagents(t.Context(), fsys, seatFile, time.Time{}); err != nil || got != 1 {
 		t.Fatalf("liveSubagents = %d, %v; want one running child", got, err)
 	}
 }
@@ -55,7 +105,7 @@ func TestLiveSubagentsUnreadableFailsClosed(t *testing.T) {
 		}
 		return nil, nil, false
 	}
-	if _, err := liveSubagents(t.Context(), fsys, "/sessions/seat.jsonl"); !errors.Is(err, fs.ErrPermission) {
+	if _, err := liveSubagents(t.Context(), fsys, "/sessions/seat.jsonl", time.Time{}); !errors.Is(err, fs.ErrPermission) {
 		t.Fatalf("liveSubagents error = %v, want permission error", err)
 	}
 }
@@ -96,7 +146,7 @@ func TestSubagentFilesIgnoresNonSessionFiles(t *testing.T) {
 	if err != nil || !slices.Equal(files, want) {
 		t.Fatalf("subagentFiles = %v, %v; want %v", files, err, want)
 	}
-	if got, err := liveSubagents(t.Context(), fsys, seatFile); err != nil || got != 1 {
+	if got, err := liveSubagents(t.Context(), fsys, seatFile, time.Time{}); err != nil || got != 1 {
 		t.Fatalf("liveSubagents = %d, %v; want one live nested session", got, err)
 	}
 }
@@ -253,7 +303,7 @@ func TestLiveSubagentsForDeadSeatIsZero(t *testing.T) {
 }
 
 func TestLiveSubagentsMissingSessionFailsClosed(t *testing.T) {
-	if _, err := liveSubagents(t.Context(), newMemoryFS(), ""); err == nil {
+	if _, err := liveSubagents(t.Context(), newMemoryFS(), "", time.Time{}); err == nil {
 		t.Fatal("liveSubagents accepted an empty session path")
 	}
 }
@@ -263,7 +313,7 @@ func TestLiveSubagentsCancellationIsReturned(t *testing.T) {
 	cancel()
 	fsys := newMemoryFS()
 	fsys.files["/sessions/seat/Child.jsonl"] = []byte(`{"type":"model_usage"}` + "\n")
-	if _, err := liveSubagents(ctx, fsys, "/sessions/seat.jsonl"); !errors.Is(err, context.Canceled) {
+	if _, err := liveSubagents(ctx, fsys, "/sessions/seat.jsonl", time.Time{}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("liveSubagents error = %v, want cancellation", err)
 	}
 }

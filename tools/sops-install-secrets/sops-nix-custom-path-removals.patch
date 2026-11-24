@@ -1,0 +1,106 @@
+--- a/pkgs/sops-install-secrets/main.go
++++ b/pkgs/sops-install-secrets/main.go
+@@ -1125,6 +1125,22 @@
+ 			return nil
+ 		}
+ 
++		// A secret or template with a custom path under symlinkPath leaves a
++		// symlink there that is not named after it; it is not a removed item.
++		// Stored items are regular files, so only a symlink can be such a link.
++		if info.Mode()&os.ModeSymlink != 0 {
++			for _, secret := range secrets {
++				if secret.Path == path {
++					return nil
++				}
++			}
++			for _, template := range templates {
++				if template.Path == path {
++					return nil
++				}
++			}
++		}
++
+ 		// If the path we're looking at isn't in `symlinkRenderedPath`, then
+ 		// it's a secret.
+ 		rel, err := filepath.Rel(symlinkRenderedPath, path)
+--- a/pkgs/sops-install-secrets/main_test.go
++++ b/pkgs/sops-install-secrets/main_test.go
+@@ -5,6 +5,7 @@
+ import (
+ 	"encoding/json"
+ 	"fmt"
++	"io"
+ 	"os"
+ 	"os/exec"
+ 	"os/user"
+@@ -361,3 +362,70 @@
+ 		generateCase(strings.ToUpper(format), false)
+ 	}
+ }
++
++func captureStdout(t *testing.T, fn func() error) string {
++	t.Helper()
++	r, w, err := os.Pipe()
++	ok(t, err)
++	orig := os.Stdout
++	os.Stdout = w
++	runErr := fn()
++	os.Stdout = orig
++	ok(t, w.Close())
++	out, err := io.ReadAll(r)
++	ok(t, err)
++	ok(t, runErr)
++	return string(out)
++}
++
++// Secrets and templates with a custom path under the symlink root leave a
++// symlink in the old generation that is not named after them. They must not
++// be reported as removed; a secret that is really gone still must be.
++func TestHandleModificationsCustomPathUnderSymlinkRoot(t *testing.T) {
++	root := t.TempDir()
++	oldGen := filepath.Join(root, "secrets.d", "1")
++	newGen := filepath.Join(root, "secrets.d", "2")
++	symlinkPath := filepath.Join(root, "secrets")
++	ok(t, os.Symlink(oldGen, symlinkPath))
++
++	write := func(dir, rel string) {
++		ok(t, os.MkdirAll(filepath.Dir(filepath.Join(dir, rel)), 0o755))
++		ok(t, os.WriteFile(filepath.Join(dir, rel), []byte("v"), 0o400))
++	}
++	link := func(rel, target string) {
++		ok(t, os.MkdirAll(filepath.Dir(filepath.Join(oldGen, rel)), 0o755))
++		ok(t, os.Symlink(target, filepath.Join(oldGen, rel)))
++	}
++	for _, d := range []string{oldGen, newGen} {
++		write(d, "api-key")
++		write(d, "inside-rendered")
++		write(d, "new-home")
++		write(d, filepath.Join(RenderedSubdir, "tmpl"))
++	}
++	write(oldGen, "gone")
++	// A removed secret stored where a current secret's custom path now points.
++	write(oldGen, "moved")
++
++	// Secret outside rendered/, secret inside rendered/, template outside rendered/.
++	link(filepath.Join("wave", "api-key"), filepath.Join(symlinkPath, "api-key"))
++	link(filepath.Join(RenderedSubdir, "custom", "inside-rendered"), filepath.Join(symlinkPath, "inside-rendered"))
++	link("custom-template", filepath.Join(symlinkPath, RenderedSubdir, "tmpl"))
++	// Custom-path links whose secret and template are no longer configured.
++	link(filepath.Join("old", "stale-link"), filepath.Join(symlinkPath, "api-key"))
++	link(filepath.Join(RenderedSubdir, "stale-tmpl-link"), filepath.Join(symlinkPath, RenderedSubdir, "tmpl"))
++
++	secrets := []secret{
++		{Name: "api-key", Path: filepath.Join(symlinkPath, "wave", "api-key")},
++		{Name: "inside-rendered", Path: filepath.Join(symlinkPath, RenderedSubdir, "custom", "inside-rendered")},
++		{Name: "new-home", Path: filepath.Join(symlinkPath, "moved")},
++	}
++	templates := []template{{Name: "tmpl", Path: filepath.Join(symlinkPath, "custom-template")}}
++	out := captureStdout(t, func() error {
++		return handleModifications(true, loggingConfig{SecretChanges: true}, symlinkPath, newGen, secrets, templates)
++	})
++
++	want := "would remove secrets: gone, moved, old/stale-link\nwould remove rendered secret: stale-tmpl-link\n"
++	if out != want {
++		t.Fatalf("want %q, got %q", want, out)
++	}
++}

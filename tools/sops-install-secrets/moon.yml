@@ -1,0 +1,4 @@
+# yaml-language-server: $schema=https://moonrepo.dev/schemas/project.json
+#
+# CD builds the flake attr named in component.cue.
+layer: 'application'

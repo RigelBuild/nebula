@@ -20,6 +20,7 @@ import { daemonRuntimeDir } from "../launch/paths";
 import { resolveWorkerSpawnCmd, SMOKE_TEST_TIMEOUT_MS, workerEnvFromParent } from "../subprocess/worker-client";
 import type { ToolSession } from "../tools";
 import { DISASM_BACKENDS, type DisasmBackendId } from "./backend";
+import { startWithMemoryScopeFallback, type HostStartupResult } from "./memory-scope";
 import {
 	errorMessage,
 	daemonPrefix,
@@ -42,7 +43,7 @@ import {
 	type RetainedReference,
 } from "./protocol";
 import { installStatus, resolveWorkerRuntime } from "./runtime";
-import { cfgDisasmIdleCloseSec, cfgDisasmMaxOpen } from "./settings";
+import { cfgDisasmIdleCloseSec, cfgDisasmMaxOpen, cfgDisasmMemoryMax } from "./settings";
 import {
 	type FatSelection,
 	type DatabaseLocation,
@@ -369,50 +370,82 @@ async function makeRoom(session: ToolSession, broker: DaemonBrokerClient, name: 
 }
 
 /** Ask the broker to start the host for `loc`; throws when it dies before listening. */
-async function startHost(
+export async function startHost(
 	session: ToolSession,
 	broker: DaemonBrokerClient,
 	backend: DisasmBackendId,
 	loc: DatabaseLocation,
 	name: string,
+	options?: {
+		resolveRuntime?: typeof resolveWorkerRuntime;
+		probe?: (systemdRun: string, memoryMax: string) => Promise<boolean>;
+		platform?: string;
+		systemdRun?: string;
+	},
 ): Promise<void> {
 	const config: HostConfig = {
 		backend,
 		projectDir: broker.projectDir,
 		endpoint: hostEndpoint(broker, name),
 		loc,
-		runtime: await resolveWorkerRuntime(session, backend),
+		runtime: await (options?.resolveRuntime ?? resolveWorkerRuntime)(session, backend),
 		idleCloseMs: cfgDisasmIdleCloseSec.get(session.settings) * 1000,
 	};
 	const spawn = resolveWorkerSpawnCmd(DISASM_HOST_WORKER_ARG);
-	let started: DaemonSnapshot;
-	try {
-		const result = await broker.request({
-			op: "start",
-			spec: {
-				name,
-				application: spawn.cmd[0]!,
-				// The trailing ref is ignored by the host; it labels the `omp ps` COMMAND column.
-				args: [...spawn.cmd.slice(1), databaseRef(loc)],
-				env: { [DISASM_HOST_CONFIG_ENV]: JSON.stringify(config) },
-				cwd: spawn.cwd ?? broker.projectDir,
-				pty: false,
-				ready: { log: hostReadyPattern(backend), timeoutMs: READY_TIMEOUT_MS },
-				restart: "no",
-				persist: false,
-				detached: false,
-			},
-		});
-		if (result.op !== "start") return;
-		started = result.daemon;
-	} catch (error) {
-		// Lost a cross-process start race; the next round attaches to the winner.
-		logger.debug(`${hostLabel(name)} start contention`, { name, error: errorMessage(error) });
-		return;
-	}
-	if (TERMINAL_STATES[started.state]) {
-		const reason = started.exitReason ?? `code ${started.exitCode}`;
-		throw new ToolError(`${hostLabel(name)} ${name} exited during startup (${reason}); see \`omp ps logs ${name}\``);
+	const memoryMax = cfgDisasmMemoryMax.get(session.settings);
+	const platform = options?.platform ?? process.platform;
+	const systemdRun =
+		options?.systemdRun ?? (platform === "linux" && memoryMax ? (Bun.which("systemd-run") ?? undefined) : undefined);
+	const started = await startWithMemoryScopeFallback(
+		spawn.cmd,
+		memoryMax,
+		systemdRun,
+		platform,
+		async (command): Promise<HostStartupResult<DaemonSnapshot>> => {
+			try {
+				const result = await broker.request({
+					op: "start",
+					spec: {
+						name,
+						application: command[0]!,
+						// The trailing ref is ignored by the host; it labels the `omp ps` COMMAND column.
+						args: [...command.slice(1), databaseRef(loc)],
+						env: { [DISASM_HOST_CONFIG_ENV]: JSON.stringify(config) },
+						cwd: spawn.cwd ?? broker.projectDir,
+						pty: false,
+						ready: { log: hostReadyPattern(backend), timeoutMs: READY_TIMEOUT_MS },
+						restart: "no",
+						persist: false,
+						detached: false,
+					},
+				});
+				if (result.op !== "start") return { state: "contention" };
+				const daemon = result.daemon;
+				if (TERMINAL_STATES[daemon.state]) {
+					return {
+						state: "exited",
+						reason: daemon.exitReason ?? `code ${daemon.exitCode}`,
+						readyAt: daemon.readyAt,
+					};
+				}
+				return { state: "started", value: daemon };
+			} catch (error) {
+				// Lost a cross-process start race; the next round attaches to the winner.
+				logger.debug(`${hostLabel(name)} start contention`, { name, error: errorMessage(error) });
+				return { state: "contention" };
+			}
+		},
+		reason => {
+			if (reason === "startup-failure") logger.warn(`${hostLabel(name)} memory scope skipped`, { name, reason });
+			else logger.debug(`${hostLabel(name)} memory scope skipped`, { name, reason });
+		},
+		options?.probe,
+	);
+	if (started.state === "contention") return;
+	if (started.state === "exited") {
+		throw new ToolError(
+			`${hostLabel(name)} ${name} exited during startup (${started.reason}); see \`omp ps logs ${name}\``,
+		);
 	}
 }
 

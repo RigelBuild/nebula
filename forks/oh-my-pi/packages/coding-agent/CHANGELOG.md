@@ -11,6 +11,8 @@
 
 - The Claude auth gateway redeems a Fable launch reset when a Fable-model request hits an exhausted Fable weekly window. A full-week reset is never spent for a Fable block, and a selected grant that is not a Fable grant is skipped.
 
+- Disassembler hosts on Linux now run in a memory-limited systemd scope inherited from the caller's slice; `disassembler.memoryMax` sets each host's limit (default `6G`, empty disables it). If the host exits before readiness and a scope probe fails, that process retries once without the scope and disables it for later hosts.
+
 ### Fixed
 - The auth gateway retries its first broker snapshot for up to 30s on connection refused or reset, so a gateway that starts with its broker no longer exits while the broker binds. `omp auth-gateway status` and `check` can now wait that long when the broker is down before they report it.
 - Disconnecting a disassembler database now reports it as not connected at once, so a closed reference fails with the reopen hint instead of a host-exited error.

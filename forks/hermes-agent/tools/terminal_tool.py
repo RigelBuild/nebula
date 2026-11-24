@@ -287,6 +287,8 @@ def clear_session_cwd(session_key: str) -> None:
     """Drop a session's cwd record (session teardown)."""
     with _session_cwd_lock:
         _session_cwd.pop(_qualify_task_key(session_key), None)
+    from agent.redact import clear_pod_copies
+    clear_pod_copies(_qualify_task_key(str(session_key or "default")))
 
 
 def _sanitize_cwd_for_live_env(env: Any, new_cwd: str) -> Optional[str]:

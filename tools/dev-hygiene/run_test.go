@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -32,7 +33,7 @@ func recordingCotal(t *testing.T) (bin, argsFile string) {
 	return filepath.Join(dir, "cotal"), argsFile
 }
 
-// isolateHome points HOME and the cache and state dirs at a temp dir, so run never prunes the host's real caches.
+// isolateHome points HOME and the cache and state dirs at temp dirs.
 func isolateHome(t *testing.T) string {
 	t.Helper()
 	home := t.TempDir()
@@ -42,12 +43,18 @@ func isolateHome(t *testing.T) string {
 	return home
 }
 
+func runIsolated(t *testing.T, args []string, stdout, stderr io.Writer) int {
+	t.Helper()
+	args = append([]string{"-shm-root", t.TempDir()}, args...)
+	return run(t.Context(), args, stdout, stderr)
+}
+
 func TestFailedApplyRunSendsFailureDM(t *testing.T) {
 	home := isolateHome(t)
 	cotal, argsFile := recordingCotal(t)
 	missing := filepath.Join(home, "no-such-root")
 	var stderr bytes.Buffer
-	code := run(t.Context(), []string{"-apply", "-root", missing, "-cotal", cotal, "-to", testRecipient}, &bytes.Buffer{}, &stderr)
+	code := runIsolated(t, []string{"-apply", "-root", missing, "-cotal", cotal, "-to", testRecipient}, &bytes.Buffer{}, &stderr)
 	if code != 1 {
 		t.Fatalf("exit = %d, want 1 for a missing explicit root; stderr %q", code, stderr.String())
 	}
@@ -60,10 +67,31 @@ func TestFailedApplyRunSendsFailureDM(t *testing.T) {
 	}
 }
 
+func TestShmOnlyApplyFailureSendsFailureDM(t *testing.T) {
+	isolateHome(t)
+	cotal, argsFile := recordingCotal(t)
+	root := filepath.Join(t.TempDir(), "not-a-directory")
+	if err := os.WriteFile(root, []byte("not a directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var stderr bytes.Buffer
+	code := runIsolated(t, []string{"-shm-only", "-apply", "-shm-root", root, "-cotal", cotal, "-to", testRecipient}, &bytes.Buffer{}, &stderr)
+	if code != 1 {
+		t.Fatalf("exit = %d, want 1 for invalid shm root; stderr %q", code, stderr.String())
+	}
+	sent, err := os.ReadFile(argsFile)
+	if err != nil {
+		t.Fatalf("no failure DM sent: %v", err)
+	}
+	if !strings.Contains(string(sent), "failed") || !strings.Contains(string(sent), root) {
+		t.Fatalf("failure DM %q does not name the shm failure", sent)
+	}
+}
+
 func TestDryRunFailureSendsNoDM(t *testing.T) {
 	home := isolateHome(t)
 	cotal, argsFile := recordingCotal(t)
-	code := run(t.Context(), []string{"-root", filepath.Join(home, "no-such-root"), "-cotal", cotal, "-to", testRecipient}, &bytes.Buffer{}, &bytes.Buffer{})
+	code := runIsolated(t, []string{"-root", filepath.Join(home, "no-such-root"), "-cotal", cotal, "-to", testRecipient}, &bytes.Buffer{}, &bytes.Buffer{})
 	if code != 1 {
 		t.Fatalf("exit = %d, want 1", code)
 	}
@@ -76,7 +104,7 @@ func TestMissingDefaultRootIsSkipped(t *testing.T) {
 	isolateHome(t)
 	cotal, argsFile := recordingCotal(t)
 	var stdout, stderr bytes.Buffer
-	if code := run(t.Context(), []string{"-apply", "-cotal", cotal, "-to", testRecipient}, &stdout, &stderr); code != 0 {
+	if code := runIsolated(t, []string{"-apply", "-cotal", cotal, "-to", testRecipient}, &stdout, &stderr); code != 0 {
 		t.Fatalf("exit = %d, want 0 with no default root; stderr %q", code, stderr.String())
 	}
 	if !strings.Contains(stdout.String(), "missing, skipped") {
@@ -203,7 +231,7 @@ func TestSnapshotErrorSkipsWorkspace(t *testing.T) {
 	root, dir, _ := idleFakeWorkspace(t, "echo 'Error: The working copy is stale' >&2; exit 1")
 	cotal, _ := recordingCotal(t)
 	var stdout, stderr bytes.Buffer
-	if code := run(t.Context(), []string{"-apply", "-root", root, "-cotal", cotal, "-to", testRecipient}, &stdout, &stderr); code != 0 {
+	if code := runIsolated(t, []string{"-apply", "-root", root, "-cotal", cotal, "-to", testRecipient}, &stdout, &stderr); code != 0 {
 		t.Fatalf("exit = %d, want 0 with a stale workspace; stdout %q stderr %q", code, stdout.String(), stderr.String())
 	}
 	if !strings.Contains(stdout.String(), dir+": skipped: check working copy") {
@@ -223,7 +251,7 @@ func TestSkippedWorkspaceReportedOnce(t *testing.T) {
 	root, dir, _ := idleFakeWorkspace(t, "echo 'Error: The working copy is stale' >&2; exit 1")
 	cotal, argsFile := recordingCotal(t)
 	var stdout, stderr bytes.Buffer
-	if code := run(t.Context(), []string{"-apply", "-root", root, "-cotal", cotal, "-to", testRecipient}, &stdout, &stderr); code != 0 {
+	if code := runIsolated(t, []string{"-apply", "-root", root, "-cotal", cotal, "-to", testRecipient}, &stdout, &stderr); code != 0 {
 		t.Fatalf("exit = %d, want 0; stdout %q stderr %q", code, stdout.String(), stderr.String())
 	}
 	sent, err := os.ReadFile(argsFile)
@@ -239,7 +267,7 @@ func TestSkippedWorkspaceReportedOnce(t *testing.T) {
 	if err := os.Remove(argsFile); err != nil {
 		t.Fatal(err)
 	}
-	if code := run(t.Context(), []string{"-apply", "-root", root, "-cotal", cotal, "-to", testRecipient}, &stdout, &stderr); code != 0 {
+	if code := runIsolated(t, []string{"-apply", "-root", root, "-cotal", cotal, "-to", testRecipient}, &stdout, &stderr); code != 0 {
 		t.Fatalf("second run exit = %d; stderr %q", code, stderr.String())
 	}
 	if _, err := os.Stat(argsFile); !errors.Is(err, os.ErrNotExist) {
@@ -253,7 +281,7 @@ func TestSkipReasonIsOneLine(t *testing.T) {
 	root, dir, _ := idleFakeWorkspace(t, "printf 'Error: The working copy is stale\\nHint: Run jj workspace update-stale\\n' >&2; exit 1")
 	cotal, _ := recordingCotal(t)
 	var stdout, stderr bytes.Buffer
-	if code := run(t.Context(), []string{"-apply", "-root", root, "-cotal", cotal, "-to", testRecipient}, &stdout, &stderr); code != 0 {
+	if code := runIsolated(t, []string{"-apply", "-root", root, "-cotal", cotal, "-to", testRecipient}, &stdout, &stderr); code != 0 {
 		t.Fatalf("exit = %d; stdout %q stderr %q", code, stdout.String(), stderr.String())
 	}
 	list, err := os.ReadFile(filepath.Join(home, "state", "dev-hygiene", "kept.txt"))
@@ -277,7 +305,7 @@ func TestReadOnlyQueriesIgnoreWorkingCopy(t *testing.T) {
 	isolateHome(t)
 	root, _, argsFile := idleFakeWorkspace(t, ":")
 	var stdout, stderr bytes.Buffer
-	if code := run(t.Context(), []string{"-root", root, "-cotal", "false", "-to", testRecipient}, &stdout, &stderr); code != 0 {
+	if code := runIsolated(t, []string{"-root", root, "-cotal", "false", "-to", testRecipient}, &stdout, &stderr); code != 0 {
 		t.Fatalf("exit = %d; stdout %q stderr %q", code, stdout.String(), stderr.String())
 	}
 	raw, err := os.ReadFile(argsFile)
@@ -338,7 +366,7 @@ esac
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	cotal, argsFile := recordingCotal(t)
 	var stdout, stderr bytes.Buffer
-	if code := run(t.Context(), []string{"-apply", "-root", root, "-cotal", cotal, "-to", testRecipient}, &stdout, &stderr); code != 0 {
+	if code := runIsolated(t, []string{"-apply", "-root", root, "-cotal", cotal, "-to", testRecipient}, &stdout, &stderr); code != 0 {
 		t.Fatalf("exit = %d, want 0 with a vanished workspace dir; stdout %q stderr %q", code, stdout.String(), stderr.String())
 	}
 	if _, err := os.Stat(dirA); err != nil {

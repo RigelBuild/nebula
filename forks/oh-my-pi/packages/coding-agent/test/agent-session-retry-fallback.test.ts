@@ -4309,6 +4309,115 @@ describe("AgentSession retry fallback", () => {
 			expect(getLastAssistantMessage(session).stopReason).toBe("stop");
 		},
 	);
+	it("still retries a plain 500 response on the same model", async () => {
+		const primaryModel = getBundledModel("anthropic", "claude-sonnet-4-5");
+		if (!primaryModel) throw new Error("Expected bundled Anthropic test model");
+
+		const requestedModels: string[] = [];
+		const agent = createFallbackAgent(primaryModel, requestedModels, { firstError: "500 Internal Server Error" });
+		const settings = Settings.isolated({
+			"compaction.enabled": false,
+			"retry.baseDelayMs": 1,
+			"retry.maxRetries": 1,
+		});
+		session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			settings,
+			modelRegistry,
+		});
+
+		await session.prompt("Retry a plain server error");
+		await session.waitForIdle();
+
+		expect(requestedModels).toEqual([
+			`${primaryModel.provider}/${primaryModel.id}`,
+			`${primaryModel.provider}/${primaryModel.id}`,
+		]);
+		expect(getLastAssistantMessage(session).stopReason).toBe("stop");
+	});
+	it("walks the fallback chain without retrying a 5xx refusal on the same model", async () => {
+		const primaryModel = getBundledModel("anthropic", "claude-sonnet-4-5");
+		const fallbackModel = getBundledModel("openai", "gpt-4o-mini");
+		if (!primaryModel || !fallbackModel) throw new Error("Expected bundled refusal fallback models");
+
+		const requestedModels: string[] = [];
+		const mock = createMockModel();
+		const agent = new Agent({
+			getApiKey: model => `${model.provider}-test-key`,
+			initialState: { model: primaryModel, systemPrompt: ["Test"], tools: [], messages: [] },
+			streamFn: (model, context, options) => {
+				requestedModels.push(`${model.provider}/${model.id}`);
+				mock.push(
+					model.id === primaryModel.id
+						? {
+								throw: "500 litellm.APIConnectionError: APIConnectionError: OpenAIException - Refusal (reasoning_extraction): This request was blocked",
+							}
+						: { content: ["Recovered on fallback"] },
+				);
+				return mock.stream(model, context, options);
+			},
+		});
+		const settings = Settings.isolated({
+			"compaction.enabled": false,
+			"retry.baseDelayMs": 1,
+			"retry.maxRetries": 3,
+			"retry.fallbackChains": { default: [`${fallbackModel.provider}/${fallbackModel.id}`] },
+		});
+		settings.setModelRole("default", `${primaryModel.provider}/${primaryModel.id}`);
+		session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			settings,
+			modelRegistry,
+		});
+
+		await session.prompt("Recover from a refusal reported as a server error");
+		await session.waitForIdle();
+
+		expect(requestedModels).toEqual([
+			`${primaryModel.provider}/${primaryModel.id}`,
+			`${fallbackModel.provider}/${fallbackModel.id}`,
+		]);
+		expect(session.model?.id).toBe(fallbackModel.id);
+	});
+	it("surfaces a 5xx refusal after one request when no fallback chain exists", async () => {
+		const model = getBundledModel("anthropic", "claude-haiku-4-5");
+		if (!model) throw new Error("Expected bundled Anthropic Haiku test model");
+
+		const requestedModels: string[] = [];
+		const errorMessage =
+			"500 litellm.APIConnectionError: APIConnectionError: OpenAIException - Refusal (reasoning_extraction): This request was blocked";
+		const agent = new Agent({
+			getApiKey: currentModel => `${currentModel.provider}-test-key`,
+			initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] },
+			streamFn: (currentModel, context, options) => {
+				requestedModels.push(`${currentModel.provider}/${currentModel.id}`);
+				return finalizedErrorStream(currentModel, {
+					id: 500,
+					status: 500,
+					stopReason: "error",
+					message: errorMessage,
+				});
+			},
+		});
+		const settings = Settings.isolated({
+			"compaction.enabled": false,
+			"retry.baseDelayMs": 1,
+			"retry.maxRetries": 10,
+		});
+		session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			settings,
+			modelRegistry,
+		});
+
+		await session.prompt("Surface a classifier refusal reported as HTTP 500");
+		await session.waitForIdle();
+
+		expect(requestedModels).toEqual([`${model.provider}/${model.id}`]);
+	});
 
 	it("keeps signed thinking in a preserved transport-error turn on its source Anthropic model", async () => {
 		const primaryModel = getBundledModel("anthropic", "claude-sonnet-4-5");

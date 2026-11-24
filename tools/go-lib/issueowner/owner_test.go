@@ -38,7 +38,7 @@ func TestReadOwnerFromBody(t *testing.T) {
 		ok   bool
 	}{
 		{name: "canonical at start", body: "Owner: ci-build (service owner)\n\nBody.", want: "ci-build", ok: true},
-		{name: "mid sentence legacy", body: "Follow-up to SEA-1128 (PR #450). Owner: ci-build.", want: "ci-build", ok: true},
+		{name: "mid sentence example", body: "Follow-up to EX-1128 (PR #450). Owner: ci-build.", want: "ci-build", ok: true},
 		{name: "canonical beyond legacy window", body: strings.Repeat("Design + recommendation only. ", 54) + "\n\nOwner: nix-infra lane.", want: "nix-infra", ok: true},
 		{name: "slash suffix", body: "Owner: agents/service-owner\n\nBody.", want: "agents", ok: true},
 		{name: "slash form", body: "Owner: skills/service-owner", want: "skills", ok: true},

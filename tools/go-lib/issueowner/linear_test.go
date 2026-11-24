@@ -10,9 +10,9 @@ import (
 
 func testFields(overrides LinearIssueFields) LinearIssueFields {
 	fields := LinearIssueFields{
-		Identifier:  "SEA-1317",
+		Identifier:  "EX-1317",
 		Title:       "Issue title",
-		URL:         "https://linear.app/example/issue/SEA-1317/example",
+		URL:         "https://linear.app/example/issue/EX-1317/example",
 		Description: new("Owner: ci-build\n\nBody."),
 		StateName:   "Backlog",
 		StateType:   "backlog",
@@ -146,7 +146,7 @@ func TestToIssueRecord(t *testing.T) {
 		{name: "triage mapped to neutral state", fields: testFields(LinearIssueFields{StateName: "Triage", StateType: "triage"}), state: StateBacklog, status: BoardBacklog},
 		{name: "review retains coarse and fine state", fields: testFields(LinearIssueFields{StateName: "In Review", StateType: "started"}), state: StateStarted, status: BoardInReview},
 		{name: "completed timestamp", fields: testFields(LinearIssueFields{StateName: "Done", StateType: "completed", CompletedAt: new("2026-08-20T10:00:00.000Z")}), state: StateCompleted, status: BoardDone, completedAt: new("2026-08-20T10:00:00.000Z")},
-		{name: "parent", fields: testFields(LinearIssueFields{ParentIdentifier: "SEA-1300"}), state: StateBacklog, status: BoardBacklog, parent: "SEA-1300"},
+		{name: "parent", fields: testFields(LinearIssueFields{ParentIdentifier: "EX-1300"}), state: StateBacklog, status: BoardBacklog, parent: "EX-1300"},
 		{name: "empty completion timestamp omitted", fields: testFields(LinearIssueFields{StateName: "Done", StateType: "completed", CompletedAt: new("")}), state: StateCompleted, status: BoardDone},
 	}
 	for _, test := range tests {
@@ -195,10 +195,20 @@ func TestLinearBackendReadAndWarning(t *testing.T) {
 			}
 		})
 	}
-	for _, ref := range []string{"SEA-42", "sea-42", "RIG-42", "rig-42"} {
-		if got := backend.CanonicalRef(ref); got != "RIG-42" {
-			t.Errorf("CanonicalRef(%q) = %q", ref, got)
+	for _, ref := range []string{"RIG-42", "rig-42", "EX-42", "ex-42"} {
+		if got := backend.CanonicalRef(ref); got != strings.ToUpper(ref) {
+			t.Errorf("CanonicalRef(%q) = %q, want %q", ref, got, strings.ToUpper(ref))
 		}
+	}
+	legacyRef := "S" + "EA-42"
+	if got := backend.CanonicalRef(legacyRef); got != legacyRef {
+		t.Fatalf("CanonicalRef rewrote an unsupported reference: %q", got)
+	}
+	if backend.IssueRefPattern().MatchString("branch " + legacyRef) {
+		t.Fatal("IssueRefPattern matched an unsupported reference")
+	}
+	if backend.IssueRefPattern().MatchString("branch EX-42") {
+		t.Fatal("IssueRefPattern matched a non-RIG reference")
 	}
 	if got := backend.IssueRefPattern().FindString("branch rig-1182"); got != "rig-1182" {
 		t.Fatalf("IssueRefPattern did not match lowercase ref: %q", got)
@@ -218,12 +228,12 @@ func TestLinearBackendReadAndWarning(t *testing.T) {
 func TestLinearBackendMutations(t *testing.T) {
 	api := &fakeLinearAPI{}
 	var backend Backend = NewLinearBackend(api)
-	record := ToIssueRecord(testFields(LinearIssueFields{Description: new("Body."), Identifier: "SEA-1"}))
+	record := ToIssueRecord(testFields(LinearIssueFields{Description: new("Body."), Identifier: "EX-1"}))
 	mutation := backend.WriteOwner(record, "nix-infra")
 	if err := backend.Apply(t.Context(), mutation); err != nil {
 		t.Fatal(err)
 	}
-	want := [][2]string{{"SEA-1", "Owner: nix-infra\n\nBody."}}
+	want := [][2]string{{"EX-1", "Owner: nix-infra\n\nBody."}}
 	if !reflect.DeepEqual(api.writes, want) {
 		t.Fatalf("writes = %#v, want %#v", api.writes, want)
 	}
@@ -239,15 +249,15 @@ func TestLinearBackendMutations(t *testing.T) {
 		t.Fatalf("no-op caused API calls: %#v", api.writes)
 	}
 	held := []Mutation{
-		backend.WriteOwner(ToIssueRecord(testFields(LinearIssueFields{Identifier: "SEA-2", Description: new("A.")})), "ci-build"),
-		backend.WriteOwner(ToIssueRecord(testFields(LinearIssueFields{Identifier: "SEA-3", Description: new("B.")})), "nix-infra"),
+		backend.WriteOwner(ToIssueRecord(testFields(LinearIssueFields{Identifier: "EX-2", Description: new("A.")})), "ci-build"),
+		backend.WriteOwner(ToIssueRecord(testFields(LinearIssueFields{Identifier: "EX-3", Description: new("B.")})), "nix-infra"),
 	}
 	for _, item := range held {
 		if err := backend.Apply(t.Context(), item); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if len(api.writes) != 2 || api.writes[0][0] != "SEA-2" || api.writes[1][0] != "SEA-3" {
+	if len(api.writes) != 2 || api.writes[0][0] != "EX-2" || api.writes[1][0] != "EX-3" {
 		t.Fatalf("held mutations = %#v", api.writes)
 	}
 	foreign := backend.WriteOwner(IssueRecord{Identifier: "X-1"}, "ci-build")
@@ -264,14 +274,14 @@ func TestLinearBackendRereadAndScan(t *testing.T) {
 	api := &fakeLinearAPI{
 		issue: testFields(LinearIssueFields{Description: new("Owner: nix-infra\n\nFresh.")}),
 		pages: map[string]LinearPage{
-			"":   {Issues: []LinearIssueFields{testFields(LinearIssueFields{Identifier: "SEA-1"}), testFields(LinearIssueFields{Identifier: "SEA-2"})}, EndCursor: "c1"},
-			"c1": {Issues: []LinearIssueFields{testFields(LinearIssueFields{Identifier: "SEA-3", StateType: "completed", StateName: "Done"})}, EndCursor: "c2"},
-			"c2": {Issues: []LinearIssueFields{testFields(LinearIssueFields{Identifier: "SEA-4", StateType: "canceled", StateName: "Canceled"})}},
+			"":   {Issues: []LinearIssueFields{testFields(LinearIssueFields{Identifier: "EX-1"}), testFields(LinearIssueFields{Identifier: "EX-2"})}, EndCursor: "c1"},
+			"c1": {Issues: []LinearIssueFields{testFields(LinearIssueFields{Identifier: "EX-3", StateType: "completed", StateName: "Done"})}, EndCursor: "c2"},
+			"c2": {Issues: []LinearIssueFields{testFields(LinearIssueFields{Identifier: "EX-4", StateType: "canceled", StateName: "Canceled"})}},
 		},
 	}
 	var backend Backend = NewLinearBackend(api)
-	record, err := backend.Reread(t.Context(), "SEA-1197")
-	if err != nil || record.Identifier != "SEA-1197" {
+	record, err := backend.Reread(t.Context(), "EX-1197")
+	if err != nil || record.Identifier != "EX-1197" {
 		t.Fatalf("Reread() = (%#v, %v)", record, err)
 	}
 	if owner, ok := backend.ReadOwner(record); !ok || owner != "nix-infra" {
@@ -286,13 +296,13 @@ func TestLinearBackendRereadAndScan(t *testing.T) {
 		identifiers = append(identifiers, record.Identifier)
 		states = append(states, record.StateType)
 	}
-	if !reflect.DeepEqual(identifiers, []string{"SEA-1", "SEA-2", "SEA-3", "SEA-4"}) {
+	if !reflect.DeepEqual(identifiers, []string{"EX-1", "EX-2", "EX-3", "EX-4"}) {
 		t.Fatalf("scan identifiers = %#v", identifiers)
 	}
 	if !reflect.DeepEqual(states, []StateType{StateBacklog, StateBacklog, StateCompleted, StateCanceled}) {
 		t.Fatalf("scan states = %#v", states)
 	}
-	if !reflect.DeepEqual(api.fetches, []string{"SEA-1197", "", "c1", "c2"}) {
+	if !reflect.DeepEqual(api.fetches, []string{"EX-1197", "", "c1", "c2"}) {
 		t.Fatalf("API calls = %#v", api.fetches)
 	}
 	api.pages = map[string]LinearPage{}

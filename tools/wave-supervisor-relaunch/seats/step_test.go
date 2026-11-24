@@ -38,6 +38,22 @@ func TestStepRelaunchesIdleSeatOverThreshold(t *testing.T) {
 	assertLogs(t, w, outcomeLine("relaunched", "accounts", 10))
 }
 
+func TestStepSkipsSeatWithLiveSubagents(t *testing.T) {
+	w := newWorld(foreman(1), idleSeat("accounts", 10))
+	w.liveSubagents = 1
+	w.run(t.Context())
+	assertCalls(t, w)
+	assertLogs(t, w, outcomeLine("skipped:subagents", "accounts", 10))
+}
+
+func TestStepFailsClosedOnSubagentCheckError(t *testing.T) {
+	w := newWorld(foreman(1), idleSeat("accounts", 10))
+	w.subagentErr = errors.New("session unavailable")
+	w.run(t.Context())
+	assertCalls(t, w)
+	assertLogs(t, w, outcomeLine("skipped:subagents", "accounts", 10))
+}
+
 func TestStepSkipsWorkingSeat(t *testing.T) {
 	w := newWorld(foreman(1), workingSeat("accounts", 10))
 	w.run(t.Context())

@@ -82,7 +82,7 @@ func buildDefaultDeps(cfg Config, getenv envGetter, paths toolPaths, fsys relaun
 			return err == nil && result.ExitCode == 0, err
 		},
 		StopSeats: func(ctx context.Context, names []string) error {
-			return stopManagedSeats(ctx, names, cfg.CotalSpace, runner)
+			return stopManagedSeats(ctx, names, cfg.CotalSpace, runner, liveCheckFor(paths.Proc, fsys, paths.Sessions, cfg.WaveSlice))
 		},
 		ProcScopesPresent: func() bool { return waveProcessesPresent("/proc", fsys, cfg.WaveSlice) },
 		SeatNames: func(ctx context.Context) (map[string]struct{}, error) {
@@ -270,8 +270,9 @@ func seatStepDeps(ctx context.Context, deps runDeps, stderr io.Writer) seats.Dep
 		Holders:     deps.Holders,
 		Processes:   func() ([]seats.Process, error) { return seatProcesses(deps) },
 		Stop: func(ctx context.Context, name string) error {
-			return stopOneSeat(ctx, name, deps.Config.CotalSpace, deps.Runner)
+			return stopOneSeat(ctx, name, deps.Config.CotalSpace, deps.Runner, liveCheckFor(deps.Paths.Proc, deps.FS, deps.Paths.Sessions, deps.Config.WaveSlice))
 		},
+		LiveSubagents: liveCheckFor(deps.Paths.Proc, deps.FS, deps.Paths.Sessions, deps.Config.WaveSlice),
 		Restart: func(ctx context.Context, name string) (int, error) {
 			restartCtx, cancel := context.WithTimeout(ctx, seats.ReadTimeout)
 			defer cancel()

@@ -8,7 +8,7 @@ import (
 
 // sequence is one seat's relaunch. Each step is a callback, so the order is testable.
 type sequence struct {
-	idleNow  func(context.Context, string) (bool, error)
+	idleNow  func(context.Context, string) (idle, subagents bool, err error)
 	stop     func(context.Context, string) error
 	present  func(context.Context, string) (present, complete bool, err error)
 	restart  func(context.Context, string) (int, error)
@@ -23,9 +23,12 @@ type sequence struct {
 // `wave-seats restart`, which bumps the generation so reconcile spawns a fresh session. A seat
 // that went busy is left alone with no command. A failed stop or wait never restarts.
 func (s sequence) relaunch(ctx context.Context, name string) (string, error) {
-	idle, err := s.idleNow(ctx, name)
+	idle, subagents, err := s.idleNow(ctx, name)
 	if err != nil {
 		return "", fmt.Errorf("idle re-check: %w", err)
+	}
+	if subagents {
+		return outcomeSubagents, nil
 	}
 	if !idle {
 		return outcomeWorking, nil
@@ -87,6 +90,9 @@ func step(ctx context.Context, root string, seats []Candidate, threshold int64, 
 			continue
 		case !seat.Idle:
 			log(line(seat, outcomeWorking))
+			continue
+		case seat.Subagents:
+			log(line(seat, outcomeSubagents))
 			continue
 		case relaunched:
 			log(line(seat, "skipped:one-per-run"))

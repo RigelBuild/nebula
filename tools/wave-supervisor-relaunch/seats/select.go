@@ -18,6 +18,7 @@ const (
 
 	outcomeRelaunched = "relaunched"
 	outcomeWorking    = "skipped:working"
+	outcomeSubagents  = "skipped:subagents"
 )
 
 // Candidate is one active seat the step may relaunch.
@@ -25,6 +26,7 @@ type Candidate struct {
 	Name        string
 	MemoryBytes int64
 	Idle        bool
+	Subagents   bool // true when live child sessions exist or state is unknown
 }
 
 // ThresholdBytes reads the threshold override. Empty uses the default; any other value must be a
@@ -68,9 +70,7 @@ func ordered(root string, seats []Candidate) []Candidate {
 	return kept
 }
 
-// CountsIdle is the idle signal: the roster shows the seat idle. rosterIdleNames already folds in the
-// presence field, so a seat with background work running is not idle. The candidate read and the
-// pre-stop re-check both use it.
+// CountsIdle is the idle signal after checking the current roster identity and explicit background idle state.
 func CountsIdle(rosterIdle bool) bool {
 	return rosterIdle
 }

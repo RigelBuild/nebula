@@ -50,11 +50,11 @@ func TestRunLeftSeatsFree(t *testing.T) {
 }
 
 func TestRosterIdleNamesIdentityChecks(t *testing.T) {
-	ps := psEnvelope(`{"name":"web","mesh":"idle","meshView":"current","presenceIdentityVerified":true},` +
-		`{"name":"unverified","mesh":"idle","meshView":"current","presenceIdentityVerified":false},` +
-		`{"name":"noflag","mesh":"idle","meshView":"current"},` +
-		`{"name":"stale","mesh":"idle","meshView":"stale","presenceIdentityVerified":true},` +
-		`{"name":"waiting","mesh":"waiting","meshView":"current","presenceIdentityVerified":true}`)
+	ps := psEnvelope(`{"name":"web","mesh":"idle","meshView":"current","presenceIdentityVerified":true,"background":"idle"},` +
+		`{"name":"unverified","mesh":"idle","meshView":"current","presenceIdentityVerified":false,"background":"idle"},` +
+		`{"name":"noflag","mesh":"idle","meshView":"current","background":"idle"},` +
+		`{"name":"stale","mesh":"idle","meshView":"stale","presenceIdentityVerified":true,"background":"idle"},` +
+		`{"name":"waiting","mesh":"waiting","meshView":"current","presenceIdentityVerified":true,"background":"idle"}`)
 	idle, err := rosterIdleNames(ps)
 	if err != nil || len(idle) != 1 || !idle["web"] {
 		t.Fatalf("idle = %v, %v; want only web", idle, err)
@@ -70,12 +70,13 @@ func TestRosterIdleNamesBackground(t *testing.T) {
 		extra string
 		idle  bool
 	}{
-		{name: "running background work is not idle", extra: `,"background":"running"`},
-		{name: "absent background is idle", idle: true},
-		{name: "other string background is idle", extra: `,"background":"idle"`, idle: true},
-		{name: "empty background is idle", extra: `,"background":""`, idle: true},
-		{name: "null background is idle", extra: `,"background":null`, idle: true},
-		{name: "non-string background is idle", extra: `,"background":3`, idle: true},
+		{name: "explicit idle background is idle", extra: `,"background":"idle"`, idle: true},
+		{name: "running background is not idle", extra: `,"background":"running"`},
+		{name: "other string background is not idle", extra: `,"background":"working"`},
+		{name: "empty background is not idle", extra: `,"background":""`},
+		{name: "null background is not idle", extra: `,"background":null`},
+		{name: "non-string background is not idle", extra: `,"background":3`},
+		{name: "absent background is not idle"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ps := psEnvelope(`{"name":"web","mesh":"idle","meshView":"current","presenceIdentityVerified":true` + tc.extra + `}`)

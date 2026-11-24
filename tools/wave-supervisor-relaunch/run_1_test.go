@@ -229,9 +229,9 @@ func (h *runHarness) installWaveScope() {
 	h.fs.files["/proc/111/cgroup"] = []byte("0::/wave-agents.slice/scope")
 	h.fs.files["/proc/111/cmdline"] = []byte("omp\x00--fork\x00parent-session\x00")
 	h.fs.files["/proc/111/environ"] = []byte("COTAL_AGENT_FILE=/agents/foreman.md\x00HOME=/home/mattw\x00")
-	h.fs.links["/proc/111/fd/1"] = "/sessions/-home-mattw-agents/session.jsonl"
-	h.fs.files["/sessions/-home-mattw-agents/session.jsonl"] = []byte(`{"type":"session","id":"census-supervisor","parentSession":"parent-session"}`)
-	h.fs.times["/sessions/-home-mattw-agents/session.jsonl"] = h.time
+	h.fs.links["/proc/111/fd/1"] = "/sessions/-home-mattw-agents/session_census-supervisor.jsonl"
+	h.fs.files["/sessions/-home-mattw-agents/session_census-supervisor.jsonl"] = []byte(`{"type":"session","id":"census-supervisor","parentSession":"parent-session"}`)
+	h.fs.times["/sessions/-home-mattw-agents/session_census-supervisor.jsonl"] = h.time
 }
 
 func TestCotalFailureFormatsCommandAndFirstStderrLine(t *testing.T) {

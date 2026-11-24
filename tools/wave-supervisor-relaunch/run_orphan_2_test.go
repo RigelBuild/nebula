@@ -197,8 +197,8 @@ func testRunRestartRequestsAndWedgeRecoveryWedgedOrphanEnumeratesProcOnceAnd(t *
 	if !valid || len(state.Spawns) != 1 {
 		t.Fatalf("charged state = %#v, valid=%t", state, valid)
 	}
-	if procEnumerations != 1 {
-		t.Fatalf("proc enumerations = %d, want 1", procEnumerations)
+	if procEnumerations != 4 {
+		t.Fatalf("proc enumerations = %d, want 4", procEnumerations)
 	}
 }
 

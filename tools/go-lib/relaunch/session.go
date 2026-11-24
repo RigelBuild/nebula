@@ -57,6 +57,18 @@ func readPrefix(fileSystem FileSystem, path string, maxBytes int) ([]byte, error
 	return data[:maxBytes], nil
 }
 
+// ReadTail reads at most the last maxBytes of a file.
+func ReadTail(fileSystem FileSystem, path string, maxBytes int) ([]byte, error) {
+	if reader, ok := fileSystem.(TailReader); ok {
+		return reader.ReadTail(path, maxBytes)
+	}
+	data, err := fileSystem.ReadFile(path)
+	if err != nil || len(data) <= maxBytes {
+		return data, err
+	}
+	return data[len(data)-maxBytes:], nil
+}
+
 // ReadHeaderFromText reads session fields through the first session row.
 func ReadHeaderFromText(text string) SessionHeader {
 	var header SessionHeader
@@ -447,4 +459,9 @@ func SessionLive(listSessionsText, name string) bool {
 // ReadPrefix is an optional FileSystem extension used by session scans.
 type PrefixReader interface {
 	ReadPrefix(path string, maxBytes int) ([]byte, error)
+}
+
+// TailReader is an optional FileSystem extension that reads the end of a file.
+type TailReader interface {
+	ReadTail(path string, maxBytes int) ([]byte, error)
 }

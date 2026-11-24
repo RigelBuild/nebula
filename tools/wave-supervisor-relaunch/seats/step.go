@@ -40,6 +40,8 @@ type Deps struct {
 	Sleep       func(context.Context, time.Duration) error
 	Log         func(string)
 	SeatCLI     string
+	// LiveSubagents reports a seat's live child sessions. Missing checks count as unknown/busy.
+	LiveSubagents func(context.Context, string) (int, error)
 }
 
 // Run relaunches at most one idle non-root seat over the threshold. It logs every outcome and
@@ -70,12 +72,15 @@ func Run(ctx context.Context, deps Deps) {
 
 func (deps Deps) sequence() sequence {
 	return sequence{
-		idleNow: func(ctx context.Context, name string) (bool, error) {
+		idleNow: func(ctx context.Context, name string) (bool, bool, error) {
 			seats, err := deps.candidates(ctx, map[string]struct{}{name: {}})
 			if err != nil {
-				return false, err
+				return false, false, err
 			}
-			return len(seats) == 1 && seats[0].Idle, nil
+			if len(seats) != 1 {
+				return false, false, nil
+			}
+			return seats[0].Idle, seats[0].Subagents, nil
 		},
 		stop:     deps.Stop,
 		present:  deps.present,
@@ -106,13 +111,26 @@ func (deps Deps) candidates(ctx context.Context, names map[string]struct{}) ([]C
 	memory := scopeMemory(procs, deps.FS, deps.CgroupRoot)
 	candidates := make([]Candidate, 0, len(names))
 	for _, name := range slices.Sorted(maps.Keys(names)) {
-		candidates = append(candidates, Candidate{
+		candidate := Candidate{
 			Name:        name,
 			MemoryBytes: memory[name],
 			Idle:        CountsIdle(rosterIdle[name]),
-		})
+		}
+		if candidate.Idle {
+			candidate.Subagents = deps.subagentsBlock(ctx, name)
+		}
+		candidates = append(candidates, candidate)
 	}
 	return candidates, nil
+}
+
+// subagentsBlock treats a failed check as busy, never as zero.
+func (deps Deps) subagentsBlock(ctx context.Context, name string) bool {
+	if deps.LiveSubagents == nil {
+		return true
+	}
+	count, err := deps.LiveSubagents(ctx, name)
+	return err != nil || count > 0
 }
 
 // present is the presence test `wave-seats restart` applies (liveNames): ps rows, running
@@ -138,9 +156,8 @@ func (deps Deps) present(ctx context.Context, name string) (bool, bool, error) {
 	return present, waveseats.ManagerStatusAvailable(status), nil
 }
 
-// rosterIdleNames returns the seats a seats-kind roster shows idle in the current mesh view with a
-// verified presence identity and no running background work. A missing background field counts as
-// unknown, so it does not block idle.
+// rosterIdleNames returns verified idle seats from the current mesh view with explicit background
+// idle state. Missing, null, and non-string background values are not idle.
 func rosterIdleNames(ps string) (map[string]bool, error) {
 	kind, rows, valid := cotalreach.ParsePsItems(ps)
 	if !valid || kind != "seats" {
@@ -154,10 +171,11 @@ func rosterIdleNames(ps string) (map[string]bool, error) {
 			json.Unmarshal(row["meshView"], &view) != nil || json.Unmarshal(row["presenceIdentityVerified"], &verified) != nil {
 			continue
 		}
-		// A missing or non-string background field is unknown and does not mark the seat busy.
 		var background string
-		busy := json.Unmarshal(row["background"], &background) == nil && background == "running"
-		if mesh == "idle" && view == "current" && verified && !busy {
+		if json.Unmarshal(row["background"], &background) != nil || background != "idle" {
+			continue
+		}
+		if mesh == "idle" && view == "current" && verified {
 			idle[name] = true
 		}
 	}

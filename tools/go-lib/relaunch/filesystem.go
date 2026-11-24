@@ -58,6 +58,34 @@ func (NodeFileSystem) ReadPrefix(path string, maxBytes int) ([]byte, error) {
 	return data[:n], nil
 }
 
+// ReadTail reads at most the last maxBytes of path.
+func (NodeFileSystem) ReadTail(path string, maxBytes int) ([]byte, error) {
+	file, err := os.Open(path) // #nosec G304 -- session scans intentionally read caller-selected host paths.
+	if err != nil {
+		return nil, err
+	}
+	data, readErr := readTailFrom(file, maxBytes)
+	closeErr := file.Close()
+	if readErr != nil || closeErr != nil {
+		return nil, errors.Join(readErr, closeErr)
+	}
+	return data, nil
+}
+
+func readTailFrom(file *os.File, maxBytes int) ([]byte, error) {
+	info, err := file.Stat()
+	if err != nil {
+		return nil, err
+	}
+	offset := max(info.Size()-int64(maxBytes), 0)
+	data := make([]byte, info.Size()-offset)
+	n, err := file.ReadAt(data, offset)
+	if err != nil && err != io.EOF {
+		return nil, err
+	}
+	return data[:n], nil
+}
+
 func (NodeFileSystem) Stat(path string) (fs.FileInfo, error) {
 	return os.Stat(path)
 }

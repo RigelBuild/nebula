@@ -26,7 +26,8 @@ func testStopWaveStopsThenPollsPresenceUntilClear(t *testing.T) {
 	now := time.Unix(0, 0)
 	polls := 0
 	got := stopWave(context.Background(), stopWaveDeps{
-		StopSlice: func(context.Context) (bool, error) { return true, nil },
+		CheckSubagents: func(context.Context) error { return nil },
+		StopSlice:      func(context.Context) (bool, error) { return true, nil },
 		PresenceGone: func(context.Context) (bool, error) {
 			polls++
 			return polls == 3, nil
@@ -48,6 +49,7 @@ func testStopWaveStopsManagedSeatsBeforeTheSlice(t *testing.T) {
 	t.Helper()
 	events := []string{}
 	got := stopWave(context.Background(), stopWaveDeps{
+		CheckSubagents: func(context.Context) error { return nil },
 		StopSeats: func(context.Context) error {
 			events = append(events, "seats")
 			return errors.New("seat stop failed")
@@ -70,6 +72,7 @@ func testStopWaveAHangingFakeSeatStopIs(t *testing.T) {
 	sliceStopped := false
 	var requestedDeadline time.Duration
 	got := stopWave(context.Background(), stopWaveDeps{
+		CheckSubagents: func(context.Context) error { return nil },
 		StopSeats: func(ctx context.Context) error {
 			close(seatStarted)
 			<-ctx.Done()
@@ -97,16 +100,18 @@ func testStopWaveAHangingFakeSeatStopIs(t *testing.T) {
 func testStopWaveReportsSliceFailureAndStuckPresence(t *testing.T) {
 	t.Helper()
 	if got := stopWave(context.Background(), stopWaveDeps{
-		StopSlice:    func(context.Context) (bool, error) { return false, nil },
-		PresenceGone: func(context.Context) (bool, error) { return true, nil },
+		CheckSubagents: func(context.Context) error { return nil },
+		StopSlice:      func(context.Context) (bool, error) { return false, nil },
+		PresenceGone:   func(context.Context) (bool, error) { return true, nil },
 	}); got != "wave-stop" {
 		t.Fatalf("failed stopWave() = %q, want wave-stop", got)
 	}
 	now := time.Unix(0, 0)
 	if got := stopWave(context.Background(), stopWaveDeps{
-		StopSlice:    func(context.Context) (bool, error) { return true, nil },
-		PresenceGone: func(context.Context) (bool, error) { return false, nil },
-		Now:          func() time.Time { return now },
+		CheckSubagents: func(context.Context) error { return nil },
+		StopSlice:      func(context.Context) (bool, error) { return true, nil },
+		PresenceGone:   func(context.Context) (bool, error) { return false, nil },
+		Now:            func() time.Time { return now },
 		Sleep: func(_ context.Context, delay time.Duration) error {
 			now = now.Add(delay)
 			return nil
@@ -123,9 +128,10 @@ func testStopWaveUsesDefaultStopPollIntervalAnd(t *testing.T) {
 	now := time.Unix(0, 0)
 	var delays []time.Duration
 	got := stopWave(context.Background(), stopWaveDeps{
-		StopSlice:    func(context.Context) (bool, error) { return true, nil },
-		PresenceGone: func(context.Context) (bool, error) { return false, nil },
-		Now:          func() time.Time { return now },
+		CheckSubagents: func(context.Context) error { return nil },
+		StopSlice:      func(context.Context) (bool, error) { return true, nil },
+		PresenceGone:   func(context.Context) (bool, error) { return false, nil },
+		Now:            func() time.Time { return now },
 		Sleep: func(_ context.Context, delay time.Duration) error {
 			delays = append(delays, delay)
 			now = now.Add(delay)
@@ -142,8 +148,9 @@ func testStopWaveTreatsCallerCancellationWhilePollingAs(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	got := stopWave(ctx, stopWaveDeps{
-		StopSlice:    func(context.Context) (bool, error) { return true, nil },
-		PresenceGone: func(context.Context) (bool, error) { return false, nil },
+		CheckSubagents: func(context.Context) error { return nil },
+		StopSlice:      func(context.Context) (bool, error) { return true, nil },
+		PresenceGone:   func(context.Context) (bool, error) { return false, nil },
 		Sleep: func(context.Context, time.Duration) error {
 			cancel()
 			return context.Canceled

@@ -1,0 +1,269 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"io/fs"
+	"slices"
+	"strings"
+	"testing"
+
+	"github.com/RigelBuild/nebula/tools/go-lib/cotalreach"
+)
+
+const finishedSessionRecord = `{"type":"custom","customType":"session_exit"}` + "\n"
+
+func TestSubagentFinished(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		tail string
+		want bool
+	}{
+		{name: "session exit", tail: finishedSessionRecord, want: true},
+		{name: "assistant stop", tail: `{"type":"message","message":{"role":"assistant","stopReason":"stop"}}` + "\n", want: true},
+		{name: "assistant aborted", tail: `{"type":"message","message":{"role":"assistant","stopReason":"aborted"}}` + "\n", want: false},
+		{name: "tool use", tail: `{"type":"message","message":{"role":"assistant","stopReason":"toolUse"}}` + "\n"},
+		{name: "unknown", tail: `{"type":"new"}` + "\n"},
+		{name: "partial", tail: "not json\n"},
+		{name: "empty"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := subagentFinished([]byte(tc.tail)); got != tc.want {
+				t.Fatalf("subagentFinished = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestLiveSubagentsCountsRunningFiles(t *testing.T) {
+	const seatFile = "/sessions/seat.jsonl"
+	const child = "/sessions/seat/Child.jsonl"
+	fsys := newMemoryFS()
+	fsys.files[child] = []byte(`{"type":"model_usage"}` + "\n")
+	if got, err := liveSubagents(t.Context(), fsys, seatFile); err != nil || got != 1 {
+		t.Fatalf("liveSubagents = %d, %v; want one running child", got, err)
+	}
+}
+
+func TestLiveSubagentsUnreadableFailsClosed(t *testing.T) {
+	const child = "/sessions/seat/Child.jsonl"
+	fsys := newMemoryFS()
+	fsys.files[child] = []byte(`{"type":"model_usage"}` + "\n")
+	fsys.readHook = func(path string) ([]byte, error, bool) {
+		if path == child {
+			return nil, fs.ErrPermission, true
+		}
+		return nil, nil, false
+	}
+	if _, err := liveSubagents(t.Context(), fsys, "/sessions/seat.jsonl"); !errors.Is(err, fs.ErrPermission) {
+		t.Fatalf("liveSubagents error = %v, want permission error", err)
+	}
+}
+
+func TestStopOneSeatRefusesLiveSubagent(t *testing.T) {
+	var calls int
+	runner := func(context.Context, []string, string) (cotalreach.CommandResult, error) {
+		calls++
+		return cotalreach.CommandResult{}, nil
+	}
+	live := func(context.Context, string) (int, error) { return 1, nil }
+	if err := stopOneSeat(t.Context(), "accounts", "main", runner, live); !errors.Is(err, errSubagentsGate) {
+		t.Fatalf("stopOneSeat error = %v, want subagent gate", err)
+	}
+	if calls != 0 {
+		t.Fatalf("stop runner calls = %d, want 0", calls)
+	}
+}
+
+func TestCheckWaveSubagentsMissingCheckFailsClosed(t *testing.T) {
+	if err := checkWaveSubagents(t.Context(), stopWaveDeps{}); err == nil || !strings.Contains(err.Error(), "no subagent check wired") {
+		t.Fatalf("checkWaveSubagents error = %v", err)
+	}
+}
+
+func TestSubagentFilesIgnoresNonSessionFiles(t *testing.T) {
+	const seatFile = "/sessions/-home-example/2026_seat-id.jsonl"
+	const stem = "/sessions/-home-example/2026_seat-id"
+	fsys := newMemoryFS()
+	fsys.files[stem+"/changes.jsonl"] = []byte(`{"type":"model_usage"}` + "\n")
+	fsys.files[stem+"/task.md"] = []byte("notes")
+	fsys.files[stem+"/log.txt"] = []byte("logs")
+	fsys.files[stem+"/Child.jsonl"] = []byte(`{"type":"model_usage"}` + "\n")
+	fsys.files[stem+"/Parent/Nested.jsonl"] = []byte(finishedSessionRecord)
+	files, err := subagentFiles(fsys, stem)
+	slices.Sort(files)
+	want := []string{stem + "/Child.jsonl", stem + "/Parent/Nested.jsonl"}
+	if err != nil || !slices.Equal(files, want) {
+		t.Fatalf("subagentFiles = %v, %v; want %v", files, err, want)
+	}
+	if got, err := liveSubagents(t.Context(), fsys, seatFile); err != nil || got != 1 {
+		t.Fatalf("liveSubagents = %d, %v; want one live nested session", got, err)
+	}
+}
+
+func TestTopLevelSessionFileByNameDoesNotReadContents(t *testing.T) {
+	fsys := newMemoryFS()
+	path := "/sessions/-home-example/2026_session-id.jsonl"
+	fsys.files[path] = []byte(`{"type":"session","id":"session-id"}`)
+	fsys.files["/sessions/-home-example/2026_session-id/Child.jsonl"] = []byte(finishedSessionRecord)
+	fsys.readHook = func(string) ([]byte, error, bool) {
+		return nil, errors.New("unexpected whole-file read"), true
+	}
+	got, err := topLevelSessionFile("/sessions", "session-id", fsys)
+	if err != nil || got != path {
+		t.Fatalf("topLevelSessionFile = %q, %v; want %q", got, err, path)
+	}
+}
+
+func TestGateSliceOmpPIDsReadErrorsFailClosed(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		path    string
+		readErr error
+		wantErr bool
+	}{
+		{name: "denied cgroup", path: "/proc/123/cgroup", readErr: fs.ErrPermission, wantErr: true},
+		{name: "denied cmdline", path: "/proc/123/cmdline", readErr: fs.ErrPermission, wantErr: true},
+		{name: "missing cgroup means process exited", path: "/proc/123/cgroup", readErr: fs.ErrNotExist},
+		{name: "missing command line means process exited", path: "/proc/123/cmdline", readErr: fs.ErrNotExist},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fsys := newMemoryFS()
+			waveProcFixture(fsys, "123", "accounts", "session-id", "")
+			fsys.readHook = func(path string) ([]byte, error, bool) {
+				if path == tc.path {
+					return nil, tc.readErr, true
+				}
+				return nil, nil, false
+			}
+			err := waveLiveSubagents(t.Context(), "/proc", fsys, "/sessions", "wave-agents.slice")
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("waveLiveSubagents error = %v, wantErr=%v", err, tc.wantErr)
+			}
+		})
+	}
+}
+func TestStopWaveRefusesSubagentStateBeforeSliceStop(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		check     func(int) error
+		wantSeats int
+	}{
+		{name: "initial check", check: func(int) error { return errSubagentsGate }},
+		{name: "after seat stops", check: func(call int) error {
+			if call == 2 {
+				return errSubagentsGate
+			}
+			return nil
+		}, wantSeats: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			checks, seats, slices := 0, 0, 0
+			result := stopWave(t.Context(), stopWaveDeps{
+				CheckSubagents: func(context.Context) error {
+					checks++
+					return tc.check(checks)
+				},
+				StopSeats:    func(context.Context) error { seats++; return nil },
+				StopSlice:    func(context.Context) (bool, error) { slices++; return true, nil },
+				PresenceGone: func(context.Context) (bool, error) { return true, nil },
+			})
+			if result != "skipped:subagents" || seats != tc.wantSeats || slices != 0 {
+				t.Fatalf("stopWave() = %q, seat stops = %d, slice stops = %d", result, seats, slices)
+			}
+		})
+	}
+}
+
+func waveProcFixture(fileSystem *memoryFS, pid, seat, sessionID, child string) {
+	base := "/proc/" + pid
+	fileSystem.files[base+"/cgroup"] = []byte("0::/user.slice/wave-agents.slice/run-" + seat + ".scope\n")
+	fileSystem.files[base+"/cmdline"] = []byte("omp\x00--session-id\x00" + sessionID + "\x00")
+	fileSystem.files[base+"/environ"] = []byte("COTAL_AGENT_FILE=/agents/" + seat + ".md\x00HOME=/home/example\x00")
+	file := "/sessions/-agents/2026_" + sessionID + ".jsonl"
+	fileSystem.links[base+"/fd/3"] = file
+	fileSystem.links[base+"/cwd"] = "/home/example/agents"
+	fileSystem.files[file] = []byte(`{"type":"session","id":"` + sessionID + `"}` + "\n")
+	if child != "" {
+		fileSystem.files[strings.TrimSuffix(file, ".jsonl")+"/Sub.jsonl"] = []byte(child)
+	}
+}
+
+func TestLiveSubagentsForUnresolvableSessionFailsClosed(t *testing.T) {
+	fsys := newMemoryFS()
+	waveProcFixture(fsys, "123", "accounts", "session-id", "")
+	delete(fsys.files, "/sessions/-agents/2026_session-id.jsonl")
+	delete(fsys.links, "/proc/123/fd/3")
+	if _, err := liveSubagentsFor(t.Context(), "/proc", fsys, "/sessions", "wave-agents.slice", "accounts"); err == nil {
+		t.Fatal("liveSubagentsFor accepted an unresolved seat session")
+	}
+}
+
+func TestWaveLiveSubagentsRefusesUnknownAndRunningProcesses(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		setup   func(*memoryFS)
+		wantErr bool
+	}{
+		{name: "clear", setup: func(fsys *memoryFS) {
+			waveProcFixture(fsys, "123", "accounts", "session-id", finishedSessionRecord)
+		}},
+		{name: "running child", setup: func(fsys *memoryFS) {
+			waveProcFixture(fsys, "123", "accounts", "session-id", `{"type":"model_usage"}`+"\n")
+		}, wantErr: true},
+		{name: "unmapped seat", setup: func(fsys *memoryFS) {
+			waveProcFixture(fsys, "123", "accounts", "session-id", "")
+			fsys.files["/proc/123/environ"] = []byte("HOME=/home/example\x00")
+		}, wantErr: true},
+		{name: "unreadable process", setup: func(fsys *memoryFS) {
+			waveProcFixture(fsys, "123", "accounts", "session-id", "")
+			fsys.readHook = func(path string) ([]byte, error, bool) {
+				if path == "/proc/123/environ" {
+					return nil, fs.ErrPermission, true
+				}
+				return nil, nil, false
+			}
+		}, wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fsys := newMemoryFS()
+			tc.setup(fsys)
+			err := waveLiveSubagents(t.Context(), "/proc", fsys, "/sessions", "wave-agents.slice")
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("waveLiveSubagents error = %v, wantErr=%v", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestWaveLiveSubagentsRequiresResolvedSession(t *testing.T) {
+	fsys := newMemoryFS()
+	fsys.files["/proc/123/cgroup"] = []byte("0::/user.slice/wave-agents.slice/run-accounts.scope\n")
+	fsys.files["/proc/123/cmdline"] = []byte("omp\x00")
+	fsys.files["/proc/123/environ"] = []byte("COTAL_AGENT_FILE=accounts\x00")
+	if err := waveLiveSubagents(t.Context(), "/proc", fsys, "/sessions", "wave-agents.slice"); err == nil {
+		t.Fatal("waveLiveSubagents accepted an unresolved process session")
+	}
+}
+
+func TestLiveSubagentsForDeadSeatIsZero(t *testing.T) {
+	if got, err := liveSubagentsFor(t.Context(), "/proc", newMemoryFS(), "/sessions", "wave-agents.slice", "accounts"); err != nil || got != 0 {
+		t.Fatalf("liveSubagentsFor = %d, %v; want 0", got, err)
+	}
+}
+
+func TestLiveSubagentsMissingSessionFailsClosed(t *testing.T) {
+	if _, err := liveSubagents(t.Context(), newMemoryFS(), ""); err == nil {
+		t.Fatal("liveSubagents accepted an empty session path")
+	}
+}
+
+func TestLiveSubagentsCancellationIsReturned(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	fsys := newMemoryFS()
+	fsys.files["/sessions/seat/Child.jsonl"] = []byte(`{"type":"model_usage"}` + "\n")
+	if _, err := liveSubagents(ctx, fsys, "/sessions/seat.jsonl"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("liveSubagents error = %v, want cancellation", err)
+	}
+}

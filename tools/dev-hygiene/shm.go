@@ -36,6 +36,7 @@ func pruneShm(ctx context.Context, root string, age time.Duration, apply bool, o
 	if err != nil {
 		return fmt.Errorf("resolve shm root: %w", err)
 	}
+	callerRoot := filepath.Clean(root)
 	root, err = filepath.EvalSymlinks(root)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil
@@ -61,6 +62,7 @@ func pruneShm(ctx context.Context, root string, age time.Duration, apply bool, o
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+		callerPath := filepath.Join(callerRoot, entry.Name())
 		path := filepath.Join(root, entry.Name())
 		info, err := os.Lstat(path)
 		if errors.Is(err, fs.ErrNotExist) {
@@ -69,7 +71,7 @@ func pruneShm(ctx context.Context, root string, age time.Duration, apply bool, o
 		if err != nil {
 			return fmt.Errorf("stat shm entry %s: %w", path, err)
 		}
-		if !deps.owned(info) || shmHeld(path, held) {
+		if !deps.owned(info) || shmHeld(callerPath, held) || shmHeld(path, held) {
 			continue
 		}
 		if info.IsDir() {
@@ -109,7 +111,7 @@ func pruneShm(ctx context.Context, root string, age time.Duration, apply bool, o
 			if err != nil {
 				return fmt.Errorf("recheck held paths: %w", err)
 			}
-			if shmHeld(path, held) {
+			if shmHeld(callerPath, held) || shmHeld(path, held) {
 				continue
 			}
 			info, err = os.Lstat(path)

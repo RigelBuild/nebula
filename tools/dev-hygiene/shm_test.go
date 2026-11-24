@@ -146,24 +146,42 @@ func TestPruneShmApplyRechecksHeldPaths(t *testing.T) {
 }
 
 func TestPruneShmHeldPathThroughEntrySymlink(t *testing.T) {
-	target, root := t.TempDir(), t.TempDir()
-	child := filepath.Join(target, "child")
-	if err := os.WriteFile(child, []byte("held"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	entry := filepath.Join(root, "link")
-	if err := os.Symlink(target, entry); err != nil {
-		t.Fatal(err)
-	}
-
 	for _, tt := range []struct {
-		name     string
-		heldPath string
+		name       string
+		heldOnScan int
+		holdChild  bool
 	}{
-		{name: "link", heldPath: entry},
-		{name: "child", heldPath: filepath.Join(entry, "child")},
+		{name: "link held initially", heldOnScan: 1},
+		{name: "link held on recheck", heldOnScan: 2},
+		{name: "child held initially", heldOnScan: 1, holdChild: true},
+		{name: "child held on recheck", heldOnScan: 2, holdChild: true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
+			base := t.TempDir()
+			realRoot := filepath.Join(base, "real", "shm")
+			if err := os.MkdirAll(realRoot, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			alias := filepath.Join(base, "alias")
+			if err := os.Symlink(filepath.Dir(realRoot), alias); err != nil {
+				t.Fatal(err)
+			}
+			root := filepath.Join(alias, "shm")
+
+			target := t.TempDir()
+			child := filepath.Join(target, "child")
+			if err := os.WriteFile(child, []byte("held"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			entry := filepath.Join(root, "link")
+			if err := os.Symlink(target, entry); err != nil {
+				t.Fatal(err)
+			}
+
+			heldPath := entry
+			if tt.holdChild {
+				heldPath = filepath.Join(entry, "child")
+			}
 			var scans int
 			now := time.Now().Add(24 * time.Hour)
 			deps := shmDeps{
@@ -171,20 +189,20 @@ func TestPruneShmHeldPathThroughEntrySymlink(t *testing.T) {
 				owned: func(fs.FileInfo) bool { return true },
 				held: func() (map[string]struct{}, error) {
 					scans++
-					if scans == 1 {
+					if scans < tt.heldOnScan {
 						return map[string]struct{}{}, nil
 					}
-					return map[string]struct{}{tt.heldPath: {}}, nil
+					return map[string]struct{}{heldPath: {}}, nil
 				},
 			}
 			if err := pruneShm(t.Context(), root, -time.Hour, true, &printer{w: &bytes.Buffer{}}, deps); err != nil {
 				t.Fatal(err)
 			}
-			if scans != 2 {
-				t.Fatalf("held path scans = %d, want initial and apply-time scans", scans)
+			if scans != tt.heldOnScan {
+				t.Fatalf("held path scans = %d, want %d", scans, tt.heldOnScan)
 			}
 			if _, err := os.Lstat(entry); err != nil {
-				t.Fatalf("symlink entry removed while held: %v", err)
+				t.Fatalf("symlink entry removed while held through root alias: %v", err)
 			}
 		})
 	}

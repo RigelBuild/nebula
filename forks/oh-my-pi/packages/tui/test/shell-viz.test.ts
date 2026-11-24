@@ -1,11 +1,13 @@
-import { describe, expect, it } from "bun:test";
+import { beforeEach, describe, expect, it } from "bun:test";
 import { RunTrace, Shell } from "@oh-my-pi/pi-natives";
 import { isShellTrace, type ShellTrace, type ShellVizPresentation } from "@oh-my-pi/pi-wire";
 import {
 	attachShellTrace,
+	clearRestoredVisualizations,
 	decodeShellPresentation,
 	defaultShellVizPreferences,
 	readShellPresentation,
+	restoredVisualizationCount,
 	shellVisualization,
 } from "../src/tools/shell-viz";
 import { renderShellVisualization } from "../src/tools/shell-viz-render";
@@ -40,6 +42,10 @@ function fixture(): ShellVizPresentation {
 }
 
 describe("native shell presentation boundary", () => {
+	beforeEach(() => {
+		clearRestoredVisualizations();
+	});
+
 	it("rejects malformed DTOs and numeric node identities without compatibility coercion", () => {
 		for (const value of [
 			{ ...fixture(), rows: [{ ...fixture().rows[0], node: 17 }] },
@@ -90,5 +96,62 @@ describe("native shell presentation boundary", () => {
 		const restored = shellVisualization(stored);
 		if (!restored) throw new Error("Expected the stored trace to restore");
 		expect(readShellPresentation(restored, replay, stored).output).toBe("native-boundary\n");
+	});
+
+	it("bounds the restored visualization cache and rebuilds an evicted entry from JSON", async () => {
+		const snapshots: ShellTrace[] = [];
+		for (let i = 0; i < 20; i++) {
+			const command = `printf 'bounded-${i}\\n'`;
+			const trace = new RunTrace(command);
+			await new Shell().run({ command, trace });
+			snapshots.push(snapshot(trace));
+		}
+		const replayOf = (stored: ShellTrace) => ({
+			...defaultShellVizPreferences(),
+			cursor: stored.history?.length ?? 0,
+		});
+		for (const stored of snapshots) {
+			const restored = shellVisualization(stored);
+			if (!restored) throw new Error("Expected the stored trace to restore");
+			expect(restoredVisualizationCount()).toBeLessThanOrEqual(16);
+		}
+		expect(restoredVisualizationCount()).toBe(16);
+		// The first snapshot was evicted; restoring it again still renders its output.
+		const first = snapshots[0];
+		if (!first) throw new Error("Expected a first snapshot");
+		const again = shellVisualization(first);
+		if (!again) throw new Error("Expected the evicted trace to restore from JSON");
+		expect(readShellPresentation(again, replayOf(first), first).output).toBe("bounded-0\n");
+		expect(restoredVisualizationCount()).toBe(16);
+	});
+
+	it("keeps the recently restored entry and rebuilds the evicted one", async () => {
+		const snapshots: ShellTrace[] = [];
+		for (let i = 0; i < 17; i++) {
+			const command = `printf 'lru-${i}\\n'`;
+			const trace = new RunTrace(command);
+			await new Shell().run({ command, trace });
+			snapshots.push(snapshot(trace));
+		}
+		const first = snapshots[0];
+		const second = snapshots[1];
+		const last = snapshots[16];
+		if (!first || !second || !last) throw new Error("Expected 17 snapshots");
+		const restoredFirst = shellVisualization(first);
+		const restoredSecond = shellVisualization(second);
+		if (!restoredFirst || !restoredSecond) throw new Error("Expected the first two traces to restore");
+		for (const stored of snapshots.slice(2, 16)) expect(shellVisualization(stored)).toBeDefined();
+		expect(restoredVisualizationCount()).toBe(16);
+		// Touching the oldest entry makes the second one the least recently used.
+		expect(shellVisualization(first)).toBe(restoredFirst);
+		expect(shellVisualization(last)).toBeDefined();
+		expect(restoredVisualizationCount()).toBe(16);
+		// The touched entry survived; the untouched one was evicted and rebuilds as a new object.
+		expect(shellVisualization(first)).toBe(restoredFirst);
+		const rebuilt = shellVisualization(second);
+		if (!rebuilt) throw new Error("Expected the evicted trace to restore from JSON");
+		expect(rebuilt).not.toBe(restoredSecond);
+		const replay = { ...defaultShellVizPreferences(), cursor: second.history?.length ?? 0 };
+		expect(readShellPresentation(rebuilt, replay, second).output).toBe("lru-1\n");
 	});
 });

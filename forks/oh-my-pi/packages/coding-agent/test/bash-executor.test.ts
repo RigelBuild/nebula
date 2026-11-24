@@ -26,7 +26,7 @@ import { encodeTerminalImage } from "@oh-my-pi/pi-coding-agent/utils/terminal-gr
 import type { Shell, ShellRunResult } from "@oh-my-pi/pi-natives";
 import * as piNatives from "@oh-my-pi/pi-natives";
 import { $which, removeSyncWithRetries } from "@oh-my-pi/pi-utils";
-import { isShellTrace } from "@oh-my-pi/pi-wire";
+import { isShellTrace, type ShellTrace } from "@oh-my-pi/pi-wire";
 
 import { cfgBashDirenvLoadTimeoutMs, cfgShellPath } from "@oh-my-pi/pi-coding-agent/exec/settings";
 
@@ -129,7 +129,43 @@ describe("executeBash", () => {
 		expect(new Set(snapshots).size).toBe(1);
 		expect(result.trace).toBeDefined();
 		if (!result.trace) throw new Error("Expected final native trace");
-		expect(shellVisualization(result.trace)).toBe(snapshots[0]);
+		expect(shellVisualization(result.trace)).not.toBe(snapshots[0]);
+	});
+
+	it("replays a settled trace from its JSON once the live native owner is released", async () => {
+		const command = "printf 'settled-replay\\n'";
+		const result = await executeBash(command, {
+			cwd: tempDir,
+			timeout: 5000,
+			onTrace: () => {},
+		});
+		if (!result.trace) throw new Error("Expected final native trace");
+		const source = shellVisualization(result.trace);
+		if (!source) throw new Error("Expected the settled trace to restore");
+		expect(source).not.toBeInstanceOf(piNatives.RunTrace);
+		const replay = { ...defaultShellVizPreferences(), cursor: result.trace.history?.length ?? 0 };
+		expect(readShellPresentation(source, replay, result.trace).output).toBe("settled-replay\n");
+	});
+
+	it("releases a superseded mid-run snapshot once the run settles", async () => {
+		const snapshots: ShellTrace[] = [];
+		const result = await executeBash("for i in 1 2 3 4 5; do echo $i; sleep 0.1; done", {
+			cwd: tempDir,
+			timeout: 5000,
+			onTrace: trace => {
+				snapshots.push(trace);
+			},
+		});
+		if (!result.trace) throw new Error("Expected final native trace");
+		// Several polls ran, so the first snapshot was superseded. A tool result that kept it
+		// (a backgrounded run) must restore from its JSON, not pin the run's native journal.
+		expect(snapshots.length).toBeGreaterThan(1);
+		const kept = snapshots[0];
+		if (!kept) throw new Error("Expected a mid-run snapshot");
+		expect(kept).not.toBe(result.trace);
+		expect(shellVisualization(kept)).toBeDefined();
+		expect(shellVisualization(kept)).not.toBeInstanceOf(piNatives.RunTrace);
+		expect(shellVisualization(result.trace)).not.toBeInstanceOf(piNatives.RunTrace);
 	});
 
 	it("keeps tracing and restores a run whose values are not UTF-8", async () => {

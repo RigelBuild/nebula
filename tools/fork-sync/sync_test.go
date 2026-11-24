@@ -14,6 +14,190 @@ import (
 	"github.com/google/go-github/v93/github"
 )
 
+func TestSyncSkipsChangedGitlink(t *testing.T) {
+	fixture := newSyncFixture(t, false)
+	prepareSyncGitlinkChange(t, fixture, "0123456789abcdef0123456789abcdef01234567", "1123456789abcdef0123456789abcdef01234567")
+	assertSyncSkipsGitlink(t, fixture)
+}
+
+func TestSyncSkipsAddedGitlink(t *testing.T) {
+	fixture := newSyncFixture(t, false)
+	prepareSyncGitlinkChange(t, fixture, "", "0123456789abcdef0123456789abcdef01234567")
+	assertSyncSkipsGitlink(t, fixture)
+}
+
+func TestSyncSkipsDeletedGitlink(t *testing.T) {
+	fixture := newSyncFixture(t, false)
+	prepareSyncGitlinkChange(t, fixture, "0123456789abcdef0123456789abcdef01234567", "")
+	assertSyncSkipsGitlink(t, fixture)
+}
+
+func TestSyncReplacesGitlinkWithDirectory(t *testing.T) {
+	fixture := newSyncFixture(t, false)
+	prepareSyncGitlinkReplacement(t, fixture, "sub/child.txt", "directory content\n")
+	assertSyncGitlinkReplacement(t, fixture, "sub/child.txt", "directory content")
+}
+
+func TestSyncReplacesGitlinkWithFile(t *testing.T) {
+	fixture := newSyncFixture(t, false)
+	prepareSyncGitlinkReplacement(t, fixture, "sub", "file content\n")
+	assertSyncGitlinkReplacement(t, fixture, "sub", "file content")
+}
+
+func TestSyncSkipsRenamedGitlink(t *testing.T) {
+	fixture := newSyncFixture(t, false)
+	prepareSyncGitlinkRename(t, fixture, "sub", "renamed")
+	assertSyncSkipsGitlinkPath(t, fixture, "renamed")
+}
+
+func TestSyncSkipsNonASCIIPathGitlink(t *testing.T) {
+	fixture := newSyncFixture(t, false)
+	prepareSyncGitlinkAtPath(t, fixture, "café")
+	assertSyncSkipsGitlinkPath(t, fixture, "café")
+}
+
+func TestDiffHeaderMatchesQuotedPaths(t *testing.T) {
+	entry := rawDiffEntry{sourcePath: "café\tfile", destinationPath: "café\tfile"}
+	section := []byte("diff --git \"a/caf\\303\\251\\tfile\" \"b/caf\\303\\251\\tfile\"\n")
+	if !diffHeaderMatches(section, entry) {
+		t.Fatal("quoted Git paths did not match raw paths")
+	}
+}
+
+func prepareSyncGitlinkReplacement(t *testing.T, fixture *syncFixture, path, content string) {
+	t.Helper()
+	gitTest(t, fixture.upstream, "read-tree", fixture.oldCommit)
+	gitTest(t, fixture.upstream, "update-index", "--add", "--cacheinfo", "160000,0123456789abcdef0123456789abcdef01234567,sub")
+	gitlinksTree := strings.TrimSpace(string(gitOutput(t, fixture.upstream, "write-tree")))
+	gitlinkCommit := strings.TrimSpace(string(gitOutput(t, fixture.upstream, "commit-tree", gitlinksTree, "-p", fixture.oldCommit, "-m", "recorded gitlink")))
+	fixture.oldCommit = gitlinkCommit
+	gitTest(t, fixture.upstream, "read-tree", gitlinkCommit)
+	gitTest(t, fixture.upstream, "update-index", "--force-remove", "sub")
+	blob := hashRaw(t, fixture.upstream, content)
+	gitTest(t, fixture.upstream, "update-index", "--add", "--cacheinfo", "100644,"+blob+","+path)
+	valueBlob := hashRaw(t, fixture.upstream, "upstream\n")
+	gitTest(t, fixture.upstream, "update-index", "--cacheinfo", "100644,"+valueBlob+",value.txt")
+	newTree := strings.TrimSpace(string(gitOutput(t, fixture.upstream, "write-tree")))
+	fixture.newCommit = strings.TrimSpace(string(gitOutput(t, fixture.upstream, "commit-tree", newTree, "-p", gitlinkCommit, "-m", "replace gitlink and update value")))
+	gitTest(t, fixture.upstream, "update-ref", "refs/heads/main", fixture.newCommit)
+	fixture.writeRecord(t, gitlinkCommit)
+	gitTest(t, fixture.root, "add", "forks/widget/upstream.json")
+	gitTest(t, fixture.root, "commit", "-m", "update recorded upstream")
+	gitTest(t, fixture.root, "push", "origin", "main")
+}
+
+func assertSyncGitlinkReplacement(t *testing.T, fixture *syncFixture, path, content string) {
+	t.Helper()
+	server := fixture.github(t)
+	defer server.Close()
+	fixture.config.Client = newGitHubClient(t, server.URL)
+	log := captureSlog(t, func() {
+		if err := syncFork(context.Background(), fixture.config, false); err != nil {
+			t.Fatal(err)
+		}
+	})
+	assertGitlinkWarning(t, log, "sub")
+	if got := strings.TrimSpace(string(mustRead(t, filepath.Join(fixture.root, "forks/widget", path)))); got != content {
+		t.Fatalf("replacement %s = %q, want %q", path, got, content)
+	}
+	if got := strings.TrimSpace(string(mustRead(t, filepath.Join(fixture.root, "forks/widget/value.txt")))); got != "upstream" {
+		t.Fatalf("synced value.txt = %q, want upstream", got)
+	}
+}
+
+func assertSyncSkipsGitlinkPath(t *testing.T, fixture *syncFixture, path string) {
+	t.Helper()
+	server := fixture.github(t)
+	defer server.Close()
+	fixture.config.Client = newGitHubClient(t, server.URL)
+	log := captureSlog(t, func() {
+		if err := syncFork(context.Background(), fixture.config, false); err != nil {
+			t.Fatal(err)
+		}
+	})
+	assertGitlinkWarning(t, log, path)
+	if got := strings.TrimSpace(string(mustRead(t, filepath.Join(fixture.root, "forks/widget/value.txt")))); got != "upstream" {
+		t.Fatalf("synced value.txt = %q, want upstream", got)
+	}
+}
+
+func prepareSyncGitlinkAtPath(t *testing.T, fixture *syncFixture, path string) {
+	t.Helper()
+	gitTest(t, fixture.upstream, "read-tree", fixture.oldCommit)
+	gitTest(t, fixture.upstream, "update-index", "--add", "--cacheinfo", "160000,0123456789abcdef0123456789abcdef01234567,"+path)
+	valueBlob := hashRaw(t, fixture.upstream, "upstream\n")
+	gitTest(t, fixture.upstream, "update-index", "--cacheinfo", "100644,"+valueBlob+",value.txt")
+	newTree := strings.TrimSpace(string(gitOutput(t, fixture.upstream, "write-tree")))
+	fixture.newCommit = strings.TrimSpace(string(gitOutput(t, fixture.upstream, "commit-tree", newTree, "-p", fixture.oldCommit, "-m", "add gitlink")))
+	gitTest(t, fixture.upstream, "update-ref", "refs/heads/main", fixture.newCommit)
+}
+func prepareSyncGitlinkRename(t *testing.T, fixture *syncFixture, oldPath, newPath string) {
+	t.Helper()
+
+	gitTest(t, fixture.upstream, "read-tree", fixture.oldCommit)
+	gitTest(t, fixture.upstream, "update-index", "--add", "--cacheinfo", "160000,0123456789abcdef0123456789abcdef01234567,"+oldPath)
+	oldTree := strings.TrimSpace(string(gitOutput(t, fixture.upstream, "write-tree")))
+	fixture.oldCommit = strings.TrimSpace(string(gitOutput(t, fixture.upstream, "commit-tree", oldTree, "-p", fixture.oldCommit, "-m", "add old gitlink")))
+	gitTest(t, fixture.upstream, "read-tree", fixture.oldCommit)
+	gitTest(t, fixture.upstream, "update-index", "--force-remove", oldPath)
+	gitTest(t, fixture.upstream, "update-index", "--add", "--cacheinfo", "160000,0123456789abcdef0123456789abcdef01234567,"+newPath)
+	valueBlob := hashRaw(t, fixture.upstream, "upstream\n")
+	gitTest(t, fixture.upstream, "update-index", "--cacheinfo", "100644,"+valueBlob+",value.txt")
+	newTree := strings.TrimSpace(string(gitOutput(t, fixture.upstream, "write-tree")))
+	fixture.newCommit = strings.TrimSpace(string(gitOutput(t, fixture.upstream, "commit-tree", newTree, "-p", fixture.oldCommit, "-m", "rename gitlink")))
+	gitTest(t, fixture.upstream, "update-ref", "refs/heads/main", fixture.newCommit)
+	fixture.writeRecord(t, fixture.oldCommit)
+	gitTest(t, fixture.root, "add", "forks/widget/upstream.json")
+	gitTest(t, fixture.root, "commit", "-m", "update recorded upstream")
+	gitTest(t, fixture.root, "push", "origin", "main")
+}
+
+func prepareSyncGitlinkChange(t *testing.T, fixture *syncFixture, oldObject, newObject string) {
+	t.Helper()
+	gitTest(t, fixture.upstream, "read-tree", fixture.oldCommit)
+	if oldObject != "" {
+		gitTest(t, fixture.upstream, "update-index", "--add", "--cacheinfo", "160000,"+oldObject+",sub")
+		oldTree := strings.TrimSpace(string(gitOutput(t, fixture.upstream, "write-tree")))
+		fixture.oldCommit = strings.TrimSpace(string(gitOutput(t, fixture.upstream, "commit-tree", oldTree, "-p", fixture.oldCommit, "-m", "recorded gitlink")))
+		gitTest(t, fixture.upstream, "read-tree", fixture.oldCommit)
+	}
+	if newObject == "" {
+		gitTest(t, fixture.upstream, "update-index", "--force-remove", "sub")
+	} else {
+		gitTest(t, fixture.upstream, "update-index", "--add", "--cacheinfo", "160000,"+newObject+",sub")
+	}
+	valueBlob := hashRaw(t, fixture.upstream, "upstream\n")
+	gitTest(t, fixture.upstream, "update-index", "--cacheinfo", "100644,"+valueBlob+",value.txt")
+	newTree := strings.TrimSpace(string(gitOutput(t, fixture.upstream, "write-tree")))
+	fixture.newCommit = strings.TrimSpace(string(gitOutput(t, fixture.upstream, "commit-tree", newTree, "-p", fixture.oldCommit, "-m", "update gitlink and value")))
+	gitTest(t, fixture.upstream, "update-ref", "refs/heads/main", fixture.newCommit)
+	if oldObject != "" {
+		fixture.writeRecord(t, fixture.oldCommit)
+		gitTest(t, fixture.root, "add", "forks/widget/upstream.json")
+		gitTest(t, fixture.root, "commit", "-m", "update recorded upstream")
+		gitTest(t, fixture.root, "push", "origin", "main")
+	}
+}
+
+func assertSyncSkipsGitlink(t *testing.T, fixture *syncFixture) {
+	t.Helper()
+	server := fixture.github(t)
+	defer server.Close()
+	fixture.config.Client = newGitHubClient(t, server.URL)
+	log := captureSlog(t, func() {
+		if err := syncFork(context.Background(), fixture.config, false); err != nil {
+			t.Fatal(err)
+		}
+	})
+	assertGitlinkWarning(t, log, "sub")
+	if got := strings.TrimSpace(string(mustRead(t, filepath.Join(fixture.root, "forks/widget/value.txt")))); got != "upstream" {
+		t.Fatalf("synced value.txt = %q, want upstream", got)
+	}
+	if mode := commitMode(t, fixture.root, "forks/widget/sub"); mode != "" {
+		t.Fatalf("gitlink was added to sync commit with mode %s", mode)
+	}
+}
+
 func TestSyncUpdatesExistingPR(t *testing.T) {
 	fixture := newSyncFixture(t, false)
 	fixture.existingPR = true

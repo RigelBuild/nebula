@@ -2,6 +2,8 @@ package main
 
 import (
 	"errors"
+	"io"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -85,4 +87,59 @@ func gitOutput(t *testing.T, dir string, args ...string) []byte {
 		t.Fatalf("git %v: %v", args, err)
 	}
 	return output
+}
+
+func captureStderr(t *testing.T, run func()) string {
+	t.Helper()
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	previous := os.Stderr
+	os.Stderr = writer
+	writerClosed, readerClosed := false, false
+	defer func() {
+		os.Stderr = previous
+		if !writerClosed {
+			if err := writer.Close(); err != nil {
+				t.Errorf("close stderr writer: %v", err)
+			}
+		}
+		if !readerClosed {
+			if err := reader.Close(); err != nil {
+				t.Errorf("close stderr reader: %v", err)
+			}
+		}
+	}()
+	run()
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	writerClosed = true
+	output, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reader.Close(); err != nil {
+		t.Fatal(err)
+	}
+	readerClosed = true
+	return string(output)
+}
+
+func captureSlog(t *testing.T, run func()) string {
+	t.Helper()
+	var output strings.Builder
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&output, nil)))
+	defer slog.SetDefault(previous)
+	run()
+	return output.String()
+}
+
+func assertGitlinkWarning(t *testing.T, log, path string) {
+	t.Helper()
+	if strings.Count(log, `msg="skipping gitlink"`) != 1 || !strings.Contains(log, "path="+path) {
+		t.Fatalf("warning log = %q, want one gitlink warning for %q", log, path)
+	}
 }

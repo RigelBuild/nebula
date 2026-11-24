@@ -203,15 +203,14 @@ func writeForkTree(ctx context.Context, nebula, repository, commit, destination,
 	defer tree.Close()
 	var index bytes.Buffer
 	for _, entry := range entries {
+		if entry.mode == "160000" {
+			warnGitlink(entry.path)
+			continue
+		}
 		if err := tree.MkdirAll(filepath.Dir(entry.path), 0o755); err != nil {
 			return nil, fmt.Errorf("create directory for %s: %w", entry.path, err)
 		}
 		switch entry.mode {
-		case "160000":
-			// A gitlink has no blob in this store. Stage it as a gitlink and create its directory empty.
-			if err := tree.MkdirAll(entry.path, 0o755); err != nil {
-				return nil, fmt.Errorf("create submodule directory %s: %w", entry.path, err)
-			}
 		case "120000":
 			if err := tree.Symlink(string(contents[entry.object]), entry.path); err != nil {
 				return nil, fmt.Errorf("write symlink %s: %w", entry.path, err)

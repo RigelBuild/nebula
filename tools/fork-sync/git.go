@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"regexp"
@@ -98,4 +99,8 @@ func transferPatchBlobs(ctx context.Context, source, destination string, patch [
 		}
 	}
 	return nil
+}
+
+func warnGitlink(path string) {
+	slog.Warn("skipping gitlink", "path", path)
 }

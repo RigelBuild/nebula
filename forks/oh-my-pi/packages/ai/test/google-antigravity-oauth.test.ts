@@ -1,13 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
-import * as compatAuth from "@oh-my-pi/pi-catalog/compat/auth";
+import * as AIError from "../src/error";
 import { AuthStorage, type AuthStorageOptions, SqliteAuthCredentialStore } from "../src/auth-storage";
 import { getProviderDefinition } from "@oh-my-pi/pi-ai/registry";
 import type { OAuthController } from "@oh-my-pi/pi-ai/registry/oauth/types";
+import { refreshOAuthToken, setUnpausedProviders } from "../src/registry/oauth";
 import {
 	ANTIGRAVITY_LOAD_CODE_ASSIST_METADATA,
 	googleAntigravityProjectHook,
 } from "../src/registry/oauth/google-antigravity";
-import { refreshOAuthToken } from "../src/registry/oauth";
 
 const CLOUD_CODE_ASSIST_ENDPOINT = "https://daily-cloudcode-pa.googleapis.com";
 const LOAD_CODE_ASSIST_URL = `${CLOUD_CODE_ASSIST_ENDPOINT}/v1internal:loadCodeAssist`;
@@ -279,9 +279,9 @@ describe("Antigravity OAuth project discovery", () => {
 });
 
 describe("Antigravity compiled OAuth refresh rule", () => {
-	// Antigravity is paused in its auth rules; these tests exercise its refresh rule, so the pause is lifted here.
-	beforeEach(() => vi.spyOn(compatAuth, "providerDisabledReason").mockReturnValue(undefined));
+	beforeEach(() => setUnpausedProviders(["google-antigravity"]));
 	afterEach(() => {
+		setUnpausedProviders([]);
 		vi.restoreAllMocks();
 	});
 
@@ -359,9 +359,9 @@ describe("Antigravity compiled OAuth refresh rule", () => {
 });
 
 describe("Antigravity AuthStorage refresh persistence", () => {
-	// Antigravity is paused in its auth rules; these tests exercise its refresh persistence, so the pause is lifted here.
-	beforeEach(() => vi.spyOn(compatAuth, "providerDisabledReason").mockReturnValue(undefined));
+	beforeEach(() => setUnpausedProviders(["google-antigravity"]));
 	afterEach(() => {
+		setUnpausedProviders([]);
 		vi.restoreAllMocks();
 	});
 	async function makeStorage(
@@ -634,7 +634,9 @@ describe("Antigravity AuthStorage refresh persistence", () => {
 });
 
 describe("Antigravity OAuth login", () => {
+	beforeEach(() => setUnpausedProviders(["google-antigravity"]));
 	afterEach(() => {
+		setUnpausedProviders([]);
 		vi.restoreAllMocks();
 	});
 
@@ -701,5 +703,239 @@ describe("Antigravity OAuth login", () => {
 		expect(tokenForm?.get("redirect_uri")).toBe(params.get("redirect_uri"));
 		expect(Bun.SHA256.hash(tokenForm!.get("code_verifier")!, "base64url")).toBe(params.get("code_challenge")!);
 		expect(credentials).toMatchObject({ access: "access-token", refresh: "refresh-token", projectId: "project-123" });
+	});
+});
+
+describe("Antigravity paused OAuth refresh", () => {
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
+
+	it("refuses to refresh an existing credential without requesting a token", async () => {
+		const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+			throw new Error("unexpected network request");
+		});
+		await expect(
+			refreshOAuthToken("google-antigravity", {
+				access: "old-access",
+				refresh: "old-refresh",
+				expires: 0,
+				accountId: "account-123",
+				email: "user@example.test",
+				projectId: "project-123",
+			}),
+		).rejects.toBeInstanceOf(AIError.ProviderDisabledError);
+		expect(fetchSpy).not.toHaveBeenCalled();
+	});
+
+	it("refuses to refresh a credential before project validation", async () => {
+		const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+			throw new Error("unexpected network request");
+		});
+		await expect(
+			refreshOAuthToken("google-antigravity", {
+				access: "old-access",
+				refresh: "old-refresh",
+				expires: 0,
+				accountId: "account-123",
+			}),
+		).rejects.toBeInstanceOf(AIError.ProviderDisabledError);
+		expect(fetchSpy).not.toHaveBeenCalled();
+	});
+});
+
+describe("Antigravity paused OAuth login", () => {
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
+
+	it("refuses to start a login", async () => {
+		const store = await SqliteAuthCredentialStore.open(":memory:");
+		const storage = new AuthStorage(store);
+		try {
+			const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(() => {
+				throw new Error("fetch must not be called");
+			});
+			await expect(
+				storage.oauth.login("google-antigravity", {
+					onAuth: () => {},
+					onPrompt: async () => "",
+					onProgress: () => {},
+				}),
+			).rejects.toBeInstanceOf(AIError.ProviderDisabledError);
+			expect(fetchSpy).not.toHaveBeenCalled();
+		} finally {
+			storage.close();
+		}
+	});
+});
+
+describe("Antigravity paused AuthStorage behavior", () => {
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
+
+	it("stores OAuth credentials but hides them from reads and key resolution", async () => {
+		const store = await SqliteAuthCredentialStore.open(":memory:");
+		const storage = new AuthStorage(store);
+		const credential = {
+			type: "oauth" as const,
+			access: "stored-access",
+			refresh: "stored-refresh",
+			expires: Date.now() + 60_000,
+			accountId: "account-123",
+			projectId: "project-123",
+		};
+		try {
+			await storage.credentials.set("google-antigravity", credential);
+
+			expect(store.listAuthCredentials("google-antigravity")).toMatchObject([{ credential }]);
+			expect(storage.credentials.get("google-antigravity")).toBeUndefined();
+			expect(storage.credentials.list("google-antigravity")).toEqual([]);
+			expect(storage.credentials.all()["google-antigravity"]).toBeUndefined();
+			expect(storage.oauth.accounts("google-antigravity")).toEqual([]);
+			expect(storage.credentials.getOAuth("google-antigravity")).toBeUndefined();
+			expect(await storage.keys.get("google-antigravity")).toBeUndefined();
+			await expect(storage.keys.getWithCredential("google-antigravity")).rejects.toBeInstanceOf(
+				AIError.ProviderDisabledError,
+			);
+		} finally {
+			storage.close();
+		}
+	});
+
+	it("does not refresh expired stored credentials during key lookup", async () => {
+		const refreshOAuthCredential = vi.fn(async () => ({
+			access: "fresh-access",
+			refresh: "fresh-refresh",
+			expires: Date.now() + 60_000,
+		}));
+		const store = await SqliteAuthCredentialStore.open(":memory:");
+		const storage = new AuthStorage(store, { refreshOAuthCredential });
+		try {
+			await storage.credentials.set("google-antigravity", {
+				type: "oauth",
+				access: "old-access",
+				refresh: "old-refresh",
+				expires: 0,
+				accountId: "account-123",
+				projectId: "project-123",
+			});
+
+			expect(await storage.keys.get("google-antigravity")).toBeUndefined();
+			expect(refreshOAuthCredential).not.toHaveBeenCalled();
+			expect(store.listAuthCredentials("google-antigravity")).toMatchObject([
+				{ credential: { access: "old-access", accountId: "account-123" } },
+			]);
+		} finally {
+			storage.close();
+		}
+	});
+
+	it("does not force-refresh a credential hidden by the pause", async () => {
+		const refreshOAuthCredential = vi.fn(async () => ({
+			access: "fresh-access",
+			refresh: "fresh-refresh",
+			expires: Date.now() + 60_000,
+			accountId: "account-other",
+		}));
+		const store = await SqliteAuthCredentialStore.open(":memory:");
+		const storage = new AuthStorage(store, { refreshOAuthCredential });
+		try {
+			await storage.credentials.set("google-antigravity", {
+				type: "oauth",
+				access: "old-access",
+				refresh: "old-refresh",
+				expires: Date.now() + 60_000,
+				accountId: "account-123",
+				projectId: "project-123",
+			});
+			const row = store.listAuthCredentials("google-antigravity")[0];
+			if (!row) throw new Error("missing stored credential");
+
+			expect(storage.credentials.list("google-antigravity")).toEqual([]);
+			await expect(storage.oauth.refresh(row.id)).rejects.toThrow(`No credential with id=${row.id}`);
+			expect(refreshOAuthCredential).not.toHaveBeenCalled();
+			expect(store.listAuthCredentials("google-antigravity")).toMatchObject([
+				{ credential: { access: "old-access", accountId: "account-123" } },
+			]);
+		} finally {
+			storage.close();
+		}
+	});
+
+	it("skips paused credentials during health checks before delegate refresh", async () => {
+		const refreshOAuthCredential = vi.fn(async () => ({
+			access: "conflicting-access",
+			refresh: "conflicting-refresh",
+			expires: Date.now() + 60_000,
+			accountId: "account-other",
+		}));
+		const store = await SqliteAuthCredentialStore.open(":memory:");
+		const storage = new AuthStorage(store, { refreshOAuthCredential });
+		try {
+			await storage.credentials.set("google-antigravity", {
+				type: "oauth",
+				access: "old-access",
+				refresh: "old-refresh",
+				expires: Date.now() - 60_000,
+				accountId: "account-123",
+				projectId: "project-123",
+			});
+
+			expect(await storage.health.check()).toEqual([]);
+			expect(refreshOAuthCredential).not.toHaveBeenCalled();
+			expect(store.listAuthCredentials("google-antigravity")).toMatchObject([
+				{ credential: { access: "old-access", accountId: "account-123" } },
+			]);
+		} finally {
+			storage.close();
+		}
+	});
+
+	it("continues to skip credentials changed in storage by another process", async () => {
+		const refreshOAuthCredential = vi.fn(async () => {
+			throw new Error("unexpected refresh");
+		});
+		const store = await SqliteAuthCredentialStore.open(":memory:");
+		const storage = new AuthStorage(store, { refreshOAuthCredential });
+		try {
+			await storage.credentials.set("google-antigravity", {
+				type: "oauth",
+				access: "old-access",
+				refresh: "old-refresh",
+				expires: Date.now() - 60_000,
+				accountId: "account-123",
+				projectId: "project-123",
+			});
+			const listAuthCredentials = store.listAuthCredentials.bind(store);
+			let peerRotated = false;
+			vi.spyOn(store, "listAuthCredentials").mockImplementation(provider => {
+				if (provider === "google-antigravity" && !peerRotated) {
+					peerRotated = true;
+					const row = listAuthCredentials(provider)[0];
+					if (!row) throw new Error("missing stored credential");
+					store.updateAuthCredential(row.id, {
+						type: "oauth",
+						access: "peer-access",
+						refresh: "peer-refresh",
+						expires: Date.now() + 120_000,
+						accountId: "account-other",
+						projectId: "project-123",
+					});
+				}
+				return listAuthCredentials(provider);
+			});
+
+			expect(await storage.health.check()).toEqual([]);
+			expect(refreshOAuthCredential).not.toHaveBeenCalled();
+			expect(store.listAuthCredentials("google-antigravity")[0]?.credential).toMatchObject({
+				type: "oauth",
+				access: "peer-access",
+				accountId: "account-other",
+			});
+		} finally {
+			storage.close();
+		}
 	});
 });

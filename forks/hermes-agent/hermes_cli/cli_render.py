@@ -17,7 +17,7 @@ import threading
 import time
 from contextlib import contextmanager, suppress
 from agent.i18n import t
-from agent.think_scrubber import THINK_TAG_NAMES
+from agent.think_scrubber import THINK_TAG_NAMES, _strip_visible_text
 from hermes_cli.banner import format_banner_version_label
 from rich.console import Console
 from rich.text import Text as _RichText
@@ -39,18 +39,14 @@ _TOOL_CALL_TAGS = ("tool_call", "tool_calls", "tool_result", "function_call", "f
 def _strip_reasoning_tags(text: str) -> str:
     """Strip reasoning blocks (closed, unterminated, orphan-close) and leaked tool-call XML from display text.
 
-    Keep in sync with ``agent.agent_runtime_helpers.strip_think_blocks`` and the stream consumer's think-tag sets.
+    Uses the shared visible-text cut for think tags.
 
     Also strips tool-call XML blocks some open models leak into visible content (``<tool_call>``,
     ``<function_calls>``, Gemma-style ``<function name="…">…</function>``). Ported from
     openclaw/openclaw#67318.
     """
-    from cli import _REASONING_TAGS, _TOOL_CALL_TAGS
-    cleaned = text
-    for tag in _REASONING_TAGS:
-        cleaned = re.sub(rf"<{tag}>.*?</{tag}>\s*", "", cleaned, flags=re.DOTALL | re.IGNORECASE)
-        cleaned = re.sub(rf"<{tag}>.*$", "", cleaned, flags=re.DOTALL | re.IGNORECASE)
-        cleaned = re.sub(rf"</{tag}>\s*", "", cleaned, flags=re.IGNORECASE)
+    from cli import _TOOL_CALL_TAGS
+    cleaned = _strip_visible_text(text)
     for tc_tag in _TOOL_CALL_TAGS:
         cleaned = re.sub(
             rf"<(?:[\w.-]+:)?{tc_tag}\b[^>]*>.*?</(?:[\w.-]+:)?{tc_tag}>\s*",

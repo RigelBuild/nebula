@@ -864,10 +864,8 @@ _THINK_STRIP_PATTERNS = (
 
 
 def strip_think_blocks(agent, content: str) -> str:
-    """Remove reasoning/thinking blocks from content, returning only visible text: closed tag
-    pairs, unterminated open tags at a block boundary (mirrors ``gateway/stream_consumer.py``),
-    stray orphan tags (all case-insensitive variants), and standalone tool-call XML blocks some
-    open models emit; ``<function>`` is boundary- and ``name=``-gated so prose mentions survive."""
+    """Use the shared visible-text cut for reasoning tags: text after a bare opener and before the
+    last bare closer is dropped. Also remove leaked tool-call blocks and orphan tags."""
     content = _flatten_content_text(content) if content else ""
     return _strip_visible_text(content) if content else ""
 

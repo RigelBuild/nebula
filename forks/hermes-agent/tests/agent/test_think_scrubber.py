@@ -217,7 +217,26 @@ class TestNamespacedReasoningTags:
         from agent.agent_runtime_helpers import strip_think_blocks
 
         out = strip_think_blocks(None, "a <mm:think>hidden</mm:think> b. Report.</mm:think>Fixed.\n<mm:think>open")
-        assert out == "a  b. Report.Fixed."
+        assert out == "Fixed."
+
+
+class TestSharedReasoningTagTailFilter:
+    @pytest.mark.parametrize("text,expected", [
+        ("REAL_SUMMARY <think>PRIVATE_THINK unterminated", "REAL_SUMMARY"),
+        ("The `<think>` tag", "The `<think>` tag"),
+        ("The `<think> tag`", "The `"),
+        ("The <think> tag leaks into prose.", "The"),
+        ("REAL <think-tank> discussion", "REAL <think-tank> discussion"),
+        ("REAL\n<think-tank> discussion", "REAL\n<think-tank> discussion"),
+        ("REAL <think type=\"x\"> discussion", "REAL"),
+        ("A <think>reasoning</think> B", "A  B"),
+    ])
+    def test_display_and_summary_helpers_agree(self, text: str, expected: str) -> None:
+        from agent.agent_runtime_helpers import strip_think_blocks
+        from agent.think_scrubber import summary_visible_text
+
+        assert strip_think_blocks(None, text).strip() == expected
+        assert summary_visible_text(text) == expected
 
 
 class TestSummaryVisibleText:

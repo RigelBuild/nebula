@@ -190,7 +190,7 @@ class StreamingThinkScrubber:
 
 _TAG_ALT = "|".join(re.escape(name) for name in THINK_TAG_NAMES)
 _CLOSER_RE = re.compile(rf"</(?:{_TAG_ALT})>", re.IGNORECASE)
-_OPENER_RE = re.compile(rf"<(?:{_TAG_ALT})\b[^>]*>", re.IGNORECASE)
+_OPENER_RE = re.compile(rf"<(?:{_TAG_ALT})(?:\s[^>]*)?>", re.IGNORECASE)
 _FENCE = r"|^(?P<fence>`{3,}(?!`)|~{3,}(?!~))[^\n]*\n.*?^(?P=fence)[`~]*[ \t]*$"
 _FLAGS = re.IGNORECASE | re.DOTALL | re.MULTILINE
 # Where a bare reasoning tag is a mention: a span wrapping one tag, or a fence with no bare closer.
@@ -240,6 +240,21 @@ def _strip_shared(text: str) -> str:
     return text
 
 
+def _strip_visible_text(text: str) -> str:
+    """Shared visible-text cut."""
+    # Shared patterns first, so the bare-tag cuts below (strict spans, re-found per cut) get the last word.
+    text = _strip_shared(text)
+    spans = _mention_spans(text)
+    closers = [m for m in _CLOSER_RE.finditer(text) if not any(a <= m.start() < b for a, b in spans)]
+    if closers:
+        text = text[closers[-1].end():]
+    spans = _mention_spans(text)
+    openers = [m for m in _OPENER_RE.finditer(text) if not any(a <= m.start() < b for a, b in spans)]
+    if openers:
+        text = text[:openers[0].start()]
+    return text
+
+
 def summary_visible_text(content: Any) -> str:
     """Visible text of a summarizer reply, for the stored summary only.
 
@@ -254,14 +269,4 @@ def summary_visible_text(content: Any) -> str:
     from agent.agent_runtime_helpers import _flatten_content_text
 
     text = _flatten_content_text(content) if content else ""
-    # Shared patterns first, so the bare-tag cuts below (strict spans, re-found per cut) get the last word.
-    text = _strip_shared(text)
-    spans = _mention_spans(text)
-    closers = [m for m in _CLOSER_RE.finditer(text) if not any(a <= m.start() < b for a, b in spans)]
-    if closers:
-        text = text[closers[-1].end():]
-    spans = _mention_spans(text)
-    openers = [m for m in _OPENER_RE.finditer(text) if not any(a <= m.start() < b for a, b in spans)]
-    if openers:
-        text = text[:openers[0].start()]
-    return text.strip()
+    return _strip_visible_text(text).strip()

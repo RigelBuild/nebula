@@ -25,7 +25,7 @@ from agent.cache_bounds import publish_lru
 from agent.prompt_builder import STEER_DISPLAY_KIND, steer_user_row
 from agent.tool_dispatch_helpers import _trajectory_normalize_msg, make_tool_result_message
 from agent.route_verdicts import ROUTE_VERDICT_FIELDS, reset_route_verdicts, reset_route_verdicts_if_moved
-from agent.think_scrubber import THINK_TAG_NAMES
+from agent.think_scrubber import THINK_TAG_NAMES, _strip_visible_text
 from agent.trajectory import convert_scratchpad_to_think
 from agent.credential_pool import (
     STATUS_EXHAUSTED, _parse_absolute_timestamp, credential_pool_entry_serves_endpoint,
@@ -58,7 +58,7 @@ _NAMED_FUNCTION_BLOCK_PATTERN = re.compile(
     r'(?:(?:(?!</function>).)*)</function>', re.DOTALL | re.IGNORECASE,
 )
 _UNTERMINATED_REASONING_BLOCK_PATTERN = re.compile(
-    rf'(?:^|\n)[ \t]*<(?:{"|".join(THINK_TAG_NAMES)})\b[^>]*>.*$', re.DOTALL | re.IGNORECASE
+    rf'(?:^|\n)[ \t]*<(?:{"|".join(THINK_TAG_NAMES)})(?:\s[^>]*)?>.*$', re.DOTALL | re.IGNORECASE
 )
 _ORPHAN_REASONING_TAG_PATTERN = re.compile(
     rf'</?(?:{"|".join(THINK_TAG_NAMES)})>\s*', re.IGNORECASE
@@ -869,9 +869,7 @@ def strip_think_blocks(agent, content: str) -> str:
     stray orphan tags (all case-insensitive variants), and standalone tool-call XML blocks some
     open models emit; ``<function>`` is boundary- and ``name=``-gated so prose mentions survive."""
     content = _flatten_content_text(content) if content else ""
-    for pattern in _THINK_STRIP_PATTERNS if content else ():
-        content = pattern.sub('', content)
-    return content
+    return _strip_visible_text(content) if content else ""
 
 
 def sync_credential_pool_entry_id(agent) -> None:

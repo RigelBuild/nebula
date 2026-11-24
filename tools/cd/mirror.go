@@ -19,8 +19,9 @@ type mirrorState string
 const (
 	mirrorUnchanged mirrorState = "unchanged"
 	mirrorPushed    mirrorState = "pushed"
-	mirrorSkipped   mirrorState = "skipped"
 )
+
+const mirrorCommitIdentity = "rigelbuild-nebula-release[bot]"
 
 // mirrorOptions names one sync-out mirror: the repository path to split out,
 // the mirror's clone URL and branch, and the token that may push to it.
@@ -41,11 +42,9 @@ func subtreeSplit(ctx context.Context, repo, prefix, commit string) (string, err
 	return split, nil
 }
 
-// syncMirror splits o.prefix at HEAD and moves the mirror branch to the split by
-// a fast-forward push. An equal tip is unchanged. An empty mirror takes the split.
-// A tip that is not an ancestor of the split is unrelated history: the push is
-// skipped and a warning goes to warn, because adopting that history is Matt's
-// decision (RIG-10830). The push never forces.
+// syncMirror splits o.prefix at HEAD and advances the mirror with a plain push.
+// An equal tip is unchanged. When the mirror tip is not an ancestor of the
+// split, a bridge merge preserves both histories and keeps later pushes fast-forwardable.
 func syncMirror(ctx context.Context, o mirrorOptions, warn io.Writer) (string, mirrorState, error) {
 	split, err := subtreeSplit(ctx, o.repo, o.prefix, "HEAD")
 	if err != nil {
@@ -59,6 +58,7 @@ func syncMirror(ctx context.Context, o mirrorOptions, warn io.Writer) (string, m
 	if tip == split {
 		return split, mirrorUnchanged, nil
 	}
+	pushTarget := split
 	if tip != "" {
 		// Fetch the tip so its commit exists locally for the ancestry check.
 		if _, err := gitRun(ctx, o.repo, env, nil, "fetch", "--no-tags", "-q", o.url, "refs/heads/"+o.branch); err != nil {
@@ -69,16 +69,82 @@ func syncMirror(ctx context.Context, o mirrorOptions, warn io.Writer) (string, m
 			return "", "", err
 		}
 		if !ancestor {
-			if _, err := fmt.Fprintf(warn, "::warning::mirror %s branch %s is not an ancestor of split %s: unrelated history, not pushing (RIG-10830)\n", o.url, tip, split); err != nil {
+			continuation, sameSplit, err := isBridgeContinuation(ctx, o.repo, tip, split)
+			if err != nil {
 				return "", "", err
 			}
-			return split, mirrorSkipped, nil
+			if continuation && sameSplit {
+				return split, mirrorUnchanged, nil
+			}
+			if !continuation {
+				if _, err := fmt.Fprintf(
+					warn,
+					"::warning::mirror %s branch tip %s is not an ancestor of split %s; "+
+						"pushing a bridge merge to preserve both histories\n",
+					o.url,
+					tip,
+					split,
+				); err != nil {
+					return "", "", err
+				}
+			}
+			pushTarget, err = gitRun(
+				ctx,
+				o.repo,
+				[]string{
+					"GIT_AUTHOR_NAME=" + mirrorCommitIdentity,
+					"GIT_AUTHOR_EMAIL=" + mirrorCommitIdentity + "@users.noreply.github.com",
+					"GIT_COMMITTER_NAME=" + mirrorCommitIdentity,
+					"GIT_COMMITTER_EMAIL=" + mirrorCommitIdentity + "@users.noreply.github.com",
+					"GIT_CONFIG_GLOBAL=/dev/null",
+					"GIT_CONFIG_NOSYSTEM=1",
+				},
+				nil,
+				"commit-tree",
+				"--no-gpg-sign",
+				split+"^{tree}",
+				"-p",
+				tip,
+				"-p",
+				split,
+				"-m",
+				"Merge history into the nebula subtree split",
+			)
+			if err != nil {
+				return "", "", err
+			}
 		}
 	}
-	if _, err := gitRun(ctx, o.repo, env, nil, "push", o.url, split+":refs/heads/"+o.branch); err != nil {
+	if _, err := gitRun(ctx, o.repo, env, nil, "push", o.url, pushTarget+":refs/heads/"+o.branch); err != nil {
 		return "", "", err
 	}
 	return split, mirrorPushed, nil
+}
+
+// isBridgeContinuation reports whether tip's second parent is already in split's history.
+// It also reports whether that parent is exactly split.
+func isBridgeContinuation(ctx context.Context, repo, tip, split string) (bool, bool, error) {
+	parents, err := git(ctx, repo, "rev-list", "--parents", "-n", "1", tip)
+	if err != nil {
+		return false, false, err
+	}
+	fields := strings.Fields(parents)
+	if len(fields) < 3 {
+		return false, false, nil
+	}
+	tipTree, err := git(ctx, repo, "rev-parse", tip+"^{tree}")
+	if err != nil {
+		return false, false, err
+	}
+	secondParentTree, err := git(ctx, repo, "rev-parse", fields[2]+"^{tree}")
+	if err != nil {
+		return false, false, err
+	}
+	if tipTree != secondParentTree {
+		return false, false, nil
+	}
+	continuation, err := isAncestor(ctx, repo, fields[2], split)
+	return continuation, fields[2] == split, err
 }
 
 // mirrorTip returns the SHA of url's branch, or "" when the branch does not exist.

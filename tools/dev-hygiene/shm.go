@@ -208,17 +208,26 @@ func shmCanonicalHeldPaths(scan func() (map[string]struct{}, error)) (map[string
 	if err != nil {
 		return nil, err
 	}
-	canonical := make(map[string]struct{}, len(paths))
+	canonical := make(map[string]struct{}, len(paths)*4)
 	for path := range paths {
 		absolute, err := filepath.Abs(path)
 		if err != nil {
 			return nil, fmt.Errorf("resolve held path %q: %w", path, err)
 		}
+		absolute = filepath.Clean(absolute)
+		canonical[path] = struct{}{}
+		canonical[absolute] = struct{}{}
+
 		resolved, err := filepath.EvalSymlinks(absolute)
-		if err != nil {
-			resolved = filepath.Clean(absolute)
+		if err == nil {
+			canonical[resolved] = struct{}{}
+			continue
 		}
-		canonical[resolved] = struct{}{}
+
+		resolvedParent, err := filepath.EvalSymlinks(filepath.Dir(absolute))
+		if err == nil {
+			canonical[filepath.Join(resolvedParent, filepath.Base(absolute))] = struct{}{}
+		}
 	}
 	return canonical, nil
 }

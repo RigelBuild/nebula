@@ -145,6 +145,75 @@ func TestPruneShmApplyRechecksHeldPaths(t *testing.T) {
 	}
 }
 
+func TestPruneShmHeldPathThroughEntrySymlink(t *testing.T) {
+	target, root := t.TempDir(), t.TempDir()
+	child := filepath.Join(target, "child")
+	if err := os.WriteFile(child, []byte("held"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	entry := filepath.Join(root, "link")
+	if err := os.Symlink(target, entry); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tt := range []struct {
+		name     string
+		heldPath string
+	}{
+		{name: "link", heldPath: entry},
+		{name: "child", heldPath: filepath.Join(entry, "child")},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var scans int
+			now := time.Now().Add(24 * time.Hour)
+			deps := shmDeps{
+				now:   func() time.Time { return now },
+				owned: func(fs.FileInfo) bool { return true },
+				held: func() (map[string]struct{}, error) {
+					scans++
+					if scans == 1 {
+						return map[string]struct{}{}, nil
+					}
+					return map[string]struct{}{tt.heldPath: {}}, nil
+				},
+			}
+			if err := pruneShm(t.Context(), root, -time.Hour, true, &printer{w: &bytes.Buffer{}}, deps); err != nil {
+				t.Fatal(err)
+			}
+			if scans != 2 {
+				t.Fatalf("held path scans = %d, want initial and apply-time scans", scans)
+			}
+			if _, err := os.Lstat(entry); err != nil {
+				t.Fatalf("symlink entry removed while held: %v", err)
+			}
+		})
+	}
+}
+
+func TestPruneShmHeldMissingPathThroughSymlinkedParent(t *testing.T) {
+	parent, alias := t.TempDir(), t.TempDir()
+	root := filepath.Join(parent, "shm")
+	entry := filepath.Join(root, "entry")
+	if err := os.MkdirAll(entry, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(parent, filepath.Join(alias, "parent")); err != nil {
+		t.Fatal(err)
+	}
+	heldPath := filepath.Join(alias, "parent", "shm", "entry", "gone")
+	deps := shmDeps{
+		now:   time.Now,
+		owned: func(fs.FileInfo) bool { return true },
+		held:  func() (map[string]struct{}, error) { return map[string]struct{}{heldPath: {}}, nil },
+	}
+	if err := pruneShm(t.Context(), root, -time.Hour, true, &printer{w: &bytes.Buffer{}}, deps); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(entry); err != nil {
+		t.Fatalf("entry removed while a missing child was held through a symlinked parent: %v", err)
+	}
+}
+
 func TestPruneShmHeldPathThroughRootSymlink(t *testing.T) {
 	for _, tt := range []struct {
 		name       string

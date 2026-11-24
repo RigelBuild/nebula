@@ -1,8 +1,7 @@
-"""RIG-11984 known gaps: bypasses found by the PR 226 review that this change does not close.
+"""RIG-11984 bypasses found by the PR 226/232 reviews.
 
-Each row is a real leak today. ``xfail(strict=True)`` keeps the suite green while the gap is
-open, and turns the row red the moment a fix makes it pass, so the marker must then be removed.
-Tracked on RIG-11984; not patched in this change (no second patch round).
+The rows pin those bypasses, so a regression fails the suite. G4 and G5 are closed here.
+The residual and Windows rows are open and marked xfail.
 """
 
 import pytest
@@ -76,14 +75,16 @@ def test_g3_kuberc_default_output_masks_whole_output(command):
 
 
 # G4 (medium, found by the fix-forward review): kubectl reads its kuberc path from the KUBERC
-# env var, not KUBECTL_KUBERC (the feature gate). The gate denies KUBECTL_KUBERC= only, so a
-# KUBERC= prefix passes and a kuberc default output stays unread.
+# env var, not KUBECTL_KUBERC (the feature gate), and HOME= moves the default kuberc path. The
+# gate denies KUBECTL_KUBERC= only, so a KUBERC= or HOME= prefix passes and a kuberc default
+# output stays unread.
 G4_KUBERC_ENV = [
     ("kuberc-env-real", "KUBERC=/tmp/k kubectl get secret s"),
+    ("kuberc-env-after-other", "FOO=1 KUBERC=/tmp/k kubectl get secret s"),
+    ("kuberc-home-prefix", "HOME=/tmp/x kubectl get secret s -o name"),
 ]
 
 
-@pytest.mark.xfail(strict=True, reason="RIG-11984 gap G4: KUBERC= env prefix not denied")
 @pytest.mark.parametrize("command", [c for _, c in G4_KUBERC_ENV], ids=[i for i, _ in G4_KUBERC_ENV])
 def test_g4_kuberc_env_prefix_masks_whole_output(command):
     text = V + "\n"
@@ -98,10 +99,14 @@ def test_g4_kuberc_env_prefix_masks_whole_output(command):
 G5_VMODULE = [
     ("vmodule-eq-get", "kubectl get secret s -o name --vmodule=round_trippers=8"),
     ("vmodule-eq-leading", "kubectl --vmodule=round_trippers=8 get secret s -o name"),
+    ("vmodule-space-get", "kubectl get secret s -o name --vmodule round_trippers=8"),
+    ("vmodule-bare-value", "kubectl get secret s -o name --vmodule"),
+    ("vmodule-no-equals", "kubectl get secret s -o name --vmodule round_trippers"),
+    ("vmodule-non-decimal", "kubectl get secret s -o name --vmodule round_trippers=high"),
+    ("vmodule-later-entry", "kubectl get secret s -o name --vmodule foo=1,round_trippers=8"),
 ]
 
 
-@pytest.mark.xfail(strict=True, reason="RIG-11984 gap G5: --vmodule round_trippers level not parsed")
 @pytest.mark.parametrize("command", [c for _, c in G5_VMODULE], ids=[i for i, _ in G5_VMODULE])
 def test_g5_vmodule_verbose_body_masks_value(command):
     text = (
@@ -110,3 +115,43 @@ def test_g5_vmodule_verbose_body_masks_value(command):
     )
     for out in _terminal(text, command):
         assert V not in out, out
+
+
+# Negative control: round_trippers=5 is below the body-logging level, so nothing is masked.
+def test_vmodule_low_level_stays_readable():
+    command = "kubectl get secret s -o yaml --vmodule=round_trippers=5"
+    text = "apiVersion: v1\nkind: Secret\n"
+    for out in _terminal(text, command):
+        assert out == text
+
+
+# Residual (RIG-11984 review): persisted KUBERC env is not visible to the gate.
+# Proxy row. Plain get is unmasked today because it has no -o. It flips only when default get
+# output is masked, so it does not track the persisted-env fix. Remove the marker when the gate
+# reads persisted kuberc env.
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "RIG-11984 residual: kuberc-relevant env (KUBERC, KUBECTL_KUBERC, HOME) exported by an "
+        "earlier call persists; the gate reads one command string and cannot see it. This row "
+        "stands in for it with a plain get."
+    ),
+)
+def test_persisted_kuberc_env_known_gap():
+    text = V + "\n"
+    for out in _terminal(text, "kubectl get secret s"):
+        assert V not in out
+
+
+# Windows gap (RIG-11984): the gate denies HOME= only. Pinned open, not fixed here.
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "RIG-11984 Windows gap: kubectl takes its home from USERPROFILE or HOMEDRIVE+HOMEPATH; "
+        "the gate denies HOME= only"
+    ),
+)
+def test_windows_home_env_prefix_known_gap():
+    text = V + "\n"
+    for out in _terminal(text, "USERPROFILE=/tmp/x kubectl get secret s -o name"):
+        assert V not in out

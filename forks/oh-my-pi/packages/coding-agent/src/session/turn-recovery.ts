@@ -1892,8 +1892,9 @@ export class TurnRecovery {
 		if (message.stopReason !== "error") return false;
 		const stopType = message.stopDetails?.type;
 		if (stopType === "refusal" || stopType === "sensitive") return true;
-		// LiteLLM wraps refusals in 5xx errors without stop details.
-		return !message.stopDetails && message.errorMessage?.includes("Refusal (") === true;
+		const id = this.#classifyRetryMessage(message);
+		if (AIError.is(id, AIError.Flag.AccountPolicy)) return false;
+		return AIError.is(id, AIError.Flag.ContentBlocked);
 	}
 
 	#getRetryFallbackResolutionContext(): RetryFallbackResolutionContext {

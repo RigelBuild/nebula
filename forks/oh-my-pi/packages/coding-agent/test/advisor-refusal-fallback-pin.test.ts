@@ -7,6 +7,7 @@ import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { ExtensionRuntime, loadExtensionFromFactory } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/loader";
 import { ExtensionRunner } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/runner";
+import { isClassifierRefusal } from "@oh-my-pi/pi-coding-agent/advisor/runtime";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import type { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
@@ -19,6 +20,16 @@ import { createInMemoryAuthStorage } from "./helpers/agent-session-setup";
 // model after every cooldown, and may retry it once a compaction has replaced
 // the history that triggered the refusal.
 describe("advisor classifier-refusal fallback", () => {
+	it("recognizes a wrapped 500 refusal without stop details", async () => {
+		const mock = createMockModel({ handler: {
+			content: [],
+			stopReason: "error",
+			errorMessage: "500 litellm.APIConnectionError: OpenAIException - Refusal (reasoning_extraction): This request was blocked",
+		} });
+		const result = await mock.stream(advisorPrimary, { messages: [] }, {}).result();
+		result.errorStatus = 500;
+		expect(isClassifierRefusal(result)).toBe(true);
+	});
 	const PAST_COOLDOWN_MS = 10 * 60_000;
 	let tempDir: TempDir;
 	let authStorage: AuthStorage;

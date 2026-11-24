@@ -198,7 +198,40 @@ describe("error-id classification", () => {
 		);
 		expect(AIError.retriable(id)).toBe(false);
 	});
+	it("classifies a LiteLLM-wrapped refusal as non-retriable despite HTTP 500", () => {
+		const errorMessage =
+			"500 litellm.APIConnectionError: APIConnectionError: OpenAIException - Refusal (reasoning_extraction): This request was blocked";
+		const assistant = message({ errorStatus: 500, errorMessage });
+		const id = AIError.classifyMessage(assistant);
 
+		expect(AIError.is(id, AIError.Flag.ContentBlocked)).toBe(true);
+		expect(AIError.is(id, AIError.Flag.Transient)).toBe(false);
+		expect(AIError.retriable(id)).toBe(false);
+		expect(AIError.isProviderRetryableError(new AIError.ProviderHttpError(errorMessage, 500))).toBe(false);
+
+		const inBandError = AIError.createInBandProviderError({
+			error: {
+				message:
+					"litellm.APIConnectionError: APIConnectionError: OpenAIException - Refusal (reasoning_extraction): This request was blocked",
+				code: 500,
+			},
+		});
+		if (!inBandError) throw new Error("Expected an in-band provider error");
+		const inBandId = AIError.classify(inBandError);
+		expect(AIError.is(inBandId, AIError.Flag.ContentBlocked)).toBe(true);
+		expect(AIError.retriable(inBandId)).toBe(false);
+		expect(AIError.isProviderRetryableError(inBandError)).toBe(false);
+	});
+
+	it("keeps an ordinary 500 retryable", () => {
+		const errorMessage = "500 Internal Server Error";
+		const id = AIError.classifyMessage(message({ errorStatus: 500, errorMessage }));
+
+		expect(AIError.is(id, AIError.Flag.ContentBlocked)).toBe(false);
+		expect(AIError.is(id, AIError.Flag.Transient)).toBe(true);
+		expect(AIError.retriable(id)).toBe(true);
+		expect(AIError.isProviderRetryableError(new AIError.ProviderHttpError(errorMessage, 500))).toBe(true);
+	});
 	it("keeps authenticated connection rejections non-retryable", () => {
 		const assistant = message({
 			errorMessage: "Unable to connect: 401 Unauthorized",

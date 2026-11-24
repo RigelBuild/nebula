@@ -240,6 +240,7 @@ const EMPTY_RESPONSE_PATTERN =
  *  other "malformed response" errors (e.g. an image API's) stay terminal. */
 const MALFORMED_RESPONSE_FINISH_PATTERN = /\bfinish reason:\s*MALFORMED_RESPONSE\b/i;
 const CONTENT_FILTER_PATTERN = /\b(?:incomplete:\s*)?content_filter\b/i;
+const WRAPPED_REFUSAL_PATTERN = /(?:^|OpenAIException - |APIError: |: )Refusal \([a-z_]+\)/;
 const ACCOUNT_POLICY_PATTERN = /\bcyber_policy\b|trusted access for cyber/i;
 export const ANTHROPIC_ACCOUNT_POLICY_PATTERN =
 	/\b(?:oauth_not_allowed_for_organization|permission_error)\b|\bOAuth authentication is currently not allowed for this organization\b/i;
@@ -623,7 +624,7 @@ function isProviderFinishErrorText(text: string): boolean {
 }
 
 function isContentBlockedText(text: string): boolean {
-	return CONTENT_FILTER_PATTERN.test(text);
+	return CONTENT_FILTER_PATTERN.test(text) || WRAPPED_REFUSAL_PATTERN.test(text);
 }
 
 function matchesOverflowText(text: string): boolean {
@@ -704,7 +705,7 @@ function classifyText(
 		// as isProviderRetryableError. classify() carries the outer terminal status
 		// down the cause chain so a wrapped phrase (ProviderHttpError 400 → cause
 		// "unexpected EOF") is caught here too.
-		if (!isTerminalClientErrorStatus(statusClean)) {
+		if (!isTerminalClientErrorStatus(statusClean) && !WRAPPED_REFUSAL_PATTERN.test(errorMessage)) {
 			if (isTimeoutText(errorMessage)) kinds |= Flag.Transient | Flag.Timeout;
 			else if (isTransientErrorText(errorMessage)) kinds |= Flag.Transient;
 			// A stream truncation, transport-level stream drop, or forwarded Codex
@@ -841,7 +842,7 @@ export function classify(error: unknown, api?: Api): number {
 				if ((linkKinds & Flag.UsageLimit) === 0) {
 					linkKinds |= Flag.Transient;
 				}
-			} else if (codeStatus >= 500) {
+			} else if (codeStatus >= 500 && !WRAPPED_REFUSAL_PATTERN.test(link.message)) {
 				linkKinds |= Flag.Transient;
 			}
 			kinds |= linkKinds;

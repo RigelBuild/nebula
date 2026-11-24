@@ -5996,14 +5996,18 @@ class DiscordAdapter(DiscordAuthorizationMixin, DiscordMediaMixin, DiscordThread
         task.add_done_callback(self._background_tasks.discard)
         task.add_done_callback(_consume_background_task_result)
         text_failure = await self._send_exec_approval_text_fallback(prompt)
-        if text_failure is not None and result.error != _CARD_CONFIRM_TIMEOUT_ERROR:
+        if text_failure is not None:
             from tools.approval import mark_gateway_approval_undelivered
             reason = f"{result.error}, then {text_failure}"
-            if mark_gateway_approval_undelivered(prompt.session_key, view.request_id, reason):
+            if result.error == _CARD_CONFIRM_TIMEOUT_ERROR:
+                logger.error("[%s] approval prompt possibly undelivered (request_id=%s): %s",
+                             self.name, view.request_id, reason)
+            elif mark_gateway_approval_undelivered(prompt.session_key, view.request_id, reason):
                 logger.error("[%s] approval prompt was never delivered (request_id=%s): %s",
                              self.name, view.request_id, reason)
         return SendResult(success=False, error=result.error,
-                          raw_response={"approval_text_fallback_posted": True})
+                          raw_response={"approval_text_fallback_posted": text_failure is None,
+                                        "approval_fallback_handled": True})
 
     async def _send_exec_approval_text_fallback(self, prompt: ExecApprovalPrompt) -> str | None:
         """Post the text fallback in the approval thread with the card's opt-in owner mention."""

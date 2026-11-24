@@ -744,6 +744,76 @@ async def test_turn_started_before_reconnect_sends_its_approval_card_through_the
         await new.disconnect()
 
 
+@pytest.mark.asyncio
+async def _run_approval_text_fallback_case(monkeypatch, *, fallback_posted):
+    from gateway.run_turn_runner import TurnRunner
+
+    adapter = DiscordAdapter(PlatformConfig(enabled=True, token="test-token",
+                                            extra={"approval_card_confirm_timeout": 0.2}))
+    created: list[_FakeBot] = []
+    await _connect(adapter, monkeypatch, created)
+    session = f"agent:other:discord:{uuid.uuid4().hex}"
+    request_id = uuid.uuid4().hex
+    entry = _queue_entry(monkeypatch, session, request_id)
+    text_sends = 0
+    notices = []
+
+    async def send(**kwargs):
+        nonlocal text_sends
+        if "view" in kwargs:
+            raise ConnectionError("gateway connection dropped")
+        text_sends += 1
+        if not fallback_posted:
+            raise RuntimeError("text fallback failed")
+        return SimpleNamespace(id=text_sends, channel=SimpleNamespace(id=777), edit=AsyncMock(), embeds=[])
+
+    thread = SimpleNamespace(id=777, send=AsyncMock(side_effect=send))
+    created[0].get_channel = lambda _chat_id: thread
+    turn = object.__new__(TurnRunner)
+    turn._ctx = SimpleNamespace(_status_adapter=adapter, _status_chat_id="555", session_key=session,
+                                _status_thread_metadata={"thread_id": "777"}, source=None)
+    loop = asyncio.get_running_loop()
+    turn._schedule = lambda coro, _message: asyncio.run_coroutine_threadsafe(coro, loop)
+    turn._close_native_stream_boundary = lambda *_args, **_kwargs: None
+    monkeypatch.setattr("gateway.run_turn_runner_approval_settle.register_approval_index_settle", lambda *args: None)
+    monkeypatch.setattr(
+        "gateway.run_turn_runner_approval_settle.register_timeout_notice",
+        lambda *args, **kwargs: notices.append((args, kwargs)))
+
+    try:
+        await asyncio.to_thread(turn._render_approval_sync, {"command": "rm x", "request_id": request_id})
+        return adapter, entry, notices, session, text_sends
+    except BaseException:
+        await adapter.disconnect()
+        raise
+
+
+@pytest.mark.asyncio
+async def test_failed_adapter_fallback_is_not_retried_by_turn_runner(monkeypatch):
+    adapter, entry, notices, session, text_sends = await _run_approval_text_fallback_case(
+        monkeypatch, fallback_posted=False)
+    try:
+        assert await asyncio.to_thread(entry.event.wait, 2)
+        assert text_sends == 1
+        assert entry.cancelled == "the approval card was not delivered"
+        assert approval._gateway_queues.get(session, []) == []
+        assert notices == []
+    finally:
+        await adapter.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_posted_approval_text_fallback_registers_timeout_notice(monkeypatch):
+    adapter, entry, notices, session, text_sends = await _run_approval_text_fallback_case(
+        monkeypatch, fallback_posted=True)
+    try:
+        assert text_sends == 1
+        assert entry.cancelled is None
+        assert approval._gateway_queues.get(session, []) == [entry]
+        assert len(notices) == 1
+    finally:
+        await adapter.disconnect()
+
 
 @pytest.mark.asyncio
 async def test_failed_card_posts_mentioned_text_in_thread(monkeypatch):
@@ -770,7 +840,7 @@ async def test_failed_card_posts_mentioned_text_in_thread(monkeypatch):
     monkeypatch.setattr(adapter, "_send_exec_approval_text_fallback", fallback)
     result = await adapter.send_exec_approval(
         chat_id="555", command="rm x", session_key=session, request_id=request_id, metadata={"thread_id": "777"})
-    assert result.raw_response == {"approval_text_fallback_posted": True}
+    assert result.raw_response == {"approval_text_fallback_posted": True, "approval_fallback_handled": True}
     assert thread.send.await_count == 1
     sent = thread.send.await_args.kwargs
     assert sent["content"].startswith("<@11111>\n")
@@ -800,7 +870,7 @@ async def test_approval_stays_down_fails_loudly_instead_of_silent_withdraw(monke
     result = await adapter._send_exec_approval_prompt(prompt)
 
     assert result.success is False
-    assert result.raw_response == {"approval_text_fallback_posted": True}
+    assert result.raw_response == {"approval_text_fallback_posted": False, "approval_fallback_handled": True}
     assert entry.undelivered == "Not connected, then send_path_degraded"
     assert "approval prompt was never delivered" in caplog.text
 
@@ -851,9 +921,47 @@ async def test_unconfirmed_card_does_not_claim_never_shown(monkeypatch):
     result = await adapter._send_exec_approval_prompt(prompt)
 
     assert result.success is False
-    assert result.raw_response == {"approval_text_fallback_posted": True}
+    assert result.raw_response == {"approval_text_fallback_posted": False, "approval_fallback_handled": True}
+    assert entry.undelivered is None
+
+
+@pytest.mark.asyncio
+async def test_timed_out_card_and_failed_text_fallback_log_possible_delivery(monkeypatch, caplog):
+    from gateway.platforms.base import ExecApprovalPrompt
+
+    adapter = DiscordAdapter(PlatformConfig(enabled=True, token="test-token",
+                                            extra={"approval_card_confirm_timeout": 0.01}))
+    session = "agent:other:discord:555"
+    request_id = uuid.uuid4().hex
+    entry = _queue_entry(monkeypatch, session, request_id)
+
+    async def card_never_confirms(_prompt, _view):
+        await asyncio.Event().wait()
+
+    async def keep_withdrawal_pending(*_args):
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(adapter, "_send_exec_approval_card", card_never_confirms)
+    monkeypatch.setattr(adapter, "_send_exec_approval_text_fallback", AsyncMock(return_value="send_path_degraded"))
+    monkeypatch.setattr(adapter, "_withdraw_undelivered_approval", keep_withdrawal_pending)
+    prompt = ExecApprovalPrompt(
+        chat_id="555", session_key=session, text="rm x", command="rm x", smart_denied=False,
+        actions=[("Allow once", "once", "primary"), ("Deny", "deny", "danger")],
+        request_id=request_id, metadata={"thread_id": "777"})
+
+    result = await adapter._send_exec_approval_prompt(prompt)
+
+    assert result.success is False
+    assert result.raw_response == {"approval_text_fallback_posted": False, "approval_fallback_handled": True}
     assert entry.undelivered is None
     assert entry.cancelled is None
+    assert approval._gateway_queues[session] == [entry]
+    assert any(record.levelno == logging.ERROR and "approval prompt possibly undelivered" in record.getMessage()
+               for record in caplog.records)
+    withdrawal = adapter._exec_approval_views[request_id].undelivered_withdrawal
+    withdrawal.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await withdrawal
 
 
 @pytest.mark.asyncio
@@ -876,7 +984,7 @@ async def test_failed_card_with_failed_text_fallback_is_marked_never_shown(monke
 
     result = await adapter._send_exec_approval_prompt(prompt)
 
-    assert result.raw_response == {"approval_text_fallback_posted": True}
+    assert result.raw_response == {"approval_text_fallback_posted": False, "approval_fallback_handled": True}
     assert entry.undelivered == "Not connected, then send_path_degraded"
     assert entry.cancelled is None
 
@@ -1873,7 +1981,7 @@ async def test_undelivered_card_fallback_names_the_confirm_window_it_is_withdraw
     _queue_entry(monkeypatch, session, request_id)
     result = await adapter.send_exec_approval(
         chat_id="555", command="rm x", session_key=session, request_id=request_id, metadata={"thread_id": "777"})
-    assert result.raw_response == {"approval_text_fallback_posted": True}
+    assert result.raw_response == {"approval_text_fallback_posted": True, "approval_fallback_handled": True}
     fallback = [call.kwargs for call in thread.send.await_args_list if "view" not in call.kwargs]
     assert len(fallback) == 1
     assert "within 30 seconds it will NOT run" in fallback[0]["content"]

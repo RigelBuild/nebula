@@ -798,9 +798,10 @@ class TurnRunner(GatewayTurnProgressMixin, GatewaySessionAgentMixin):
                     )
                     return
                 raw = getattr(fut.result(timeout=0), "raw_response", None) if fut.exception(timeout=0) is None else None
-                if outcome == "failed" and isinstance(raw, dict) and raw.get("approval_text_fallback_posted"):
-                    # The adapter already posted the text prompt in the approval's thread and owns its deadline.
-                    register_timeout_notice(self, approval_data, command=cmd, card_message_id=None, adapter=adapter)
+                if outcome == "failed" and isinstance(raw, dict) and raw.get("approval_fallback_handled"):
+                    # The adapter owns the fallback attempt, deadline and withdrawal even when its send failed.
+                    if raw.get("approval_text_fallback_posted"):
+                        register_timeout_notice(self, approval_data, command=cmd, card_message_id=None, adapter=adapter)
                     return
                 if outcome == "declined":
                     # P5(b): the connector AUTHORIZED this destination and

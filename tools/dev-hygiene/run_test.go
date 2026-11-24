@@ -67,7 +67,6 @@ func TestFailedApplyRunSendsFailureDM(t *testing.T) {
 	}
 }
 
-
 func TestDryRunFailureSendsNoDM(t *testing.T) {
 	home := isolateHome(t)
 	cotal, argsFile := recordingCotal(t)

@@ -97,7 +97,6 @@ func TestPruneShmSymlink(t *testing.T) {
 	}
 }
 
-
 func TestShmOnlySkipsWorkspaces(t *testing.T) {
 	var out, stderr bytes.Buffer
 	root := t.TempDir()

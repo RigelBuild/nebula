@@ -9,6 +9,7 @@ func TestClassifyWorkspace(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 11, 11, 12, 0, 0, 0, time.UTC)
 	idle := 2 * 24 * time.Hour
+	veryOld := now.Add(-reclaimAge - time.Hour)
 	old := now.Add(-idle - time.Hour)
 	recent := now.Add(-idle + time.Hour)
 	boundary := now.Add(-idle)
@@ -19,12 +20,12 @@ func TestClassifyWorkspace(t *testing.T) {
 		want verdict
 	}{
 		{
-			name: "old clean fully pushed is deleted",
+			name: "old clean fully pushed is reported, never deleted",
 			ws:   workspace{LastActive: old, Clean: true},
 			want: verdictDelete,
 		},
 		{
-			name: "idle exactly at the limit is deleted",
+			name: "idle exactly at the limit is reported, never deleted",
 			ws:   workspace{LastActive: boundary, Clean: true},
 			want: verdictDelete,
 		},
@@ -67,6 +68,31 @@ func TestClassifyWorkspace(t *testing.T) {
 			name: "live cwd wins over recency",
 			ws:   workspace{LastActive: recent, Clean: true, LiveCwd: true},
 			want: verdictLive,
+		},
+		{
+			name: "orphaned store idle past seven days is reclaimable, report only",
+			ws:   workspace{LastActive: veryOld, Clean: true, StoreMissing: "/gone/.jj/repo"},
+			want: verdictReclaimable,
+		},
+		{
+			name: "orphaned store idle under seven days is orphaned, kept",
+			ws:   workspace{LastActive: old, Clean: true, StoreMissing: "/gone/.jj/repo"},
+			want: verdictOrphaned,
+		},
+		{
+			name: "forgotten by its store idle past seven days is reclaimable, report only",
+			ws:   workspace{LastActive: veryOld, Clean: true, Forgotten: true},
+			want: verdictReclaimable,
+		},
+		{
+			name: "forgotten by its store idle under seven days is kept as forgotten",
+			ws:   workspace{LastActive: old, Clean: true, Forgotten: true},
+			want: verdictForgotten,
+		},
+		{
+			name: "forgotten by its store and recent is left alone",
+			ws:   workspace{LastActive: recent, Clean: true, Forgotten: true},
+			want: verdictRecent,
 		},
 	}
 

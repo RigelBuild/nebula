@@ -271,31 +271,6 @@ func TestSkipReasonIsOneLine(t *testing.T) {
 	}
 }
 
-// TestEditDuringInspectionBlocksDelete checks the stamp is the pre-jj scan: a file edited while jj runs moves the
-// delete recheck past it, so the workspace is kept.
-func TestEditDuringInspectionBlocksDelete(t *testing.T) {
-	isolateHome(t)
-	root, dir, _ := idleFakeWorkspace(t, ":")
-	bin := fakeBin(t, "jj", `case "$*" in
-*"workspace list"*) printf 'ws\t%s\n' '`+dir+`' ;;
-*"file list"*) echo README.md ;;
-*--ignore-working-copy*) ;;
-*) echo edited > README.md ;;
-esac
-`)
-	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
-	var stdout, stderr bytes.Buffer
-	if code := run(t.Context(), []string{"-apply", "-root", root, "-cotal", "false", "-to", testRecipient}, &stdout, &stderr); code != 0 {
-		t.Fatalf("exit = %d; stdout %q stderr %q", code, stdout.String(), stderr.String())
-	}
-	if !strings.Contains(stdout.String(), dir+": skipped, changed after the run's scan") {
-		t.Fatalf("edit during inspection did not block the delete: %q", stdout.String())
-	}
-	if _, err := os.Stat(filepath.Join(dir, "README.md")); err != nil {
-		t.Fatalf("edited workspace was touched: %v", err)
-	}
-}
-
 // TestReadOnlyQueriesIgnoreWorkingCopy checks every jj query but the dirty check carries --ignore-working-copy, and
 // the dirty check does not, so it snapshots unsaved edits.
 func TestReadOnlyQueriesIgnoreWorkingCopy(t *testing.T) {
@@ -333,7 +308,7 @@ func TestReadOnlyQueriesIgnoreWorkingCopy(t *testing.T) {
 }
 
 // TestMissingWorkspaceDirIsSkipped checks a workspace whose dir vanishes mid-run is reported, and the run goes on.
-// ws-a is idle and deleted; ws-b's dir is removed during ws-a's inspection, so it is skipped at its own turn.
+// ws-a is idle and reported; ws-b vanishes during ws-a's inspection and is skipped.
 func TestMissingWorkspaceDirIsSkipped(t *testing.T) {
 	isolateHome(t)
 	root, err := filepath.EvalSymlinks(t.TempDir())
@@ -366,11 +341,11 @@ esac
 	if code := run(t.Context(), []string{"-apply", "-root", root, "-cotal", cotal, "-to", testRecipient}, &stdout, &stderr); code != 0 {
 		t.Fatalf("exit = %d, want 0 with a vanished workspace dir; stdout %q stderr %q", code, stdout.String(), stderr.String())
 	}
-	if _, err := os.Stat(dirA); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("idle workspace before the missing one was not deleted: stat err = %v; stdout %q", err, stdout.String())
+	if _, err := os.Stat(dirA); err != nil {
+		t.Fatalf("idle workspace was not retained: %v; stdout %q", err, stdout.String())
 	}
-	if !strings.Contains(stdout.String(), "forgotten and deleted") {
-		t.Fatalf("idle workspace after the missing one was not processed: stdout %q", stdout.String())
+	if !strings.Contains(stdout.String(), "workspace "+dirA+": reclaimable") {
+		t.Fatalf("idle workspace was not reported: stdout %q", stdout.String())
 	}
 	if !strings.Contains(stdout.String(), dirB+": skipped: directory missing; jj may still list it") {
 		t.Fatalf("missing workspace not reported skipped: stdout %q", stdout.String())

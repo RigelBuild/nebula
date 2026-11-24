@@ -20,7 +20,7 @@ const unpushedRevset = `((::@) ~ (::remote_bookmarks()) ~ root()) ~ (@ & empty()
 var buildOutputDirs = []string{"node_modules", "target", "dist"}
 
 // regenerableNames are tool state recreated on demand (devenv, direnv, node_modules at any depth). Matched by base name.
-// Files such as .env are deliberately absent: they can hold work and must still block deletion.
+// Files such as .env are deliberately absent: they can hold user work and must not be treated as regenerable.
 var regenerableNames = []string{"node_modules", ".devenv", ".direnv"}
 
 // regenerablePaths are top-level tool caches matched by exact relative path (moon's task cache).
@@ -28,7 +28,7 @@ var regenerablePaths = []string{".moon/cache"}
 
 const (
 	jjDir = ".jj"
-	// trashPrefix names a workspace moved aside before its forget. A leftover one is finished on the next run.
+	// trashPrefix names a workspace moved aside by an interrupted deletion; the next run reports it without removing it.
 	trashPrefix = ".dev-hygiene-trash-"
 	// workspaceMarker sits in a workspace being deleted and records its jj workspace name.
 	workspaceMarker = ".dev-hygiene-name"
@@ -68,6 +68,9 @@ const (
 	skipJJInspect     = "jj inspect failed"
 )
 
+// errForgotten means the workspace's store no longer lists it. jj cannot inspect it, but that is not a failure.
+var errForgotten = errors.New("store no longer lists workspace")
+
 // cleanWorkspaces classifies every secondary jj workspace under each of cfg.roots and acts on the verdicts.
 // live lists the working directories of running processes, read once per run.
 func cleanWorkspaces(ctx context.Context, cfg config, live []string, out *printer) ([]kept, error) {
@@ -82,44 +85,55 @@ func cleanWorkspaces(ctx context.Context, cfg config, live []string, out *printe
 			out.printf("workspaces root %s: missing, skipped\n", root)
 			continue
 		}
+		// One unreadable root must not stop the sweep of the others.
 		if err != nil {
-			// One unreadable root must not stop the sweep of the others.
 			errs = append(errs, err)
 			continue
 		}
 		dirs = append(dirs, d...)
 		trash = append(trash, t...)
 	}
+	var keptWorkspaces []kept
+	skips := make(skipSummary)
+	reports := make(skipSummary)
 	for _, dir := range trash {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return nil, errors.Join(append(errs, ctxErr)...)
 		}
 		if !cfg.apply {
-			out.printf("leftover %s: would finish deletion (dry run)\n", dir)
+			out.printf("leftover %s: would report and keep (dry run)\n", dir)
 			continue
 		}
-		if _, err := finishMarked(ctx, dir, out); err != nil {
-			errs = append(errs, err)
+		// A leftover trash dir from an interrupted deletion is reported but never removed.
+		out.printf("workspace %s: leftover trash, report only\n", dir)
+		trashBytes, sizeErr := dirSize(dir)
+		reports.add("frozen", trashBytes)
+		keptWorkspaces = append(keptWorkspaces, kept{root: dir, line: dir + ": leftover trash (report only)", key: reportKeyOf(dir, nil)})
+		if sizeErr != nil {
+			errs = append(errs, sizeErr)
 		}
 	}
 	now := time.Now()
-	var keptWorkspaces []kept
-	skips := make(skipSummary)
 	for _, dir := range dirs {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return keptWorkspaces, errors.Join(append(errs, ctxErr)...)
 		}
-		k, err := sweepWorkspace(ctx, cfg, dir, live, now, skips, out)
+		k, keep, err := sweepWorkspace(ctx, cfg, dir, live, now, skips, reports, out)
 		if err != nil {
 			errs = append(errs, err)
 		}
-		if k != nil {
-			keptWorkspaces = append(keptWorkspaces, *k)
+		if keep {
+			keptWorkspaces = append(keptWorkspaces, k)
 		}
 	}
 	for _, reason := range slices.Sorted(maps.Keys(skips)) {
 		t := skips[reason]
 		out.printf("skip %s: %d workspace(s), %.2f GiB, kept in place\n", reason, t.count, float64(t.bytes)/(1<<30))
+	}
+	// Forgotten and reclaimable workspaces got a verdict, so they are reports, not skips.
+	for _, v := range slices.Sorted(maps.Keys(reports)) {
+		t := reports[v]
+		out.printf("report %s: %d workspace(s), %.2f GiB, kept in place\n", v, t.count, float64(t.bytes)/(1<<30))
 	}
 	return keptWorkspaces, errors.Join(errs...)
 }
@@ -128,104 +142,119 @@ func cleanWorkspaces(ctx context.Context, cfg config, live []string, out *printe
 // and only for an idle workspace with no process inside it. A workspace is kept, never deleted, when its store is
 // gone (orphaned-store: no jj call runs on it), when its directory is gone, or when jj could not inspect it. Each
 // of those skips is counted in skips under a fixed reason.
-func sweepWorkspace(ctx context.Context, cfg config, dir string, live []string, now time.Time, skips skipSummary, out *printer) (*kept, error) {
+func sweepWorkspace(ctx context.Context, cfg config, dir string, live []string, now time.Time, skips, reports skipSummary, out *printer) (kept, bool, error) {
 	resolved, err := filepath.EvalSymlinks(dir)
 	if errors.Is(err, fs.ErrNotExist) {
 		// The directory went away after the scan. Keep it and report it; the run goes on.
 		const reason = "directory missing; jj may still list it"
 		out.printf("workspace %s: skipped: %s\n", dir, reason)
 		skips.add(skipDirMissing, 0)
-		return &kept{root: dir, line: dir + ": not inspected (" + reason + ")", key: reportKeyOf(dir, nil)}, nil
+		return kept{root: dir, line: dir + ": not inspected (" + reason + ")", key: reportKeyOf(dir, nil)}, true, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("resolve %s: %w", dir, err)
+		return kept{}, false, fmt.Errorf("resolve %s: %w", dir, err)
 	}
 	secondary, err := secondaryWorkspace(resolved)
 	if err != nil {
-		return nil, err
+		return kept{}, false, err
 	}
 	if !secondary {
 		// A primary checkout owns the shared store. Forgetting it would be destructive.
 		out.printf("workspace %s: primary checkout, never touched\n", resolved)
-		return nil, nil
+		return kept{}, false, nil
 	}
 	store, err := pointerTarget(resolved)
 	if err != nil {
-		return nil, err
+		return kept{}, false, err
 	}
 	missing := ""
 	if _, err := os.Stat(store); errors.Is(err, fs.ErrNotExist) {
 		missing = store
 	}
-	if classify(workspace{Root: resolved, StoreMissing: missing}, now, cfg.idle) == verdictOrphaned {
-		// jj cannot judge a workspace whose store is gone, so no jj call runs on it. It is kept and sized for the report.
+	if missing != "" {
+		// jj cannot judge a workspace whose store is gone, so no jj call runs on it. A tree scan reads its clock.
+		// A failed scan leaves the clock unknown: the workspace is kept and skipped, never dropped.
+		scan, scanErr := scanTree(resolved, false)
+		ws := workspace{Root: resolved, LiveCwd: hasLiveCwd(resolved, live), LastActive: scan.newest, StoreMissing: missing}
 		bytes, sizeErr := dirSize(resolved)
+		if scanErr == nil && classify(ws, now, cfg.idle) == verdictReclaimable {
+			out.printf("workspace %s: %s\n", resolved, verdictReclaimable)
+			reports.add(string(verdictReclaimable), bytes)
+			return kept{root: resolved, line: resolved + ": " + string(verdictReclaimable) + " (store " + missing + " missing)", key: reportKeyOf(resolved, nil)}, true, errors.Join(sizeErr, scanErr)
+		}
 		out.printf("workspace %s: skipped: %s, store %s missing, %.2f GiB\n", resolved, skipOrphanedStore, missing, float64(bytes)/(1<<30))
 		skips.add(skipOrphanedStore, bytes)
-		return &kept{root: resolved, line: resolved + ": not inspected (" + skipOrphanedStore + ", store " + missing + " missing)", key: reportKeyOf(resolved, nil)}, sizeErr
+		return kept{root: resolved, line: resolved + ": not inspected (" + skipOrphanedStore + ", store " + missing + " missing)", key: reportKeyOf(resolved, nil)}, true, errors.Join(sizeErr, scanErr)
 	}
 	if _, err := os.Stat(filepath.Join(resolved, workspaceMarker)); err == nil {
-		// A marker means an earlier run began deleting this workspace; finishMarked decides whether to finish it.
+		// A marker means an earlier run began deleting this workspace. Keep it for the report; do not finish it.
 		if hasLiveCwd(resolved, live) {
 			out.printf("workspace %s: interrupted deletion, skipped while a process has its cwd inside\n", resolved)
-			return nil, nil
+			return kept{}, false, nil
 		}
 		if !cfg.apply {
-			out.printf("workspace %s: interrupted deletion, would finish (dry run)\n", resolved)
-			return nil, nil
+			out.printf("workspace %s: interrupted deletion, would report and keep (dry run)\n", resolved)
+			return kept{}, false, nil
 		}
-		reclassify, err := finishMarked(ctx, resolved, out)
-		if err != nil || !reclassify {
-			return nil, err
-		}
+		out.printf("workspace %s: interrupted deletion, report only\n", resolved)
+		bytes, sizeErr := dirSize(resolved)
+		reports.add("frozen", bytes)
+		return kept{root: resolved, line: resolved + ": interrupted deletion (report only)", key: reportKeyOf(resolved, nil)}, true, sizeErr
 	} else if !errors.Is(err, fs.ErrNotExist) {
-		return nil, fmt.Errorf("stat marker in %s: %w", resolved, err)
+		return kept{}, false, fmt.Errorf("stat marker in %s: %w", resolved, err)
 	}
 	ws := workspace{Root: resolved, LiveCwd: hasLiveCwd(resolved, live)}
-	// The one walk of this tree: the activity clock, the stamp, and the files the untracked check reads.
+	// The one walk of this tree provides the activity clock and files for the untracked check.
 	scan, err := scanTree(resolved, true)
 	if err != nil {
-		return nil, fmt.Errorf("activity of %s: %w", resolved, err)
+		return kept{}, false, fmt.Errorf("activity of %s: %w", resolved, err)
 	}
 	ws.LastActive = scan.newest
 	// Live and recent verdicts need no jj call: a snapshot would itself change the workspace.
 	first := classify(ws, now, cfg.idle)
-	out.debugf("workspace %s: live=%t last-active=%s idle-cutoff=%s verdict=%s\n",
-		resolved, ws.LiveCwd, ws.LastActive.Format(time.RFC3339), now.Add(-cfg.idle).Format(time.RFC3339), first)
 	switch first {
 	case verdictLive:
 		out.printf("workspace %s: skipped, a process has its cwd inside\n", resolved)
-		return nil, nil
+		return kept{}, false, nil
 	case verdictRecent:
-		return nil, nil
+		return kept{}, false, nil
 	}
 	reason, err := inspectWorkspace(ctx, &ws, scan)
 	if err != nil {
-		return nil, fmt.Errorf("inspect %s: %w", resolved, err)
+		return kept{}, false, fmt.Errorf("inspect %s: %w", resolved, err)
 	}
+	// A kept entry sends the skip once; report keys dedupe later runs. jj stderr can span lines, and one workspace must stay one report line.
 	if reason != "" {
 		out.printf("workspace %s: skipped: %s\n", resolved, reason)
 		bytes, sizeErr := dirSize(resolved)
 		skips.add(skipJJInspect, bytes)
-		// A kept entry sends the skip to the report recipient once; the reported set dedupes later runs. jj stderr can span lines, and
-		// one workspace must stay one report line.
 		oneLine := strings.ReplaceAll(reason, "\n", "; ")
-		return &kept{root: resolved, line: resolved + ": not inspected (" + oneLine + ")", key: reportKeyOf(resolved, nil)}, sizeErr
+		return kept{root: resolved, line: resolved + ": not inspected (" + oneLine + ")", key: reportKeyOf(resolved, nil)}, true, sizeErr
 	}
 	final := classify(ws, now, cfg.idle)
 	out.debugf("workspace %s: clean=%t unpushed=%d notes=%q verdict=%s\n",
 		resolved, ws.Clean, len(ws.Unpushed), ws.Notes, final)
 	switch final {
 	case verdictDelete:
-		return nil, deleteWorkspace(ctx, ws, cfg.apply, out)
+		// A clean, pushed, idle workspace is reported and kept; this sweep does not delete workspaces.
+		out.printf("workspace %s: reclaimable (pushed, clean, idle)\n", resolved)
+		bytes, sizeErr := dirSize(resolved)
+		reports.add(string(verdictReclaimable), bytes)
+		return kept{root: resolved, line: resolved + ": reclaimable (pushed, clean, idle)", key: reportKeyOf(resolved, nil)}, true, sizeErr
 	case verdictReport:
-		k := &kept{root: resolved, line: reportLine(ws), key: reportKeyOf(resolved, ws.Unpushed)}
+		k := kept{root: resolved, line: reportLine(ws), key: reportKeyOf(resolved, ws.Unpushed)}
 		if err := trimBuildOutput(ctx, resolved, cfg.apply, out); err != nil {
-			return k, err
+			return k, true, err
 		}
-		return k, nil
+		return k, true, nil
+	case verdictForgotten, verdictReclaimable:
+		// Forgotten and reclaimable workspaces are reported and kept, never deleted here.
+		out.printf("workspace %s: %s\n", resolved, final)
+		bytes, sizeErr := dirSize(resolved)
+		reports.add(string(final), bytes)
+		return kept{root: resolved, line: resolved + ": " + string(final), key: reportKeyOf(resolved, nil)}, true, sizeErr
 	default:
-		return nil, nil
+		return kept{}, false, nil
 	}
 }
 
@@ -328,15 +357,8 @@ type treeScan struct {
 	nested bool
 }
 
-// newestMtime returns the newest modification time in the tree, excluding .jj and build output.
-// It also counts .jj/working_copy, so jj commands a live agent runs count as activity (fleet-gc-roots rule).
-func newestMtime(root string) (time.Time, error) {
-	scan, err := scanTree(root, false)
-	return scan.newest, err
-}
-
-// scanTree walks root once. It finds the newest mtime as newestMtime describes and, when collect is set, the
-// files unclaimedFiles judges. A nested build tree is walked, since only the tracked list says whether to skip it.
+// scanTree walks root once. It finds the newest mtime and, when collect is set, the files unclaimedFiles judges.
+// A nested build tree is walked, since only the tracked list says whether to skip it.
 func scanTree(root string, collect bool) (treeScan, error) {
 	var scan treeScan
 	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
@@ -435,13 +457,18 @@ func hasTrackedUnder(tracked map[string]bool, dir string) bool {
 // non-empty skipped reason and the workspace stays. err is a local failure, such as the clock restore.
 func inspectWorkspace(ctx context.Context, ws *workspace, scan treeScan) (skipped string, err error) {
 	name, err := workspaceName(ctx, ws.Root)
+	if errors.Is(err, errForgotten) {
+		ws.Forgotten = true
+		ws.Clean = false
+		return "", nil
+	}
 	if err != nil {
 		return err.Error(), nil
 	}
 	ws.Name = name
 	ws.Clean = true
-	// The snapshot below bumps the .jj/working_copy dir mtime even when nothing changed, and newestMtime counts that
-	// mtime as activity. Restore it on every return, error paths included, so inspection never resets the idle clock.
+	// The snapshot below bumps the .jj/working_copy dir mtime even when nothing changed, and scanTree counts that.
+	// Restore it on every return, error paths included, so inspection never resets the idle clock.
 	wcDir := filepath.Join(ws.Root, jjDir, "working_copy")
 	wcBefore, err := os.Stat(wcDir)
 	if err != nil {
@@ -499,9 +526,6 @@ func inspectWorkspace(ctx context.Context, ws *workspace, scan treeScan) (skippe
 	if err := restore(); err != nil {
 		return "", err
 	}
-	// The stamp is the scan's clock, taken before any jj call. The restore undoes the snapshot's only counted
-	// change, so any file edit since the scan moves the delete recheck past it.
-	ws.Stamp = scan.newest
 	return "", nil
 }
 
@@ -530,51 +554,7 @@ func workspaceName(ctx context.Context, dir string) (string, error) {
 			return name, nil
 		}
 	}
-	return "", fmt.Errorf("no jj workspace rooted at %s (resolved %s)", dir, want)
-}
-
-// deleteWorkspace forgets the workspace while its directory is still in place, so jj removes the git worktree
-// registered for it. Only then does it rename and remove the directory. The marker written first lets the next run
-// finish a crash at any step.
-func deleteWorkspace(ctx context.Context, ws workspace, apply bool, out *printer) error {
-	if !apply {
-		out.printf("workspace %s: would forget %q and delete (dry run)\n", ws.Root, ws.Name)
-		return nil
-	}
-	// The run's live scan can be up to 30 minutes old. Recheck right before any destructive step.
-	fresh, err := recheckCwds(ctx)
-	if err != nil {
-		return fmt.Errorf("recheck live cwds before deleting %s: %w", ws.Root, err)
-	}
-	if hasLiveCwd(ws.Root, fresh) {
-		out.printf("workspace %s: skipped, a process entered it after the run's scan\n", ws.Root)
-		return nil
-	}
-	// An edit or jj command since inspection moves the clock past Stamp. A zero Stamp refuses every delete.
-	activity, err := newestMtime(ws.Root)
-	if err != nil {
-		return fmt.Errorf("recheck activity of %s: %w", ws.Root, err)
-	}
-	if activity.After(ws.Stamp) {
-		out.printf("workspace %s: skipped, changed after the run's scan\n", ws.Root)
-		return nil
-	}
-	storeRoot, err := primaryRoot(ws.Root)
-	if err != nil {
-		return err
-	}
-	if err := os.WriteFile(filepath.Join(ws.Root, workspaceMarker), []byte(storeRoot+"\t"+ws.Name+"\n"), 0o600); err != nil {
-		return fmt.Errorf("write marker in %s: %w", ws.Root, err)
-	}
-	if err := forgetName(ctx, storeRoot, ws.Name); err != nil {
-		// The workspace is still registered and usable. A stale marker would make the next run act on it.
-		return errors.Join(err, os.Remove(filepath.Join(ws.Root, workspaceMarker)))
-	}
-	trash := filepath.Join(filepath.Dir(ws.Root), trashPrefix+filepath.Base(ws.Root))
-	if err := os.Rename(ws.Root, trash); err != nil {
-		return fmt.Errorf("move %s aside: %w", ws.Root, err)
-	}
-	return removeTrash(trash, out)
+	return "", fmt.Errorf("%w: %s (resolved %s)", errForgotten, dir, want)
 }
 
 // pointerTarget resolves a secondary workspace's .jj/repo pointer to the path it names. A relative target is relative
@@ -589,24 +569,6 @@ func pointerTarget(dir string) (string, error) {
 		target = filepath.Join(dir, jjDir, target)
 	}
 	return target, nil
-}
-
-// primaryRoot resolves a secondary workspace's .jj/repo pointer to the primary checkout that owns the store.
-// It refuses any target that is not a primary, so a marker never names a store the cleanup must not touch.
-func primaryRoot(dir string) (string, error) {
-	target, err := pointerTarget(dir)
-	if err != nil {
-		return "", err
-	}
-	storeRoot := filepath.Clean(filepath.Join(target, "..", ".."))
-	info, err := os.Stat(target)
-	if err != nil {
-		return "", fmt.Errorf("stat store of %s: %w", dir, err)
-	}
-	if !info.IsDir() {
-		return "", fmt.Errorf("store of %s is not a primary checkout", dir)
-	}
-	return storeRoot, nil
 }
 
 // dirSize sums the sizes of the regular files under root. A root that does not exist has size zero.
@@ -632,144 +594,10 @@ func dirSize(root string) (int64, error) {
 	return total, err
 }
 
-// rootedAt reports whether any jj workspace, under any name, is rooted at dir. A marker's name can be stale, so the
-// finish guard asks about the path, not the name. Both paths are resolved before the comparison.
-func rootedAt(ctx context.Context, storeRoot, dir string) (bool, error) {
-	want, err := filepath.EvalSymlinks(dir)
-	if err != nil {
-		return false, nil
-	}
-	listing, err := jjQuery(ctx, storeRoot, "workspace", "list", "-T", `name ++ "\t" ++ root ++ "\n"`)
-	if err != nil {
-		return false, fmt.Errorf("list workspaces of %s: %w", storeRoot, err)
-	}
-	for line := range strings.SplitSeq(listing.stdout, "\n") {
-		_, root, ok := strings.Cut(line, "\t")
-		if !ok {
-			continue
-		}
-		got, err := filepath.EvalSymlinks(root)
-		if err == nil && got == want {
-			return true, nil
-		}
-	}
-	return false, nil
-}
-
-// sameDir reports whether two paths name the same directory. Both are resolved, so a symlinked store path matches
-// its target. A path that does not resolve matches nothing.
-func sameDir(a, b string) bool {
-	ra, errA := filepath.EvalSymlinks(a)
-	rb, errB := filepath.EvalSymlinks(b)
-	return errA == nil && errB == nil && ra == rb
-}
-
-// forgetName drops the jj workspace name from the store at storeRoot, whatever path it is rooted at. It runs
-// --ignore-working-copy, so the primary's working copy is never snapshotted. It never runs git gc, repack, or prune.
-func forgetName(ctx context.Context, storeRoot, name string) error {
-	listing, err := jjQuery(ctx, storeRoot, "workspace", "list", "-T", `name ++ "\n"`)
-	if err != nil {
-		return fmt.Errorf("list workspaces of %s: %w", storeRoot, err)
-	}
-	if !slices.Contains(nonEmptyLines(listing.stdout), name) {
-		return nil
-	}
-	if _, err := jjQuery(ctx, storeRoot, "workspace", "forget", name); err != nil {
-		return fmt.Errorf("forget workspace %q: %w", name, err)
-	}
-	return nil
-}
-
-// removeTrash deletes a directory that is already out of its workspace path.
-func removeTrash(dir string, out *printer) error {
-	if err := os.RemoveAll(dir); err != nil {
-		return fmt.Errorf("remove %s: %w", dir, err)
-	}
-	out.printf("workspace %s: forgotten and deleted\n", dir)
-	return nil
-}
-
-// readMarker returns the primary store root and workspace name a marked directory recorded.
-func readMarker(dir string) (storeRoot, name string, err error) {
-	raw, err := os.ReadFile(filepath.Join(dir, workspaceMarker))
-	if err != nil {
-		return "", "", fmt.Errorf("read marker in %s: %w", dir, err)
-	}
-	var ok bool
-	storeRoot, name, ok = strings.Cut(strings.TrimSpace(string(raw)), "\t")
-	if !ok {
-		return "", "", fmt.Errorf("malformed marker in %s", dir)
-	}
-	return storeRoot, name, nil
-}
-
-// finishMarked completes a deletion a crash or error interrupted. A leftover trash dir needs only the forget and
-// removal. A marked dir still at its path is judged by jj first: if its name is still registered there, the forget
-// never ran, so the marker goes and it reports reclassify=true. Never delete it blind.
-func finishMarked(ctx context.Context, dir string, out *printer) (reclassify bool, err error) {
-	storeRoot, name, err := readMarker(dir)
-	if err != nil {
-		return false, err
-	}
-	if strings.HasPrefix(filepath.Base(dir), trashPrefix) {
-		if err := forgetName(ctx, storeRoot, name); err != nil {
-			return false, err
-		}
-		return false, removeTrash(dir, out)
-	}
-	owner, err := primaryRoot(dir)
-	if err != nil {
-		return false, err
-	}
-	if !sameDir(owner, storeRoot) {
-		out.printf("workspace %s: marker names another store, removed; reclassifying\n", dir)
-		return true, dropMarker(dir)
-	}
-	rooted, err := rootedAt(ctx, storeRoot, dir)
-	if err != nil {
-		return false, err
-	}
-	if rooted {
-		// A workspace is still rooted here, under some name. The marker is stale: a forget never ran, or the file
-		// was snapshotted into another workspace. Drop it and judge the workspace normally.
-		out.printf("workspace %s: stale marker, a workspace is still rooted here; removed, reclassifying\n", dir)
-		return true, dropMarker(dir)
-	}
-	fresh, err := liveCwds(ctx)
-	if err != nil {
-		return false, fmt.Errorf("recheck live cwds before finishing %s: %w", dir, err)
-	}
-	if hasLiveCwd(dir, fresh) {
-		out.printf("workspace %s: interrupted deletion skipped, a process has its cwd inside\n", dir)
-		return false, nil
-	}
-	trash := filepath.Join(filepath.Dir(dir), trashPrefix+filepath.Base(dir))
-	if err := os.Rename(dir, trash); err != nil {
-		return false, fmt.Errorf("move %s aside: %w", dir, err)
-	}
-	return false, removeTrash(trash, out)
-}
-
-// dropMarker removes a stale marker and restores the root dir mtime, which the removal bumps. The root mtime is the
-// activity clock, so dropping a marker must not make the workspace read as recent (trimBuildOutput pattern).
-func dropMarker(dir string) error {
-	before, err := os.Stat(dir)
-	if err != nil {
-		return fmt.Errorf("stat %s: %w", dir, err)
-	}
-	if err := os.Remove(filepath.Join(dir, workspaceMarker)); err != nil {
-		return fmt.Errorf("remove marker in %s: %w", dir, err)
-	}
-	if err := os.Chtimes(dir, time.Now(), before.ModTime()); err != nil {
-		return fmt.Errorf("restore activity clock of %s: %w", dir, err)
-	}
-	return nil
-}
-
 // trimBuildOutput removes top-level build trees from a kept workspace, but only where no tracked file lives.
 // Source is never touched.
 func trimBuildOutput(ctx context.Context, root string, apply bool, out *printer) error {
-	// Removing a child updates the root's mtime, which is the activity clock. Restore it so a trim never defers deletion.
+	// Removing a child updates the root's mtime, which is the activity clock. Restore it so trimming does not reset the idle clock.
 	before, err := os.Stat(root)
 	if err != nil {
 		return fmt.Errorf("stat %s: %w", root, err)
@@ -827,9 +655,6 @@ func reportLine(ws workspace) string {
 	}
 	return line
 }
-
-// recheckCwds is the live-cwd scan deleteWorkspace repeats before deleting. Tests replace it.
-var recheckCwds = liveCwds
 
 // jj runs a jj command that may snapshot the working copy.
 func jj(ctx context.Context, dir string, args ...string) (commandResult, error) {

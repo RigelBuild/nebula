@@ -6,9 +6,9 @@ import "time"
 type verdict string
 
 const (
-	// verdictDelete describes idle, clean, fully pushed workspaces. The sweep reports them and does not delete them.
+	// verdictDelete describes idle, clean, landed workspaces. The sweep reports them and does not delete them.
 	verdictDelete verdict = "delete"
-	// verdictReport: idle but dirty or holding unpushed commits. Never removed; build output only.
+	// verdictReport: idle but dirty or holding unlanded commits. Never removed; build output only.
 	verdictReport verdict = "report"
 	// verdictRecent: touched within the idle window. Left alone.
 	verdictRecent verdict = "recent"
@@ -18,17 +18,17 @@ const (
 	verdictOrphaned verdict = "orphaned-store"
 	// verdictForgotten: the store no longer lists this workspace, so jj cannot inspect it. Kept in place.
 	verdictForgotten verdict = "forgotten"
-	// verdictReclaimable counts clean, pushed workspaces idle past the idle window and orphaned or forgotten ones idle past seven days.
+	// verdictReclaimable includes clean, landed workspaces and old orphaned or forgotten ones; it is report-only.
 	verdictReclaimable verdict = "reclaimable"
 )
 
-// workspace is the state classify decides on. Unpushed holds change IDs not yet on any remote bookmark.
+// workspace is the state classify decides on. Unlanded holds change IDs not in trunk.
 type workspace struct {
 	Name         string
 	Root         string
 	LastActive   time.Time
 	Clean        bool
-	Unpushed     []string
+	Unlanded     []string
 	LiveCwd      bool
 	Notes        []string
 	StoreMissing string
@@ -40,7 +40,7 @@ type workspace struct {
 // Reclaimable is age-only plus forgotten or orphaned; no open-change check runs, so it stays a report, never a delete.
 const reclaimAge = 7 * 24 * time.Hour
 
-// classify applies the rules in order: live cwd, then recency, then a store jj cannot judge, then pushed-and-clean.
+// classify applies the rules in order: live cwd, recency, a store jj cannot judge, then landed-and-clean.
 // A workspace whose store is gone or no longer lists it is orphaned or forgotten while recent; once idle past
 // reclaimAge it is reclaimable. Reclaimable is a report and never a delete.
 func classify(ws workspace, now time.Time, idle time.Duration) verdict {
@@ -59,7 +59,7 @@ func classify(ws workspace, now time.Time, idle time.Duration) verdict {
 		}
 		return verdictForgotten
 	}
-	if !ws.Clean || len(ws.Unpushed) > 0 {
+	if !ws.Clean || len(ws.Unlanded) > 0 {
 		return verdictReport
 	}
 	return verdictDelete

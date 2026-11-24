@@ -64,8 +64,8 @@ func saveReportState(path string, st reportState) error {
 	return nil
 }
 
-// newKept returns the kept workspaces not in the reported set. A workspace is keyed by its root and unpushed IDs,
-// so a change to its unpushed work is reported again.
+// newKept returns the kept workspaces not in the reported set. A workspace is keyed by its root and unlanded IDs,
+// so a change to its unlanded work is reported again.
 func newKept(kepts []kept, st reportState) []kept {
 	var fresh []kept
 	for _, k := range kepts {
@@ -81,10 +81,10 @@ func reportKey(k kept) string {
 	return k.key
 }
 
-// reportKeyOf is the reported-set key: the root and its unpushed change IDs, tab separated.
+// reportKeyOf is the reported-set key: the root and its unlanded change IDs, tab separated.
 // Notes such as the untracked-file count stay out, so routine build churn does not re-DM a workspace.
-func reportKeyOf(root string, unpushed []string) string {
-	return root + "\t" + strings.Join(unpushed, "|")
+func reportKeyOf(root string, unlanded []string) string {
+	return root + "\t" + strings.Join(unlanded, "|")
 }
 
 // keyRoot returns the workspace root a reported-set key names.
@@ -94,7 +94,7 @@ func keyRoot(key string) string {
 }
 
 // pruneReported keeps entries whose workspace root still exists. A recent or live workspace is not kept this run,
-// but its root still exists, so its key stays and the same unpushed work is not re-DMed.
+// but its root still exists, so its key stays and the same unlanded work is not re-DMed.
 func pruneReported(st reportState) reportState {
 	var live []string
 	for _, key := range st.Reported {
@@ -132,7 +132,7 @@ func reportKept(ctx context.Context, cfg config, kepts []kept, st reportState, f
 		return st, err
 	}
 	for _, k := range fresh {
-		// One key per root: a changed unpushed set replaces the old key rather than piling up beside it.
+		// One key per root: a changed unlanded set replaces the old key rather than piling up beside it.
 		st.Reported = slices.DeleteFunc(st.Reported, func(key string) bool { return keyRoot(key) == k.root })
 		st.Reported = append(st.Reported, reportKey(k))
 	}
@@ -174,7 +174,7 @@ func failureText(host string, err error) string {
 // keptText builds the DM body: a header, then one line per kept workspace up to reportCap, then a count of the rest.
 func keptText(host string, fresh []kept, fullPath string) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "dev-hygiene on %s kept %d idle jj workspace(s) it did not delete (unpushed, dirty, or not inspected). Full list: %s", host, len(fresh), fullPath)
+	fmt.Fprintf(&b, "dev-hygiene on %s kept %d idle jj workspace(s) it did not delete (unlanded, dirty, or not inspected). Full list: %s", host, len(fresh), fullPath)
 	shown := min(len(fresh), reportCap)
 	for _, k := range fresh[:shown] {
 		fmt.Fprintf(&b, "\n- %s", k.line)

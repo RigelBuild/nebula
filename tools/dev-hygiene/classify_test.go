@@ -20,7 +20,7 @@ func TestClassifyWorkspace(t *testing.T) {
 		want verdict
 	}{
 		{
-			name: "old clean fully pushed is reported, never deleted",
+			name: "old clean landed work is reported, never deleted",
 			ws:   workspace{LastActive: old, Clean: true},
 			want: verdictDelete,
 		},
@@ -30,18 +30,18 @@ func TestClassifyWorkspace(t *testing.T) {
 			want: verdictDelete,
 		},
 		{
-			name: "old clean with an unpushed change is reported, never deleted",
-			ws:   workspace{LastActive: old, Clean: true, Unpushed: []string{"abc123"}},
+			name: "old clean with an unlanded change is reported, never deleted",
+			ws:   workspace{LastActive: old, Clean: true, Unlanded: []string{"abc123"}},
 			want: verdictReport,
 		},
 		{
-			name: "old dirty with nothing unpushed is reported, never deleted",
+			name: "old dirty with nothing unlanded is reported, never deleted",
 			ws:   workspace{LastActive: old, Clean: false},
 			want: verdictReport,
 		},
 		{
-			name: "old dirty with an unpushed change is reported",
-			ws:   workspace{LastActive: old, Clean: false, Unpushed: []string{"abc123"}},
+			name: "old dirty with an unlanded change is reported",
+			ws:   workspace{LastActive: old, Clean: false, Unlanded: []string{"abc123"}},
 			want: verdictReport,
 		},
 		{
@@ -51,7 +51,7 @@ func TestClassifyWorkspace(t *testing.T) {
 		},
 		{
 			name: "recent dirty workspace is kept, not reported",
-			ws:   workspace{LastActive: recent, Clean: false, Unpushed: []string{"abc123"}},
+			ws:   workspace{LastActive: recent, Clean: false, Unlanded: []string{"abc123"}},
 			want: verdictRecent,
 		},
 		{
@@ -60,8 +60,8 @@ func TestClassifyWorkspace(t *testing.T) {
 			want: verdictLive,
 		},
 		{
-			name: "live cwd wins over unpushed and dirty state",
-			ws:   workspace{LastActive: old, Clean: false, Unpushed: []string{"abc123"}, LiveCwd: true},
+			name: "live cwd wins over unlanded and dirty state",
+			ws:   workspace{LastActive: old, Clean: false, Unlanded: []string{"abc123"}, LiveCwd: true},
 			want: verdictLive,
 		},
 		{

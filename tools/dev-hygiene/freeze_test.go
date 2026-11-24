@@ -9,9 +9,9 @@ import (
 	"time"
 )
 
-// TestCleanPushedIdleNeverDeletedUnderApply checks a clean, pushed, idle workspace survives an apply sweep. Deletion
+// TestCleanLandedIdleNeverDeletedUnderApply checks a clean, landed, idle workspace survives an apply sweep. Deletion
 // of workspaces is frozen, so the sweep reports the workspace and keeps its directory.
-func TestCleanPushedIdleNeverDeletedUnderApply(t *testing.T) {
+func TestCleanLandedIdleNeverDeletedUnderApply(t *testing.T) {
 	f := newJJFixture(t)
 	dir := f.secondary("frozen")
 	backdate(t, dir, time.Now().Add(-100*time.Hour))

@@ -32,6 +32,9 @@ _STRIPPERS = [
 
 
 class TestToolCallStripping:
+    def test_bare_closer_cuts_display_prefix(self):
+        assert _strip_reasoning_tags("PRIVATE</think>REAL") == "REAL"
+
     def test_tool_call_block_stripped(self):
         text = '<tool_call>{"name": "x"}</tool_call>result'
         result = _strip_reasoning_tags(text)

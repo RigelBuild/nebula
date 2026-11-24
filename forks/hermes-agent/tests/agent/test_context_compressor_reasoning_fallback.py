@@ -121,6 +121,16 @@ def test_think_prefix_or_unclosed_tail_is_never_stored(content):
     assert "REAL_SUMMARY" in out
 
 
+@pytest.mark.parametrize("content", THINK_PREFIX_SHAPES)
+def test_display_and_summary_helpers_hide_think_prefix_shapes(content):
+    from agent.agent_runtime_helpers import strip_think_blocks
+    from agent.think_scrubber import summary_visible_text
+
+    for visible in (strip_think_blocks(None, content), summary_visible_text(content)):
+        assert "PRIVATE_THINK" not in visible
+        assert "REAL_SUMMARY" in visible
+
+
 def _micro_response(content):
     return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=content))])
 

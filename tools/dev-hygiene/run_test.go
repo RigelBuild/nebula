@@ -178,7 +178,7 @@ esac
 `)
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	ws := workspace{Root: root}
-	reason, err := inspectWorkspace(t.Context(), &ws, treeScan{})
+	reason, err := inspectWorkspace(t.Context(), &ws, treeScan{}, make(patchCache))
 	if err != nil || reason == "" {
 		t.Fatalf("fake jj failure not reported as skipped: reason %q, err %v", reason, err)
 	}
@@ -216,6 +216,7 @@ func idleFakeWorkspace(t *testing.T, snapshot string) (root, dir, argsFile strin
 	bin := fakeBin(t, "jj", `printf '%s\n' "$*" >> '`+argsFile+`'
 case "$*" in
 *"workspace list"*) printf 'ws\t%s\n' '`+dir+`' ;;
+*"trunk() ~ root()"*) printf 'trunk-id\n' ;;
 *--ignore-working-copy*) ;;
 *) `+snapshot+` ;;
 esac
@@ -321,7 +322,7 @@ func TestReadOnlyQueriesIgnoreWorkingCopy(t *testing.T) {
 			if readOnly {
 				t.Errorf("dirty check must snapshot, got %q", line)
 			}
-		case strings.Contains(line, "workspace list"), strings.Contains(line, "file list"), strings.Contains(line, unpushedRevset):
+		case strings.Contains(line, "workspace list"), strings.Contains(line, "file list"), strings.Contains(line, unlandedRevsetFor("trunk-id")), strings.Contains(line, "trunk() ~ root()"):
 			queries++
 			if !readOnly {
 				t.Errorf("read-only query lacks --ignore-working-copy: %q", line)
@@ -330,8 +331,69 @@ func TestReadOnlyQueriesIgnoreWorkingCopy(t *testing.T) {
 			t.Errorf("unexpected jj call %q", line)
 		}
 	}
-	if dirtyChecks != 1 || queries != 3 {
-		t.Fatalf("jj calls: %d dirty checks, %d queries, want 1 and 3:\n%s", dirtyChecks, queries, raw)
+	if dirtyChecks != 1 || queries != 4 {
+		t.Fatalf("jj calls: %d dirty checks, %d queries, want 1 and 4:\n%s", dirtyChecks, queries, raw)
+	}
+}
+
+func TestFindUnlandedChanges(t *testing.T) {
+	cases := []struct {
+		name       string
+		trunk      string
+		fallback   string
+		candidates string
+		trunkPatch string
+		want       int
+		wantErr    bool
+		trunkFail  bool
+	}{
+		{name: "merged ancestor", trunk: "trunk-id", want: 0},
+		{name: "squash merged patch", trunk: "trunk-id", candidates: "same-id\tchange same", want: 0},
+		{name: "pushed but unmerged", trunk: "trunk-id", candidates: "other-id\tchange pushed", want: 1},
+		{name: "unresolvable trunk", wantErr: true},
+		{name: "fallback main origin", fallback: "trunk-id", want: 0},
+		{name: "partly landed stack", trunk: "trunk-id", candidates: "same-id\tchange landed\nother-id\tchange unlanded", want: 1},
+		{name: "binary patches", trunk: "trunk-id", candidates: "binary-id\tchange binary", trunkPatch: `printf 'Binary files a/a and b/a differ\n'`, want: 1},
+		{name: "empty patches", trunk: "trunk-id", candidates: "empty-id\tchange empty", trunkPatch: ":", want: 1},
+		{name: "gitlink with text", trunk: "trunk-id", candidates: "gitlink-id\tchange gitlink", want: 1},
+		{name: "malformed candidate", trunk: "trunk-id", candidates: "bad", wantErr: true},
+		{name: "trunk error fallback", trunkFail: true, fallback: "trunk-id"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			trunkResult := "printf '%s\\n' '" + tc.trunk + "'"
+			if tc.trunkFail {
+				trunkResult = "exit 1"
+			}
+			trunkPatch := tc.trunkPatch
+			if trunkPatch == "" {
+				trunkPatch = `printf 'diff --git a/a b/a\n@@ -1 +1 @@\n-old\n+same\n'`
+			}
+			script := `case "$*" in
+*"trunk() ~ root()"*) ` + trunkResult + ` ;;
+*"main@origin ~ root()"*) printf '%s\n' '` + tc.fallback + `' ;;
+*"description.first_line()"*) printf '%s\n' '` + tc.candidates + `' ;;
+*"ancestors("*) printf 'trunk-commit\n' ;;
+*"diff --types -r gitlink-id"*) printf 'GG submodule\nFF a\n' ;;
+*"diff --types"*) ;;
+*"diff --git -r binary-id"*) printf 'Binary files a/a and b/a differ\n' ;;
+*"diff --git -r empty-id"*) ;;
+*"diff --git -r trunk-commit"*) ` + trunkPatch + ` ;;
+*"diff --git -r same-id"*|*"diff --git -r gitlink-id"*) printf 'diff --git a/a b/a\n@@ -1 +1 @@\n-old\n+same\n' ;;
+*"diff --git -r other-id"*) printf 'diff --git a/a b/a\n@@ -1 +1 @@\n-old\n+other\n' ;;
+*) exit 1 ;;
+esac
+`
+			bin := fakeBin(t, "jj", script)
+			t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+			got, err := findUnlandedChanges(t.Context(), t.TempDir(), make(patchCache))
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("findUnlandedChanges error = %v, want error %t", err, tc.wantErr)
+			}
+			if len(got) != tc.want {
+				t.Fatalf("unlanded = %q, want %d changes", got, tc.want)
+			}
+		})
 	}
 }
 
@@ -360,6 +422,7 @@ func TestMissingWorkspaceDirIsSkipped(t *testing.T) {
 *"workspace list"*) printf 'ws-a\nws-b\n' ;;
 *"workspace forget"*) ;;
 *"file list"*) rm -rf '`+dirB+`'; echo README.md ;;
+*"trunk() ~ root()"*) printf 'trunk-id\n' ;;
 *) ;;
 esac
 `)

@@ -48,7 +48,7 @@ func TestReportStateKeysAndPrune(t *testing.T) {
 	}
 	changed := kept{root: root, line: "x", key: reportKeyOf(root, []string{"abc", "def"})}
 	if got := newKept([]kept{changed}, st); len(got) != 1 {
-		t.Fatalf("changed unpushed set not reported: %+v", got)
+		t.Fatalf("changed unlanded set not reported: %+v", got)
 	}
 	gone := filepath.Join(t.TempDir(), "gone")
 	stale := reportState{Reported: []string{reportKeyOf(root, []string{"abc"}), reportKeyOf(gone, nil)}}
@@ -76,7 +76,7 @@ func TestKeptTextCapsTheNamedWorkspaces(t *testing.T) {
 	t.Parallel()
 	var fresh []kept
 	for range reportCap + 3 {
-		fresh = append(fresh, kept{root: "/w", line: "/w [unpushed] abc first"})
+		fresh = append(fresh, kept{root: "/w", line: "/w [unlanded] abc first"})
 	}
 	text := keptText("host", fresh, "/state/kept.txt")
 	if got := strings.Count(text, "\n- "); got != reportCap {
@@ -197,11 +197,11 @@ func TestWorkspaceRootsDepthAndSkips(t *testing.T) {
 
 func TestReportLineCapsIDs(t *testing.T) {
 	t.Parallel()
-	var unpushed []string
+	var unlanded []string
 	for range reportIDCap + 2 {
-		unpushed = append(unpushed, "abc first line")
+		unlanded = append(unlanded, "abc first line")
 	}
-	line := reportLine(workspace{Root: "/w", Unpushed: unpushed})
+	line := reportLine(workspace{Root: "/w", Unlanded: unlanded})
 	if got := strings.Count(line, "abc"); got != reportIDCap {
 		t.Fatalf("named %d changes, want %d: %q", got, reportIDCap, line)
 	}

@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -13,8 +15,122 @@ import (
 	"time"
 )
 
-// unpushedRevset selects commits no remote bookmark contains. The root commit and an empty undescribed @ are not work.
-const unpushedRevset = `((::@) ~ (::remote_bookmarks()) ~ root()) ~ (@ & empty() & description(exact:""))`
+// unlandedRevset selects workspace commits outside trunk, excluding the empty undescribed working copy.
+const unlandedRevset = `((::@) ~ (::trunk()) ~ root()) ~ (@ & empty() & description(exact:""))`
+
+func unlandedRevsetFor(trunk string) string {
+	return strings.Replace(unlandedRevset, "trunk()", trunk, 1)
+}
+
+func workspaceTrunk(ctx context.Context, dir string) (string, error) {
+	var failures []error
+	for _, ref := range []string{"trunk()", "main@origin"} {
+		result, err := jjQuery(ctx, dir, "log", "--no-graph", "-r", ref+" ~ root()", "-T", `commit_id ++ "\n"`)
+		if err != nil {
+			failures = append(failures, fmt.Errorf("resolve %s: %w", ref, err))
+			continue
+		}
+		ids := nonEmptyLines(result.stdout)
+		if len(ids) == 1 {
+			return ids[0], nil
+		}
+		failures = append(failures, fmt.Errorf("resolve %s: expected one commit, got %d", ref, len(ids)))
+	}
+	return "", fmt.Errorf("cannot resolve trunk: %w", errors.Join(failures...))
+}
+
+type patchResult struct {
+	identity [32]byte
+	valid    bool
+}
+
+type patchCache map[string]patchResult
+
+// findUnlandedChanges compares each non-trunk commit with recent trunk patches after the merge base.
+func findUnlandedChanges(ctx context.Context, dir string, cache patchCache) ([]string, error) {
+	trunk, err := workspaceTrunk(ctx, dir)
+	if err != nil {
+		return nil, err
+	}
+	candidates, err := jjQuery(ctx, dir, "log", "--no-graph", "-r", unlandedRevsetFor(trunk),
+		"-T", `commit_id ++ "\t" ++ change_id.short() ++ " " ++ description.first_line() ++ "\n"`)
+	if err != nil {
+		return nil, fmt.Errorf("list candidate commits: %w", err)
+	}
+	lines := nonEmptyLines(candidates.stdout)
+	if len(lines) == 0 {
+		return nil, nil
+	}
+	revset := fmt.Sprintf("ancestors(%s, 500) ~ ::fork_point(@ | %s) ~ root()", trunk, trunk)
+	commits, err := jjQuery(ctx, dir, "log", "--no-graph", "-r", revset, "-T", `commit_id ++ "\n"`)
+	if err != nil {
+		return nil, fmt.Errorf("list trunk commits: %w", err)
+	}
+	landed := make(map[[32]byte]struct{})
+	for _, commit := range nonEmptyLines(commits.stdout) {
+		patch, ok := cache[commit]
+		if !ok {
+			identity, valid, err := patchIdentity(ctx, dir, commit)
+			if err != nil {
+				return nil, fmt.Errorf("identify trunk patch %s: %w", commit, err)
+			}
+			patch = patchResult{identity: identity, valid: valid}
+			cache[commit] = patch
+		}
+		if patch.valid {
+			landed[patch.identity] = struct{}{}
+		}
+	}
+	unlanded := make([]string, 0, len(lines))
+	for _, candidate := range lines {
+		commit, detail, ok := strings.Cut(candidate, "\t")
+		if !ok || commit == "" || detail == "" {
+			return nil, fmt.Errorf("parse candidate commit %q", candidate)
+		}
+		identity, valid, err := patchIdentity(ctx, dir, commit)
+		if err != nil {
+			return nil, fmt.Errorf("identify candidate patch %s: %w", commit, err)
+		}
+		if _, found := landed[identity]; !valid || !found {
+			unlanded = append(unlanded, detail)
+		}
+	}
+	return unlanded, nil
+}
+
+// patchIdentity ignores blob IDs but keeps hunk coordinates to avoid equating distinct edits.
+func patchIdentity(ctx context.Context, dir, commit string) ([32]byte, bool, error) {
+	diff, err := jjQuery(ctx, dir, "diff", "--git", "-r", commit)
+	if err != nil {
+		return [32]byte{}, false, err
+	}
+	types, err := jjQuery(ctx, dir, "diff", "--types", "-r", commit)
+	if err != nil {
+		return [32]byte{}, false, err
+	}
+	for _, line := range nonEmptyLines(types.stdout) {
+		fields := strings.Fields(line)
+		if len(fields) == 0 || len(fields[0]) != 2 || strings.Contains(fields[0], "G") {
+			return [32]byte{}, false, nil
+		}
+	}
+	var normalized bytes.Buffer
+	for _, line := range strings.SplitAfter(diff.stdout, "\n") {
+		if strings.HasPrefix(line, "Binary files ") || strings.HasPrefix(line, "GIT binary patch") {
+			return [32]byte{}, false, nil
+		}
+		if strings.HasPrefix(line, "index ") {
+			continue
+		}
+		if _, err := normalized.WriteString(line); err != nil {
+			return [32]byte{}, false, fmt.Errorf("normalize diff: %w", err)
+		}
+	}
+	if normalized.Len() == 0 {
+		return [32]byte{}, false, nil
+	}
+	return sha256.Sum256(normalized.Bytes()), true, nil
+}
 
 // buildOutputDirs are build trees. A top-level one is excluded outright; a nested one only when no tracked file lives under it.
 var buildOutputDirs = []string{"node_modules", "target", "dist"}
@@ -96,6 +212,7 @@ func cleanWorkspaces(ctx context.Context, cfg config, live []string, out *printe
 	var keptWorkspaces []kept
 	skips := make(skipSummary)
 	reports := make(skipSummary)
+	patches := make(patchCache)
 	for _, dir := range trash {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return nil, errors.Join(append(errs, ctxErr)...)
@@ -118,7 +235,7 @@ func cleanWorkspaces(ctx context.Context, cfg config, live []string, out *printe
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return keptWorkspaces, errors.Join(append(errs, ctxErr)...)
 		}
-		k, keep, err := sweepWorkspace(ctx, cfg, dir, live, now, skips, reports, out)
+		k, keep, err := sweepWorkspace(ctx, cfg, dir, live, now, skips, reports, out, patches)
 		if err != nil {
 			errs = append(errs, err)
 		}
@@ -142,7 +259,7 @@ func cleanWorkspaces(ctx context.Context, cfg config, live []string, out *printe
 // and only for an idle workspace with no process inside it. A workspace is kept, never deleted, when its store is
 // gone (orphaned-store: no jj call runs on it), when its directory is gone, or when jj could not inspect it. Each
 // of those skips is counted in skips under a fixed reason.
-func sweepWorkspace(ctx context.Context, cfg config, dir string, live []string, now time.Time, skips, reports skipSummary, out *printer) (kept, bool, error) {
+func sweepWorkspace(ctx context.Context, cfg config, dir string, live []string, now time.Time, skips, reports skipSummary, out *printer, patches patchCache) (kept, bool, error) {
 	resolved, err := filepath.EvalSymlinks(dir)
 	if errors.Is(err, fs.ErrNotExist) {
 		// The directory went away after the scan. Keep it and report it; the run goes on.
@@ -219,7 +336,7 @@ func sweepWorkspace(ctx context.Context, cfg config, dir string, live []string, 
 	case verdictRecent:
 		return kept{}, false, nil
 	}
-	reason, err := inspectWorkspace(ctx, &ws, scan)
+	reason, err := inspectWorkspace(ctx, &ws, scan, patches)
 	if err != nil {
 		return kept{}, false, fmt.Errorf("inspect %s: %w", resolved, err)
 	}
@@ -232,17 +349,17 @@ func sweepWorkspace(ctx context.Context, cfg config, dir string, live []string, 
 		return kept{root: resolved, line: resolved + ": not inspected (" + oneLine + ")", key: reportKeyOf(resolved, nil)}, true, sizeErr
 	}
 	final := classify(ws, now, cfg.idle)
-	out.debugf("workspace %s: clean=%t unpushed=%d notes=%q verdict=%s\n",
-		resolved, ws.Clean, len(ws.Unpushed), ws.Notes, final)
+	out.debugf("workspace %s: clean=%t unlanded=%d notes=%q verdict=%s\n",
+		resolved, ws.Clean, len(ws.Unlanded), ws.Notes, final)
 	switch final {
 	case verdictDelete:
-		// A clean, pushed, idle workspace is reported and kept; this sweep does not delete workspaces.
-		out.printf("workspace %s: reclaimable (pushed, clean, idle)\n", resolved)
+		// A clean, landed, idle workspace is reported and kept; this sweep does not delete workspaces.
+		out.printf("workspace %s: reclaimable (landed, clean, idle)\n", resolved)
 		bytes, sizeErr := dirSize(resolved)
 		reports.add(string(verdictReclaimable), bytes)
-		return kept{root: resolved, line: resolved + ": reclaimable (pushed, clean, idle)", key: reportKeyOf(resolved, nil)}, true, sizeErr
+		return kept{root: resolved, line: resolved + ": reclaimable (landed, clean, idle)", key: reportKeyOf(resolved, nil)}, true, sizeErr
 	case verdictReport:
-		k := kept{root: resolved, line: reportLine(ws), key: reportKeyOf(resolved, ws.Unpushed)}
+		k := kept{root: resolved, line: reportLine(ws), key: reportKeyOf(resolved, ws.Unlanded)}
 		if err := trimBuildOutput(ctx, resolved, cfg.apply, out); err != nil {
 			return k, true, err
 		}
@@ -455,7 +572,7 @@ func hasTrackedUnder(tracked map[string]bool, dir string) bool {
 // inspectWorkspace fills the jj-derived fields from jj and the sweep's one tree scan. It snapshots the working
 // copy, so callers run it only on idle, non-live candidates. A failed jj call is never guessed: it returns a
 // non-empty skipped reason and the workspace stays. err is a local failure, such as the clock restore.
-func inspectWorkspace(ctx context.Context, ws *workspace, scan treeScan) (skipped string, err error) {
+func inspectWorkspace(ctx context.Context, ws *workspace, scan treeScan, patches patchCache) (skipped string, err error) {
 	name, err := workspaceName(ctx, ws.Root)
 	if errors.Is(err, errForgotten) {
 		ws.Forgotten = true
@@ -505,12 +622,11 @@ func inspectWorkspace(ctx context.Context, ws *workspace, scan treeScan) (skippe
 	if err != nil {
 		return fmt.Sprintf("list tracked files: %v", err), nil
 	}
-	unpushed, err := jjQuery(ctx, ws.Root, "log", "--no-graph", "-r", unpushedRevset,
-		"-T", `change_id.short() ++ " " ++ description.first_line() ++ "\n"`)
+	unlanded, err := findUnlandedChanges(ctx, ws.Root, patches)
 	if err != nil {
-		return fmt.Sprintf("list unpushed changes: %v", err), nil
+		return fmt.Sprintf("list unlanded changes: %v", err), nil
 	}
-	ws.Unpushed = nonEmptyLines(unpushed.stdout)
+	ws.Unlanded = unlanded
 	files := make(map[string]bool)
 	for _, path := range nonEmptyLines(tracked.stdout) {
 		files[path] = true
@@ -639,18 +755,18 @@ func trimBuildOutput(ctx context.Context, root string, apply bool, out *printer)
 	return nil
 }
 
-// reportIDCap bounds the unpushed changes named on one report line, so one workspace cannot make a DM line unbounded.
+// reportIDCap bounds the unlanded changes named on one report line.
 const reportIDCap = 5
 
-// reportLine names a kept workspace, why it was kept, and up to reportIDCap unpushed change IDs with first lines.
+// reportLine names a kept workspace, why it was kept, and up to reportIDCap unlanded changes.
 func reportLine(ws workspace) string {
 	state := slices.Clone(ws.Notes)
-	if len(ws.Unpushed) > 0 {
-		state = append(state, "unpushed")
+	if len(ws.Unlanded) > 0 {
+		state = append(state, "unlanded")
 	}
-	shown := ws.Unpushed[:min(len(ws.Unpushed), reportIDCap)]
+	shown := ws.Unlanded[:min(len(ws.Unlanded), reportIDCap)]
 	line := fmt.Sprintf("%s [%s] %s", ws.Root, strings.Join(state, ","), strings.Join(shown, " | "))
-	if more := len(ws.Unpushed) - len(shown); more > 0 {
+	if more := len(ws.Unlanded) - len(shown); more > 0 {
 		line += fmt.Sprintf(" | +%d more", more)
 	}
 	return line

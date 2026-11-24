@@ -124,6 +124,39 @@ func sweep(t *testing.T, cfg config, live []string) []kept {
 	return kept
 }
 
+func TestFindUnlandedChangesRealJJ(t *testing.T) {
+	f := newJJFixture(t)
+	dir := f.secondary("landing")
+	mustWrite(t, filepath.Join(dir, "work.txt"), "landed work\n")
+	f.jj(dir, "describe", "-m", "feature work")
+	feature := strings.TrimSpace(f.jj(dir, "log", "--no-graph", "-r", "@", "-T", "commit_id"))
+	f.jj(dir, "bookmark", "create", "review-only")
+	f.jj(dir, "git", "push", "--bookmark", "review-only")
+	f.jj(dir, "new")
+
+	check := func(name string, want int) {
+		t.Helper()
+		got, err := findUnlandedChanges(t.Context(), dir, make(patchCache))
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if len(got) != want {
+			t.Fatalf("%s: unlanded = %q, want %d", name, got, want)
+		}
+	}
+	check("unmerged work", 1)
+	f.jj(f.primary, "new", "main")
+	f.jj(f.primary, "restore", "--from", feature, "--", "work.txt")
+	f.jj(f.primary, "describe", "-m", "squash feature")
+	f.jj(f.primary, "bookmark", "move", "main", "--to", "@")
+	f.jj(f.primary, "git", "push", "--bookmark", "main")
+	check("squash merged", 0)
+	mustWrite(t, filepath.Join(dir, "other.txt"), "unlanded work\n")
+	f.jj(dir, "describe", "-m", "another feature")
+	f.jj(dir, "new")
+	check("partly landed stack", 1)
+}
+
 // TestCleanWorkspacesRealJJ builds every case on one shared primary and runs one apply sweep over the root. Each
 // case then asserts its own directory: gone or kept, reported or not. One fixture keeps the package under the timeout.
 func TestCleanWorkspacesRealJJ(t *testing.T) {
@@ -146,9 +179,9 @@ func TestCleanWorkspacesRealJJ(t *testing.T) {
 			wantReport: true,
 		},
 		{
-			name: "unpushed",
+			name: "unlanded",
 			setup: func(t *testing.T, f *jjFixture) string {
-				dir := f.secondary("unpushed")
+				dir := f.secondary("unlanded")
 				mustWrite(t, filepath.Join(dir, "work.txt"), "local only\n")
 				f.jj(dir, "describe", "-m", "feat: local only")
 				backdate(t, dir, ancient)
@@ -351,10 +384,10 @@ func TestStaleMarkerHeldOnEverySweep(t *testing.T) {
 	backdate(t, dir, ancient)
 	kept := sweep(t, sweepConfig(f, true), nil)
 	if _, err := os.Stat(dir); err != nil {
-		t.Fatalf("unpushed workspace removed on the second sweep: %v\nverdicts (second sweep):\n%s", err, lastSweepLog)
+		t.Fatalf("unlanded workspace removed on the second sweep: %v\nverdicts (second sweep):\n%s", err, lastSweepLog)
 	}
 	if !keptFor(kept, dir) {
-		t.Fatalf("unpushed workspace not reported on the second sweep: kept %+v\nverdicts (second sweep):\n%s", kept, lastSweepLog)
+		t.Fatalf("unlanded workspace not reported on the second sweep: kept %+v\nverdicts (second sweep):\n%s", kept, lastSweepLog)
 	}
 }
 

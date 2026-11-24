@@ -1,4 +1,4 @@
-// Command dev-hygiene prunes Go tool caches and reclaims idle jj workspaces on dev hosts.
+// Command dev-hygiene prunes Go tool caches, reclaims idle jj workspaces, and cleans stale shared-memory entries.
 package main
 
 import (
@@ -33,6 +33,9 @@ type config struct {
 	idle          time.Duration
 	cacheAge      time.Duration
 	goCacheMaxGiB int64
+	shmRoot       string
+	shmAge        time.Duration
+	shmOnly       bool
 	apply         bool
 }
 
@@ -85,25 +88,32 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	}
 
 	out := &printer{w: stdout}
-	out.printf("dev-hygiene: %s, roots %v\n", modeName(cfg.apply), cfg.roots)
-
-	var errs []error
-	cacheDir, err := os.UserCacheDir()
-	if err != nil {
-		errs = append(errs, fmt.Errorf("resolve user cache dir: %w", err))
+	if cfg.shmOnly {
+		out.printf("dev-hygiene: %s, shm root %s\n", modeName(cfg.apply), cfg.shmRoot)
 	} else {
-		errs = append(errs, pruneGoCaches(ctx, cacheDir, time.Now().Add(-cfg.cacheAge), cfg.goCacheMaxGiB<<30, cfg.apply, out))
+		out.printf("dev-hygiene: %s, roots %v\n", modeName(cfg.apply), cfg.roots)
 	}
 
-	// One live-cwd scan per run. A failed scan skips workspace work entirely: it never guesses "none live".
-	live, err := liveCwds(ctx)
-	if err != nil {
-		errs = append(errs, fmt.Errorf("live cwd scan: %w", err))
-	} else {
-		kept, err := cleanWorkspaces(ctx, cfg, live, out)
-		errs = append(errs, err)
-		if len(kept) > 0 {
-			errs = append(errs, reportKeptRun(ctx, cfg, kept, out))
+	var errs []error
+	errs = append(errs, pruneShm(ctx, cfg.shmRoot, cfg.shmAge, cfg.apply, out, defaultShmDeps()))
+	if !cfg.shmOnly {
+		cacheDir, err := os.UserCacheDir()
+		if err != nil {
+			errs = append(errs, fmt.Errorf("resolve user cache dir: %w", err))
+		} else {
+			errs = append(errs, pruneGoCaches(ctx, cacheDir, time.Now().Add(-cfg.cacheAge), cfg.goCacheMaxGiB<<30, cfg.apply, out))
+		}
+
+		// One live-cwd scan per run. A failed scan skips workspace work entirely: it never guesses "none live".
+		live, err := liveCwds(ctx)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("live cwd scan: %w", err))
+		} else {
+			kept, err := cleanWorkspaces(ctx, cfg, live, out)
+			errs = append(errs, err)
+			if len(kept) > 0 {
+				errs = append(errs, reportKeptRun(ctx, cfg, kept, out))
+			}
 		}
 	}
 	if out.err != nil {
@@ -164,7 +174,10 @@ func parseFlags(args []string, stderr io.Writer) (config, error) {
 	flags.DurationVar(&cfg.idle, "idle", defaultIdle, "Idle window before a workspace is eligible for cleanup.")
 	flags.DurationVar(&cfg.cacheAge, "cache-age", defaultCacheAge, "Go cache files untouched this long are pruned.")
 	flags.Int64Var(&cfg.goCacheMaxGiB, "go-cache-max-gib", defaultGoCacheMaxGiB, "Cap on the go-build cache in GiB; after the age pass, oldest cache items go until under it.")
-	flags.BoolVar(&cfg.apply, "apply", false, "Prune caches, trim build output, and report idle workspaces. Default: dry run.")
+	flags.StringVar(&cfg.shmRoot, "shm-root", "/dev/shm", "Shared memory root to scan.")
+	flags.DurationVar(&cfg.shmAge, "shm-age", 6*time.Hour, "Shared memory entries untouched this long are pruned.")
+	flags.BoolVar(&cfg.shmOnly, "shm-only", false, "Run only the shared memory pass.")
+	flags.BoolVar(&cfg.apply, "apply", false, "Prune caches, trim build output, reap stale shared-memory entries, and report idle workspaces. Default: dry run.")
 	if err := flags.Parse(args); err != nil {
 		return config{}, err
 	}
@@ -175,30 +188,32 @@ func parseFlags(args []string, stderr io.Writer) (config, error) {
 		return config{}, errors.New("-to is required")
 	}
 	// A non-positive window would make every workspace look idle.
-	if cfg.idle <= 0 || cfg.cacheAge <= 0 || cfg.goCacheMaxGiB <= 0 {
-		return config{}, errors.New("-idle, -cache-age and -go-cache-max-gib must be positive")
+	if cfg.idle <= 0 || cfg.cacheAge <= 0 || cfg.goCacheMaxGiB <= 0 || cfg.shmAge <= 0 {
+		return config{}, errors.New("-idle, -cache-age, -go-cache-max-gib and -shm-age must be positive")
 	}
 	// GiB<<30 must not overflow int64.
 	if cfg.goCacheMaxGiB > 1<<32 {
 		return config{}, errors.New("-go-cache-max-gib is too large")
 	}
-	if len(cfg.roots) == 0 {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return config{}, fmt.Errorf("resolve home: %w", err)
+	if !cfg.shmOnly {
+		if len(cfg.roots) == 0 {
+			home, err := os.UserHomeDir()
+			if err != nil {
+				return config{}, fmt.Errorf("resolve home: %w", err)
+			}
+			cfg.roots = []string{filepath.Join(home, "agents", "workspaces")}
+			cfg.defaultRoot = true
 		}
-		cfg.roots = []string{filepath.Join(home, "agents", "workspaces")}
-		cfg.defaultRoot = true
-	}
-	if cfg.stateDir == "" {
-		dir, err := defaultStateDir()
-		if err != nil {
-			return config{}, err
+		if cfg.stateDir == "" {
+			dir, err := defaultStateDir()
+			if err != nil {
+				return config{}, err
+			}
+			cfg.stateDir = dir
 		}
-		cfg.stateDir = dir
-	}
-	if cfg.reportTo == "" {
-		cfg.reportTo = filepath.Join(cfg.stateDir, "dev-hygiene", "kept.txt")
+		if cfg.reportTo == "" {
+			cfg.reportTo = filepath.Join(cfg.stateDir, "dev-hygiene", "kept.txt")
+		}
 	}
 	return cfg, nil
 }

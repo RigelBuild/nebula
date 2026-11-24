@@ -25,6 +25,7 @@ var schemaCUE []byte
 type Config struct {
 	Owners          []string           `json:"owners"`
 	CoAuthor        string             `json:"coAuthor"`
+	CoAuthorByOwner map[string]string  `json:"coAuthorByOwner,omitempty"`
 	Reviewer        string             `json:"reviewer"`
 	AgentEmail      string             `json:"agentEmail"`
 	MergeBotEmail   string             `json:"mergeBotEmail"`
@@ -33,6 +34,7 @@ type Config struct {
 	GateRunnerDir   string             `json:"gateRunnerDir"`
 	RootChecksDir   string             `json:"rootChecksDir"`
 	DevenvNixpkgs   string             `json:"devenvNixpkgs"`
+	Default         *Profile           `json:"default"`
 	Repos           map[string]Profile `json:"repos"`
 }
 

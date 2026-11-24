@@ -54,8 +54,8 @@ type Profile struct {
 
 func (p Profile) TrunkRemote() string { return p.Trunk + "@origin" }
 
-// ProfileFor returns the profile for originURL. A repository the caller's
-// Config does not list is refused: its issue prefix and spec dirs are unknown.
+// ProfileFor returns the profile for originURL. An unlisted repository uses
+// the caller's default profile when present; otherwise it is refused.
 func ProfileFor(cfg Config, originURL string) (Profile, error) {
 	origin := strings.TrimSpace(originURL)
 	var repo string
@@ -91,10 +91,20 @@ func ProfileFor(cfg Config, originURL string) (Profile, error) {
 		}
 	}
 	if !found {
-		return Profile{}, oops.Errorf("repository %s is not listed in the profile file", repo)
+		if cfg.Default == nil {
+			return Profile{}, oops.Errorf("repository %s is not listed in the profile file", repo)
+		}
+		p = *cfg.Default
+		p.Name = repo
 	}
 	p.LocalGates = []string{"bookmark-name", "issue-id"}
 	p.CoAuthor = cfg.CoAuthor
+	for configuredOwner, coAuthor := range cfg.CoAuthorByOwner {
+		if strings.EqualFold(configuredOwner, owner) {
+			p.CoAuthor = coAuthor
+			break
+		}
+	}
 	p.Reviewer = cfg.Reviewer
 	p.GateRunnerDir = cfg.GateRunnerDir
 	p.RootChecksDir = cfg.RootChecksDir

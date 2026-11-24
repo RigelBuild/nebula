@@ -7,10 +7,18 @@ import { afterEach, beforeEach, describe, expect, it, type Mock, spyOn } from "b
 import { clearCustomApis, registerCustomApi } from "@oh-my-pi/pi-ai/api-registry";
 import { bearerTokenAuthorizer, type CandidateFailoverOptions, startAuthGateway } from "@oh-my-pi/pi-ai/auth-gateway";
 import { AuthStorage } from "@oh-my-pi/pi-ai/auth-storage";
-import type { Api, AssistantMessage, Context, FetchImpl, Model, SimpleStreamOptions } from "@oh-my-pi/pi-ai/types";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { scheduler } from "node:timers/promises";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
+import type {
+	Api,
+	AssistantMessage,
+	AssistantMessageEvent,
+	Context,
+	FetchImpl,
+	Model,
+	SimpleStreamOptions,
+} from "@oh-my-pi/pi-ai/types";
 
 const PROVIDER = "openai-codex";
 const MODEL: Model<"openai-codex-responses"> = buildModel({
@@ -35,6 +43,8 @@ const SPLIT_API = "auth-gateway-blocked-429-split";
 const SPLIT_MODEL_ID = "split-error-model";
 const SPLIT_CLIENT_TEXT = "Connect error invalid_argument: tools[3].parameters is not an object";
 const SPLIT_CLASSIFICATION_TEXT = "You have hit your ChatGPT usage limit. retry-after-ms=60000";
+const STREAM_API = "auth-gateway-blocked-429-stream";
+const STREAM_MODEL_ID = "stream-error-model";
 
 interface GatewayFixture {
 	url: string;
@@ -104,11 +114,11 @@ async function startGateway(upstreamMessage: string, options: GatewayOptions = {
 	};
 }
 
-function sendChat(url: string): Promise<Response> {
+function sendChat(url: string, stream = false): Promise<Response> {
 	return fetch(`${url}/v1/chat/completions`, {
 		method: "POST",
 		headers: { Authorization: `Bearer ${GATEWAY_TOKEN}`, "Content-Type": "application/json" },
-		body: JSON.stringify({ model: MODEL.id, messages: [{ role: "user", content: "Hi" }], stream: false }),
+		body: JSON.stringify({ model: MODEL.id, messages: [{ role: "user", content: "Hi" }], stream }),
 	});
 }
 
@@ -195,6 +205,50 @@ function registerSplitErrorApi(): Model<Api> {
 	}) as Model<Api>;
 }
 
+function registerStreamApi(events: (model: Model<Api>) => readonly AssistantMessageEvent[]): Model<Api> {
+	registerCustomApi(STREAM_API, model => {
+		const stream = new AssistantMessageEventStream();
+		queueMicrotask(() => {
+			for (const event of events(model)) stream.push(event);
+		});
+		return stream;
+	});
+	return buildModel({
+		id: STREAM_MODEL_ID,
+		name: STREAM_MODEL_ID,
+		api: STREAM_API as Api,
+		provider: PROVIDER,
+		baseUrl: "https://chatgpt.com/backend-api",
+		reasoning: false,
+		input: ["text"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: 200_000,
+		maxTokens: 8_192,
+	}) as Model<Api>;
+}
+
+function streamMessage(model: Model<Api>, fields: Partial<AssistantMessage> = {}): AssistantMessage {
+	return {
+		role: "assistant",
+		content: [],
+		api: model.api,
+		provider: model.provider,
+		model: model.id,
+		usage: {
+			input: 0,
+			output: 0,
+			cacheRead: 0,
+			cacheWrite: 0,
+			totalTokens: 0,
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+		},
+		stopReason: "stop",
+		timestamp: Date.now(),
+		duration: 0,
+		...fields,
+	};
+}
+
 /**
  * The provider's retry wait is real time; stubbing it keeps each retry instant so the
  * cases run under bun's default timeout. Restored after every case.
@@ -207,8 +261,99 @@ afterEach(() => {
 	waitSpy.mockRestore();
 	clearCustomApis();
 });
-
 describe("auth-gateway: a usage cap answers 429 (RIG-10540)", () => {
+	it("answers a streamed usage limit before its first event with 429 and Retry-After", async () => {
+		const streamModel = registerStreamApi(model => [
+			{
+				type: "error",
+				reason: "error",
+				error: streamMessage(model, {
+					stopReason: "error",
+					errorMessage: "usage_limit_reached",
+					errorClassificationMessage: "usage_limit_reached retry-after-ms=60000",
+					errorStatus: 500,
+				}),
+			},
+		]);
+		const gateway = await startGateway("", {
+			model: streamModel,
+			candidateFailover: { next: async () => undefined, onFailure: () => {} },
+		});
+		try {
+			const response = await sendChat(gateway.url, true);
+			const body = await response.text();
+
+			expect(response.status).toBe(429);
+			expect(response.headers.get("retry-after")).toBe("60");
+			expect(body).toContain("rate_limit_error");
+		} finally {
+			await gateway.close();
+		}
+	});
+
+	it("keeps a streamed answer at 200 with its existing SSE body", async () => {
+		const first = "streamed ";
+		const second = "answer";
+		const streamModel = registerStreamApi(model => {
+			const message = streamMessage(model, { content: [{ type: "text", text: `${first}${second}` }] });
+			return [
+				{ type: "text_delta", contentIndex: 0, delta: first, partial: message },
+				{ type: "text_delta", contentIndex: 0, delta: second, partial: message },
+				{ type: "done", reason: "stop", message },
+			];
+		});
+		const gateway = await startGateway("", {
+			model: streamModel,
+			candidateFailover: { next: async () => undefined, onFailure: () => {} },
+		});
+		try {
+			const response = await sendChat(gateway.url, true);
+			const body = await response.text();
+
+			expect(response.status).toBe(200);
+			expect(response.headers.get("content-type")).toContain("text/event-stream");
+			expect(body).toContain('"delta":{"role":"assistant"}');
+			expect(body).toContain('"delta":{"content":"streamed "}');
+			expect(body).toContain('"delta":{"content":"answer"}');
+			expect(body).toContain('"finish_reason":"stop"');
+			expect(body).toContain("data: [DONE]");
+		} finally {
+			await gateway.close();
+		}
+	});
+
+	it("keeps a usage limit after the first stream event as an in-stream SSE error", async () => {
+		const text = "partial answer";
+		const streamModel = registerStreamApi(model => {
+			const message = streamMessage(model, { content: [{ type: "text", text }] });
+			const error = streamMessage(model, {
+				stopReason: "error",
+				errorMessage: "usage_limit_reached",
+				errorClassificationMessage: "usage_limit_reached retry-after-ms=60000",
+				errorStatus: 500,
+			});
+			return [
+				{ type: "text_delta", contentIndex: 0, delta: text, partial: message },
+				{ type: "error", reason: "error", error },
+			];
+		});
+		const gateway = await startGateway("", {
+			model: streamModel,
+			candidateFailover: { next: async () => undefined, onFailure: () => {} },
+		});
+		try {
+			const response = await sendChat(gateway.url, true);
+			const body = await response.text();
+
+			expect(response.status).toBe(200);
+			expect(response.headers.get("content-type")).toContain("text/event-stream");
+			expect(body).toContain('"delta":{"content":"partial answer"}');
+			expect(body).toContain('"error":{"message":"usage_limit_reached","type":"upstream_error"}');
+		} finally {
+			await gateway.close();
+		}
+	});
+
 	it("answers chat 429 with Retry-After when the blocked credential's upstream reports the cap", async () => {
 		// A blocked sole credential stays a last-resort candidate (routing is unchanged), so the
 		// request reaches upstream and the cap it reports is the answer. Its retry hint sets Retry-After.

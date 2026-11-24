@@ -84,7 +84,11 @@ export type HeldAttempt =
 	| { readonly kind: "failed"; readonly relay: AssistantMessageEventStream; readonly error: AssistantMessage };
 
 /** Streaming: buffers until a meaningful event or `done` (committed) or an `error` (failed). */
-export function holdUntilCommit(events: AssistantMessageEventStream, budget: AttemptBudget): Promise<HeldAttempt> {
+export function holdUntilCommit(
+	events: AssistantMessageEventStream,
+	budget: AttemptBudget,
+	onCommit?: () => void,
+): Promise<HeldAttempt> {
 	const relay = new AssistantMessageEventStream();
 	const buffered: AssistantMessageEvent[] = [];
 	const { promise, resolve, reject } = Promise.withResolvers<HeldAttempt>();
@@ -96,6 +100,7 @@ export function holdUntilCommit(events: AssistantMessageEventStream, budget: Att
 	};
 	const commit = (): void => {
 		committed = true;
+		onCommit?.();
 		flush();
 		if (!resolved) {
 			resolved = true;

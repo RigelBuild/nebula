@@ -145,6 +145,142 @@ func TestPruneShmApplyRechecksHeldPaths(t *testing.T) {
 	}
 }
 
+func TestPruneShmHeldPathThroughEntrySymlink(t *testing.T) {
+	for _, tt := range []struct {
+		name       string
+		heldOnScan int
+		holdChild  bool
+	}{
+		{name: "link held initially", heldOnScan: 1},
+		{name: "link held on recheck", heldOnScan: 2},
+		{name: "child held initially", heldOnScan: 1, holdChild: true},
+		{name: "child held on recheck", heldOnScan: 2, holdChild: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			base := t.TempDir()
+			realRoot := filepath.Join(base, "real", "shm")
+			if err := os.MkdirAll(realRoot, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			alias := filepath.Join(base, "alias")
+			if err := os.Symlink(filepath.Dir(realRoot), alias); err != nil {
+				t.Fatal(err)
+			}
+			root := filepath.Join(alias, "shm")
+
+			target := t.TempDir()
+			child := filepath.Join(target, "child")
+			if err := os.WriteFile(child, []byte("held"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			entry := filepath.Join(root, "link")
+			if err := os.Symlink(target, entry); err != nil {
+				t.Fatal(err)
+			}
+
+			heldPath := entry
+			if tt.holdChild {
+				heldPath = filepath.Join(entry, "child")
+			}
+			var scans int
+			now := time.Now().Add(24 * time.Hour)
+			deps := shmDeps{
+				now:   func() time.Time { return now },
+				owned: func(fs.FileInfo) bool { return true },
+				held: func() (map[string]struct{}, error) {
+					scans++
+					if scans < tt.heldOnScan {
+						return map[string]struct{}{}, nil
+					}
+					return map[string]struct{}{heldPath: {}}, nil
+				},
+			}
+			if err := pruneShm(t.Context(), root, -time.Hour, true, &printer{w: &bytes.Buffer{}}, deps); err != nil {
+				t.Fatal(err)
+			}
+			if scans != tt.heldOnScan {
+				t.Fatalf("held path scans = %d, want %d", scans, tt.heldOnScan)
+			}
+			if _, err := os.Lstat(entry); err != nil {
+				t.Fatalf("symlink entry removed while held through root alias: %v", err)
+			}
+		})
+	}
+}
+
+func TestPruneShmHeldMissingPathThroughSymlinkedParent(t *testing.T) {
+	parent, alias := t.TempDir(), t.TempDir()
+	root := filepath.Join(parent, "shm")
+	entry := filepath.Join(root, "entry")
+	if err := os.MkdirAll(entry, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(parent, filepath.Join(alias, "parent")); err != nil {
+		t.Fatal(err)
+	}
+	heldPath := filepath.Join(alias, "parent", "shm", "entry", "gone")
+	deps := shmDeps{
+		now:   time.Now,
+		owned: func(fs.FileInfo) bool { return true },
+		held:  func() (map[string]struct{}, error) { return map[string]struct{}{heldPath: {}}, nil },
+	}
+	if err := pruneShm(t.Context(), root, -time.Hour, true, &printer{w: &bytes.Buffer{}}, deps); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(entry); err != nil {
+		t.Fatalf("entry removed while a missing child was held through a symlinked parent: %v", err)
+	}
+}
+
+func TestPruneShmHeldPathThroughRootSymlink(t *testing.T) {
+	for _, tt := range []struct {
+		name       string
+		holdOnScan int
+	}{
+		{name: "initial scan", holdOnScan: 1},
+		{name: "apply-time recheck", holdOnScan: 2},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			target := t.TempDir()
+			parent := t.TempDir()
+			root := filepath.Join(parent, "shm")
+			if err := os.Symlink(target, root); err != nil {
+				t.Fatal(err)
+			}
+			entry := filepath.Join(root, "entry")
+			if err := os.WriteFile(entry, []byte("stale"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			old := time.Now().Add(-12 * time.Hour)
+			if err := os.Chtimes(entry, old, old); err != nil {
+				t.Fatal(err)
+			}
+
+			var scans int
+			deps := shmDeps{
+				now:   time.Now,
+				owned: func(fs.FileInfo) bool { return true },
+				held: func() (map[string]struct{}, error) {
+					scans++
+					if scans < tt.holdOnScan {
+						return map[string]struct{}{}, nil
+					}
+					return map[string]struct{}{entry: {}}, nil
+				},
+			}
+			if err := pruneShm(t.Context(), root, 6*time.Hour, true, &printer{w: &bytes.Buffer{}}, deps); err != nil {
+				t.Fatal(err)
+			}
+			if scans != tt.holdOnScan {
+				t.Fatalf("held path scans = %d, want %d", scans, tt.holdOnScan)
+			}
+			if _, err := os.Stat(entry); err != nil {
+				t.Fatalf("entry removed while held through root symlink: %v", err)
+			}
+		})
+	}
+}
+
 func TestPruneShmKeepsOtherOwnerChild(t *testing.T) {
 	root := t.TempDir()
 	entry := filepath.Join(root, "entry")

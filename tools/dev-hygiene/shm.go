@@ -50,7 +50,7 @@ func pruneShm(ctx context.Context, root string, age time.Duration, apply bool, o
 	if err != nil {
 		return fmt.Errorf("read shm root: %w", err)
 	}
-	held, err := deps.held()
+	held, err := shmCanonicalHeldPaths(deps.held)
 	if err != nil {
 		return fmt.Errorf("scan held paths: %w", err)
 	}
@@ -105,7 +105,7 @@ func pruneShm(ctx context.Context, root string, age time.Duration, apply bool, o
 			if !old {
 				continue
 			}
-			held, err = deps.held()
+			held, err = shmCanonicalHeldPaths(deps.held)
 			if err != nil {
 				return fmt.Errorf("recheck held paths: %w", err)
 			}
@@ -201,6 +201,26 @@ func shmHeld(path string, held map[string]struct{}) bool {
 		}
 	}
 	return false
+}
+
+func shmCanonicalHeldPaths(scan func() (map[string]struct{}, error)) (map[string]struct{}, error) {
+	paths, err := scan()
+	if err != nil {
+		return nil, err
+	}
+	canonical := make(map[string]struct{}, len(paths))
+	for path := range paths {
+		absolute, err := filepath.Abs(path)
+		if err != nil {
+			return nil, fmt.Errorf("resolve held path %q: %w", path, err)
+		}
+		resolved, err := filepath.EvalSymlinks(absolute)
+		if err != nil {
+			resolved = filepath.Clean(absolute)
+		}
+		canonical[resolved] = struct{}{}
+	}
+	return canonical, nil
 }
 
 func shmHeldPaths() (map[string]struct{}, error) {

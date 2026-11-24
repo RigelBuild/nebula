@@ -501,7 +501,7 @@ export function renderUsageMetrics(
 		},
 		{
 			name: "llm_usage_reset_credits_available",
-			help: "Saved rate-limit resets an account can redeem right now.",
+			help: 'Saved rate-limit resets an account can redeem right now. The unlabelled series is the total across scopes; scope="full" and scope="fable" break it down.',
 			samples: [],
 		},
 		{
@@ -582,6 +582,12 @@ export function renderUsageMetrics(
 		add("llm_usage_report_fetched_at_seconds", perAccount, report.fetchedAt / 1000);
 		if (report.resetCredits) {
 			add("llm_usage_reset_credits_available", perAccount, report.resetCredits.availableCount);
+			for (const scope of ["full", "fable"] as const) {
+				const count = report.resetCredits.availableByScope?.[scope];
+				if (count !== undefined) {
+					add("llm_usage_reset_credits_available", [...perAccount, ["scope", scope]], count);
+				}
+			}
 		}
 
 		// Subscription layer: per-account subscription info + renewal clock. Look

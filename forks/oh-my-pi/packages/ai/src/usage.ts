@@ -124,6 +124,12 @@ export interface UsageResetCredits {
 	availableCount: number;
 	/** Number of resets the provider says can be redeemed now. */
 	redeemableCount?: number;
+	/**
+	 * Banked resets split by the limit they clear: `full` clears the shared
+	 * weekly window, `fable` only the Fable weekly cap. Counts sum to at most
+	 * `availableCount`; absent when the provider does not report scopes.
+	 */
+	availableByScope?: { full: number; fable: number };
 	/** Provider-selected credit/grant eligible for the next redemption. */
 	nextCreditId?: string;
 	/** Whether this account is eligible for the reset program. */
@@ -446,6 +452,7 @@ export const usageResetCreditDetailSchema = type({
 
 export const usageResetCreditsSchema = type({
 	availableCount: "number",
+	"availableByScope?": { full: "number", fable: "number" },
 	"redeemableCount?": "number",
 	"nextCreditId?": "string",
 	"eligible?": "boolean",

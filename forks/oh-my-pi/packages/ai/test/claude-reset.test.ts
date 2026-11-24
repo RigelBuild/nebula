@@ -1,5 +1,10 @@
 import { describe, expect, it } from "bun:test";
-import { consumeClaudeResetCredit, listClaudeResetCredits, type UsageResetCredit } from "@oh-my-pi/pi-ai";
+import {
+	consumeClaudeResetCredit,
+	isClaudeFableLaunchGrant,
+	listClaudeResetCredits,
+	type UsageResetCredit,
+} from "@oh-my-pi/pi-ai";
 import type { FetchImpl } from "@oh-my-pi/pi-ai/types";
 import type { UsageFetchContext } from "@oh-my-pi/pi-ai/usage";
 import { claudeUsageProvider } from "@oh-my-pi/pi-ai/usage/claude";
@@ -86,6 +91,7 @@ describe("listClaudeResetCredits", () => {
 			availableCount: 2,
 			redeemableCount: 2,
 			nextCreditId: "grant_1",
+			availableByScope: { full: 2, fable: 0 },
 			eligible: true,
 			credits: [
 				{
@@ -114,6 +120,71 @@ describe("listClaudeResetCredits", () => {
 		const { fetch } = recordingFetch(() => json(200, payload));
 		const result = await listClaudeResetCredits({ accessToken: "token", orgId: "org_1", fetch });
 		expect(result?.credits[0]?.clears).toEqual(["anthropic:5h", "anthropic:7d:fable"]);
+	});
+
+	it("counts banked resets by full and Fable scope", async () => {
+		const payload = cedarPayload();
+		payload.cedar_ember.grants = [
+			{ ...payload.cedar_ember.grants[0], id: "grant_full", resets_left: 1, clears: ["five_hour", "seven_day"] },
+			{
+				...payload.cedar_ember.grants[0],
+				id: "grant_fable",
+				resets_left: 2,
+				clears: ["five_hour", "seven_day_overage_included"],
+			},
+		];
+		payload.cedar_ember.next_grant_id = "grant_fable";
+		const { fetch } = recordingFetch(() => json(200, payload));
+		const result = await listClaudeResetCredits({ accessToken: "token", orgId: "org_1", fetch });
+		expect(result).toMatchObject({
+			availableCount: 3,
+			availableByScope: { full: 1, fable: 2 },
+		});
+	});
+
+	it("counts a grant that clears both weekly windows as full, not fable", async () => {
+		const payload = cedarPayload();
+		payload.cedar_ember.grants = [
+			{
+				...payload.cedar_ember.grants[0],
+				id: "grant_both",
+				resets_left: 1,
+				clears: ["five_hour", "seven_day", "seven_day_overage_included"],
+			},
+		];
+		payload.cedar_ember.next_grant_id = "grant_both";
+		const { fetch } = recordingFetch(() => json(200, payload));
+		const result = await listClaudeResetCredits({ accessToken: "token", orgId: "org_1", fetch });
+		expect(result).toMatchObject({ availableCount: 1, availableByScope: { full: 1, fable: 0 } });
+	});
+
+	it("leaves expired and spent grants out of both scope buckets", async () => {
+		const payload = cedarPayload();
+		payload.cedar_ember.grants = [
+			{
+				...payload.cedar_ember.grants[0],
+				id: "grant_expired",
+				resets_left: 2,
+				ends_at: "2000-01-01T00:00:00Z",
+				clears: ["five_hour", "seven_day_overage_included"],
+			},
+			{
+				...payload.cedar_ember.grants[0],
+				id: "grant_spent",
+				resets_left: 0,
+				clears: ["five_hour", "seven_day_overage_included"],
+			},
+			{
+				...payload.cedar_ember.grants[0],
+				id: "grant_full",
+				resets_left: 1,
+				clears: ["five_hour", "seven_day"],
+			},
+		];
+		payload.cedar_ember.next_grant_id = "grant_full";
+		const { fetch } = recordingFetch(() => json(200, payload));
+		const result = await listClaudeResetCredits({ accessToken: "token", orgId: "org_1", fetch });
+		expect(result).toMatchObject({ availableCount: 1, availableByScope: { full: 1, fable: 0 } });
 	});
 
 	it("parses discovery quota evidence with the same normalized model windows as ordinary usage", async () => {
@@ -436,5 +507,20 @@ describe("Claude usage reset integration", () => {
 
 		expect(report?.resetCredits).toBeUndefined();
 		expect(report?.limits.map(limit => limit.id)).toEqual(["anthropic:5h", "anthropic:extra"]);
+	});
+});
+
+describe("isClaudeFableLaunchGrant", () => {
+	it("is true for a grant that clears only the Fable weekly cap", () => {
+		expect(isClaudeFableLaunchGrant(["anthropic:5h", "anthropic:7d:fable"])).toBe(true);
+	});
+
+	it("is false for a full reset that clears the shared weekly window too", () => {
+		expect(isClaudeFableLaunchGrant(["anthropic:5h", "anthropic:7d", "anthropic:7d:fable"])).toBe(false);
+	});
+
+	it("is false for a grant that clears no Fable cap", () => {
+		expect(isClaudeFableLaunchGrant(["anthropic:5h", "anthropic:7d"])).toBe(false);
+		expect(isClaudeFableLaunchGrant([])).toBe(false);
 	});
 });

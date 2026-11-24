@@ -151,6 +151,30 @@ describe("buildProviderCards", () => {
 		expect(card.idle).toBe(false);
 	});
 
+	it("carries per-scope reset counts onto the card only when fable holds resets", () => {
+		const multi = report("anthropic", "a@example.test", [limit("anthropic", "a", "5h", "Claude 5 Hour", 0, "ok")]);
+		multi.resetCredits = {
+			availableCount: 3,
+			redeemableCount: 3,
+			availableByScope: { full: 1, fable: 2 },
+			eligible: true,
+			credits: [{ id: "g", remainingCount: 3, usable: true, expiresAt: new Date(now + 86_400_000).toISOString() }],
+		};
+		const single = report("openai", "o@example.test", [limit("openai", "o", "5h", "Codex 5h", 0, "ok")]);
+		single.resetCredits = {
+			availableCount: 2,
+			redeemableCount: 2,
+			availableByScope: { full: 2, fable: 0 },
+			eligible: true,
+			credits: [{ id: "g", remainingCount: 2, usable: true }],
+		};
+		const [anthropic, openai] = buildProviderCards([multi, single], now);
+
+		expect(anthropic?.resetCredits).toMatchObject({ bankedCount: 3, availableByScope: { full: 1, fable: 2 } });
+		expect(openai?.resetCredits).toMatchObject({ bankedCount: 2 });
+		expect(openai?.resetCredits).not.toHaveProperty("availableByScope");
+	});
+
 	it("sorts pressured providers first and collapses untouched ones into idle", () => {
 		const reports = [
 			report("cursor", "c@x.test", [limit("cursor", "c", "monthly", "Cursor Models", 0.0, "ok")]),
@@ -602,6 +626,39 @@ describe("UsageDashboardComponent", () => {
 				component.dispose();
 			}
 		}
+	});
+
+	function renderResetLine(reports: UsageReport[]): string | undefined {
+		const component = dashboard(reports);
+		try {
+			const line = component
+				.render(100)
+				.map(row => Bun.stripANSI(row))
+				.find(row => row.includes("✦"));
+			return line?.match(/✦[^│]*/)?.[0].trimEnd();
+		} finally {
+			component.dispose();
+		}
+	}
+
+	it("shows the scope split whenever fable holds resets, even with no full ones", () => {
+		const fable = report("anthropic", "a@test", [limit("anthropic", "a", "5h", "Claude 5 Hour", 0, "ok")]);
+		fable.resetCredits = { availableCount: 2, redeemableCount: 2, availableByScope: { full: 0, fable: 2 } };
+		expect(renderResetLine([fable])).toBe("✦ 2 resets · full 0 · fable 2");
+	});
+
+	it("names resets that clear no scope so the split sums to the total", () => {
+		const cedar = report("anthropic", "a@test", [limit("anthropic", "a", "5h", "Claude 5 Hour", 0, "ok")]);
+		cedar.resetCredits = { availableCount: 2, redeemableCount: 2, availableByScope: { full: 1, fable: 1 } };
+		const unscoped = report("anthropic", "j@test", [limit("anthropic", "j", "5h", "Claude 5 Hour", 0, "ok")]);
+		unscoped.resetCredits = { availableCount: 1, redeemableCount: 1 };
+		expect(renderResetLine([cedar, unscoped])).toBe("✦ 3 resets · full 1 · fable 1 · other 1");
+	});
+
+	it("shows no scope suffix when every banked reset is full", () => {
+		const full = report("anthropic", "a@test", [limit("anthropic", "a", "5h", "Claude 5 Hour", 0, "ok")]);
+		full.resetCredits = { availableCount: 2, redeemableCount: 2, availableByScope: { full: 2, fable: 0 } };
+		expect(renderResetLine([full])).toBe("✦ 2 resets");
 	});
 });
 

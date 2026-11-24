@@ -49,6 +49,8 @@ export function formatUsageResetWindow(windowId: string): string {
 export interface UsageResetSummary {
 	bankedCount: number;
 	redeemableCount: number;
+	/** Banked resets by the limit they clear; absent when the provider reports no scope split. */
+	availableByScope?: { full: number; fable: number };
 	soonestExpiry?: string;
 	unavailableReason?: string;
 }
@@ -103,6 +105,7 @@ export function summarizeUsageResetCredits(
 	return {
 		bankedCount,
 		redeemableCount,
+		...(reset.availableByScope ? { availableByScope: reset.availableByScope } : {}),
 		soonestExpiry,
 		unavailableReason,
 	};

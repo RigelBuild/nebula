@@ -90,7 +90,8 @@ _SECRET_HEADER_JSON_UNTERMINATED_RE = re.compile(
 )
 
 # Tokenize shell segments without searching repeatedly across their suffixes.
-_SHELL_TOKEN_RE = re.compile(r'''[^\s;&|<>()"'\\]+|\\[^\r\n]|"(?:\\[^\r\n]|[^"\\\r\n])*"?|'[^'\r\n]*'?|[;&|<>()\r\n]''')
+_SHELL_TOKEN_RE = re.compile(r'''\\\r?\n|[^\s;&|<>()`"'\\]+|\\[^\r\n]|"(?:\\[^\r\n]|[^"\\\r\n])*"?|'[^'\r\n]*'?|[;&|<>()`\r\n]''')
+_CURL_SHORT_COOKIE_RE = re.compile(r"-[A-Za-z]*?b")
 
 
 def _redact_curl_cookies(text: str) -> str:
@@ -100,11 +101,13 @@ def _redact_curl_cookies(text: str) -> str:
     expecting_value = False
     for match in _SHELL_TOKEN_RE.finditer(text):
         token = match.group()
-        if token in ';&|<>()\r\n':
+        if token in ("\\\n", "\\\r\n"):
+            continue
+        if token in ';&|<>()`\r\n':
             in_curl = False
             expecting_value = False
             continue
-        if token == "curl":
+        if token.rsplit("/", 1)[-1] == "curl":
             in_curl = True
             continue
         if not in_curl:
@@ -118,8 +121,8 @@ def _redact_curl_cookies(text: str) -> str:
             continue
         elif token.startswith("--cookie="):
             value_start = match.start() + len("--cookie=")
-        elif token.startswith("-b") and len(token) > 2:
-            value_start = match.start() + 2
+        elif short_option := _CURL_SHORT_COOKIE_RE.match(token):
+            value_start = match.start() + short_option.end()
         if value_start is None:
             continue
         # Attached options may be followed by a separately tokenized quoted value.
@@ -137,6 +140,7 @@ def _redact_curl_cookies(text: str) -> str:
     return "".join(parts)
 
 
+# A cut-off cookies array masks to the end of the text deliberately.
 def _redact_har_cookie_arrays(text: str) -> str:
     parts = []
     last = 0
@@ -289,7 +293,7 @@ def redact_header_credentials(text: str) -> str:
         text,
     )
     text = _SECRET_HEADER_INLINE_RE.sub(_redact_inline_secret_header, text)
-    if "curl" in text and ("-b" in text or "--cookie" in text):
+    if "curl" in text:
         text = _redact_curl_cookies(text)
 
     text = _HAR_HEADER_ENTRY_RE.sub(lambda m: m.group(1) + m.group(2) + m.group(3) + "***" + m.group(5), text)

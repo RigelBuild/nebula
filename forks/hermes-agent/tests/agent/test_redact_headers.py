@@ -54,6 +54,13 @@ def test_curl_cookie_options_and_csrf_headers_are_masked():
         "curl --cookie=a=opaque-cookie-secret https://example.com",
         "curl -bsession=opaque-cookie-secret https://example.com",
         'curl -b "a\\"opaque-cookie-secret" https://example.com',
+        "/usr/bin/curl -b a=opaque-cookie-secret https://example.com",
+        "curl \\\n  -b a=opaque-cookie-secret https://example.com",
+        "`curl -b a=opaque-cookie-secret https://example.com`",
+        "curl -sb a=opaque-cookie-secret https://example.com",
+        "curl -Lba=opaque-cookie-secret https://example.com",
+        "curl -Lb a=opaque-cookie-secret https://example.com",
+        "curl -sba=opaque-cookie-secret https://example.com",
     ):
         redacted = redact_sensitive_text(command, force=True, code_file=True)
         assert "opaque-cookie-secret" not in redacted

@@ -1,5 +1,5 @@
-"""A Cotal turn's chat is the peer agent that started it, and a peer cannot approve: every
-approval raised on the cotal platform must fail closed and never reach the turn's notifier."""
+"""A Cotal peer cannot approve its approval requests. Configured review-first plugin calls for
+supported guard tools may use the smart reviewer, but never the peer's approval surface."""
 
 import pytest
 
@@ -85,7 +85,6 @@ def test_plugin_requested_approval_is_blocked_without_prompting_the_peer(cotal_t
 
 @pytest.mark.parametrize("tool_name", ["terminal", "read_file", "search_files", "write_file", "patch"])
 def test_mesh_reviewer_approve_runs_terminal_and_file_tools(peer_mesh_turn, monkeypatch, tool_name):
-
     calls = _reviewer(monkeypatch, "approve")
     first = approval_mod.request_tool_approval(
         tool_name, "routine operation", display="git status", review=True)
@@ -94,6 +93,38 @@ def test_mesh_reviewer_approve_runs_terminal_and_file_tools(peer_mesh_turn, monk
     assert first["approved"] is True and second["approved"] is True
     assert calls == ["git status", "git status"]
     assert peer_mesh_turn == []
+
+
+def test_cron_turn_does_not_reach_mesh_reviewer(peer_mesh_turn, monkeypatch):
+    monkeypatch.setenv("HERMES_CRON_SESSION", "1")
+    monkeypatch.setattr(approval_context, "_get_cron_approval_mode", lambda: "deny")
+    calls = _reviewer(monkeypatch, "approve")
+    result = approval_mod.request_tool_approval(
+        "terminal", "routine operation", display="git status", review=True)
+    assert result["approved"] is False
+    assert calls == []
+    assert peer_mesh_turn == []
+
+
+def test_single_query_turn_does_not_reach_mesh_reviewer(peer_mesh_turn, monkeypatch):
+    monkeypatch.setenv("HERMES_SINGLE_QUERY_SESSION", "1")
+    monkeypatch.setattr(approval_context, "_get_single_query_approval_mode", lambda: "deny")
+    calls = _reviewer(monkeypatch, "approve")
+    result = approval_mod.request_tool_approval(
+        "terminal", "routine operation", display="git status", review=True)
+    assert result["approved"] is False
+    assert calls == []
+    assert peer_mesh_turn == []
+
+
+def test_tool_outside_mesh_reviewer_allowlist_stays_blocked(peer_mesh_turn, monkeypatch):
+    calls = _reviewer(monkeypatch, "approve")
+    result = approval_mod.request_tool_approval(
+        "browser", "routine operation", display="open page", review=True)
+    assert result["approved"] is False
+    assert calls == []
+    assert peer_mesh_turn == []
+
 
 def test_mesh_reviewer_escalate_keeps_peer_block(peer_mesh_turn, monkeypatch):
     calls = _reviewer(monkeypatch, "escalate", "check this operation")
@@ -152,10 +183,6 @@ def _reviewer(monkeypatch, verdict, note=""):
 
     monkeypatch.setattr(approval_mod, "_smart_verdict", smart)
     return calls
-
-
-
-
 
 
 def test_browser_vault_consent_declines_without_prompting_the_peer(cotal_turn):

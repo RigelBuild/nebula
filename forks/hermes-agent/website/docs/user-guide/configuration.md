@@ -3120,7 +3120,7 @@ Smart mode is particularly useful for reducing approval fatigue — it lets the 
 
 ### Peer mesh review
 
-Set `approvals.mesh_review_first: true` to let the smart reviewer approve terminal and file guard hits during peer mesh turns. This avoids sending an interactive approval request back to a peer that cannot answer it. A reviewer denial or escalation still blocks the action. The default is `false`, which keeps peer turns fail-closed.
+Set `approvals.mesh_review_first: true` to let the smart reviewer approve guard hits that plugins mark reviewable (`review: true`) for terminal and file tools during peer mesh turns. This avoids sending an interactive approval request back to a peer that cannot answer it. A reviewer denial or escalation still blocks the action. The built-in dangerous-command guard is unchanged. The default is `false`, which keeps peer turns fail-closed.
 
 ```yaml
 approvals:

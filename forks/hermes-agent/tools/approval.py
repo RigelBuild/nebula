@@ -46,6 +46,8 @@ from tools.approval_smart import _smart_verdict, pop_review_note
 
 logger = logging.getLogger(__name__)
 
+MESH_REVIEW_TOOLS = frozenset({"terminal", "read_file", "search_files", "write_file", "patch"})
+
 # Frozen at import: reading os.environ per call would let any skill running in the process set
 # this and bypass every approval check (prompt-injection escalation path).
 _YOLO_MODE_FROZEN: bool = is_truthy_value(os.getenv("HERMES_YOLO_MODE", ""))
@@ -1220,7 +1222,6 @@ def _review_first_verdict(display_target: str, description: str, pattern_key: st
     return verdict, note
 
 
-
 def _run_approval_gate(
     *, pattern_key: str, description: str, display_target: str, approval_callback=None,
     subject: str = "", noun: str = "flagged actions",
@@ -1255,11 +1256,12 @@ def _run_approval_gate(
         review_first
         and _is_peer_mesh_approval_context()
         and not _is_cron_approval_context()
-        and tool_name in {"terminal", "read_file", "search_files", "write_file", "patch"}
+        and tool_name in MESH_REVIEW_TOOLS
         and not _is_single_query_approval_context()
         and is_truthy_value(approval_context._get_approval_config().get("mesh_review_first"), default=False)
     )
     if peer_mesh_review:
+        # Cotal mesh turns are plugin-origin, and reviewer approval is in scope by design.
         verdict, note = _review_first_verdict(display_target, description, pattern_key, session_key)
         if verdict == "approve":
             return _approved()
@@ -1537,6 +1539,7 @@ def request_tool_approval(tool_name: str, reason: str, *, rule_key: str = "", ap
                          else f"<{tool_name}> (plugin approval rule)") + _vault_approval_context(tool_name, args)),
         approval_callback=approval_callback,
         review_first=review, tool_name=tool_name, session_ttl_seconds=session_ttl_seconds,
+        allow_permanent=allow_permanent,
         subject=subject, advice="Find an alternative approach.",
         autoapprove_log_prefix=f"plugin-escalated tool call '{tool_name}' in non-interactive non-gateway context",
         fail_closed_when_no_human=True,

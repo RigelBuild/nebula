@@ -1,3 +1,5 @@
+//go:build linux
+
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 // Package main lists Nix GC roots in idle agent workspaces and removes candidate root links with --apply.
@@ -180,13 +182,21 @@ func removeCandidates(roots []string, env runEnv, logger *slog.Logger) (removed,
 		busy, unreadable, err := busySnapshot()
 		if err != nil {
 			failed++
-			skipped += len(roots) - i - 1
+			for j := i + 1; j < len(roots); j++ {
+				if eligible[j] {
+					skipped++
+				}
+			}
 			logger.Error("recheck busy workspaces", "path", root, "error", err)
 			return removed, skipped, failed
 		}
 		if unreadable > 0 {
 			failed++
-			skipped += len(roots) - i - 1
+			for j := i + 1; j < len(roots); j++ {
+				if eligible[j] {
+					skipped++
+				}
+			}
 			logger.Error("unreadable process cwd prevents apply", "path", root, "count", unreadable)
 			return removed, skipped, failed
 		}
@@ -411,6 +421,10 @@ func newestActivity(workspaces, link string) (time.Time, error) {
 
 // busyWorkspaces returns the workspace dirs that some process has as cwd.
 func busyWorkspaces(procRoot, workspaces string) (map[string]bool, int, error) {
+	return busyWorkspacesForUID(procRoot, workspaces, uint32(os.Getuid()), os.Readlink)
+}
+
+func busyWorkspacesForUID(procRoot, workspaces string, uid uint32, readlink func(string) (string, error)) (map[string]bool, int, error) {
 	entries, err := os.ReadDir(procRoot)
 	if err != nil {
 		return nil, 0, fmt.Errorf("read %s: %w", procRoot, err)
@@ -421,9 +435,26 @@ func busyWorkspaces(procRoot, workspaces string) (map[string]bool, int, error) {
 		if !isPID(entry.Name()) {
 			continue
 		}
-		cwd, err := os.Readlink(filepath.Join(procRoot, entry.Name(), "cwd"))
+		processDir := filepath.Join(procRoot, entry.Name())
+		cwd, err := readlink(filepath.Join(processDir, "cwd"))
 		if err != nil {
-			unreadable++
+			if errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ESRCH) {
+				continue
+			}
+			info, statErr := os.Stat(processDir)
+			if errors.Is(statErr, fs.ErrNotExist) || errors.Is(statErr, syscall.ESRCH) {
+				continue
+			}
+			if statErr != nil {
+				return nil, 0, fmt.Errorf("stat process %s: %w", processDir, statErr)
+			}
+			stat, ok := info.Sys().(*syscall.Stat_t)
+			if !ok {
+				return nil, 0, fmt.Errorf("stat process %s: missing ownership information", processDir)
+			}
+			if stat.Uid == uid {
+				unreadable++
+			}
 			continue
 		}
 		if dir := workspaceDir(cwd, workspaces); dir != "" {

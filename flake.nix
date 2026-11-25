@@ -178,10 +178,7 @@
       commandPackagesFor = system:
         let
           pkgs = import nixpkgs { inherit system; };
-          commands = if system == "aarch64-darwin" then
-            builtins.removeAttrs goCommands [ "fleet-gc-roots" ]
-          else
-            goCommands;
+          commands = goCommands;
         in
         builtins.mapAttrs (buildCommand pkgs) commands;
 
@@ -226,7 +223,7 @@
                 '';
               };
           in
-          builtins.mapAttrs wrap (lib.filterAttrs (name: p: (name != "fleet-gc-roots" || system != "aarch64-darwin") && p ? ${system}) (builtins.removeAttrs manifest [ "source" "tag" "held" "images" ]));
+          builtins.mapAttrs wrap (lib.filterAttrs (name: p: p ? ${system}) (builtins.removeAttrs manifest [ "source" "tag" "held" "images" ]));
 
       # docs-bundle is a TypeScript CLI run by Bun. Dependencies are fetched
       # as a fixed-output derivation pinned by outputHash, then the wrapper

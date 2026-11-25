@@ -27,7 +27,9 @@ Run it on a schedule as the user that owns the workspace tree. It writes the rep
 - A busy workspace is skipped. A process whose cwd is inside it marks it busy.
 - `--apply` is required to remove reported links. It removes only GC-root symlinks from idle
   workspaces, never the workspaces themselves. It rechecks process cwd before each unlink and
-  refuses to remove links when a process cwd cannot be read.
+  refuses to remove links when a process owned by the running uid has an unreadable cwd.
+  This includes inaccessible processes in user namespaces, such as containers. Unreadable
+  processes owned by other uids do not block removal.
 - A workspace deleted or replaced by a file during the run is skipped and counted as vanished. Its roots are not candidates.
 - A root is a candidate when it lies inside an idle workspace and either a path part
   below `<seat>/<ws>` is `.devenv` or `.direnv`, or its base name is `result` or

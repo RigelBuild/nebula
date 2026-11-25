@@ -1,3 +1,5 @@
+//go:build linux
+
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 package main
@@ -12,6 +14,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -308,23 +311,58 @@ func TestRunApplyRejectsSymlinkedWorkspacesPath(t *testing.T) {
 	assertSymlink(t, root)
 }
 
-func TestRunApplyFailsClosedOnUnreadableProcessCWD(t *testing.T) {
+func TestRunApplyUnreadableProcessCWDUsesOwnerUID(t *testing.T) {
 	t.Parallel()
 	fixture := newRunFixture(t)
 	idle := makeWorkspace(t, fixture.workspaces, "seat-a", "ws-idle", 8*24*time.Hour)
 	root := filepath.Join(idle, "result")
 	makeRootLink(t, root, filepath.Join(fixture.tree, "target"))
 	setRootParentsOld(t, idle, root)
-	if err := os.Mkdir(filepath.Join(fixture.procRoot, "4242"), 0o750); err != nil {
+	processDir := filepath.Join(fixture.procRoot, "4242")
+	if err := os.Mkdir(processDir, 0o750); err != nil {
 		t.Fatal(err)
 	}
-	code, report, logs := fixture.run([]string{"--apply"}, root)
-	if code != 1 || !strings.Contains(report, "apply, removed 0, skipped 0, failed 1") {
-		t.Fatalf("run = %d, report %q, logs %q", code, report, logs)
+	if err := os.Symlink("/srv/unreadable", filepath.Join(processDir, "cwd")); err != nil {
+		t.Fatal(err)
 	}
-	assertSymlink(t, root)
+	processInfo, err := os.Stat(processDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	uid := processInfo.Sys().(*syscall.Stat_t).Uid
+	readlink := func(string) (string, error) { return "", syscall.EACCES }
+	for _, currentUID := range []uint32{uid + 1, uid} {
+		var stdout, stderr bytes.Buffer
+		env := runEnv{
+			workspaces: fixture.workspaces,
+			procRoot:   fixture.procRoot,
+			output:     filepath.Join(fixture.tree, strconv.FormatUint(uint64(currentUID), 10)),
+			now:        testNow,
+			gcRoots:    func() ([]string, error) { return []string{rootLine(root)}, nil },
+			busySnapshot: func() (map[string]bool, int, error) {
+				return busyWorkspacesForUID(fixture.procRoot, fixture.workspaces, currentUID, readlink)
+			},
+		}
+		code := run([]string{"--apply"}, &stdout, &stderr, env)
+		if currentUID == uid {
+			if code != 1 {
+				t.Fatalf("own uid apply exit = %d, want 1; stderr: %s", code, stderr.String())
+			}
+			assertSymlink(t, root)
+			continue
+		}
+		if code != 0 {
+			t.Fatalf("other uid apply exit = %d, want 0; stderr: %s", code, stderr.String())
+		}
+		if _, err := os.Lstat(root); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("other uid candidate Lstat(%q) error = %v, want not exist", root, err)
+		}
+		if err := os.Symlink(filepath.Join(fixture.tree, "target"), root); err != nil {
+			t.Fatal(err)
+		}
+		setRootParentsOld(t, idle, root)
+	}
 }
-
 func TestRemoveCandidatesSkipsWorkspaceThatBecomesBusy(t *testing.T) {
 	t.Parallel()
 	fixture := newRunFixture(t)
@@ -359,6 +397,35 @@ func TestRemoveCandidatesSkipsWorkspaceThatBecomesBusy(t *testing.T) {
 		t.Fatalf("busy snapshots = %d, want an initial and per-unlink recheck", snapshots)
 	}
 	assertSymlink(t, root)
+}
+
+func TestRemoveCandidatesCountsSkippedOnceOnRecheckFailure(t *testing.T) {
+	t.Parallel()
+	fixture := newRunFixture(t)
+	idle := makeWorkspace(t, fixture.workspaces, "seat-a", "idle", 8*24*time.Hour)
+	active := makeWorkspace(t, fixture.workspaces, "seat-a", "active", time.Hour)
+	first := filepath.Join(idle, "result")
+	last := filepath.Join(active, "result")
+	makeRootLink(t, first, filepath.Join(fixture.tree, "target"))
+	makeRootLink(t, last, filepath.Join(fixture.tree, "target"))
+	setRootParentsOld(t, idle, first)
+	snapshots := 0
+	env := runEnv{
+		workspaces: fixture.workspaces,
+		now:        testNow,
+		busySnapshot: func() (map[string]bool, int, error) {
+			snapshots++
+			if snapshots == 1 {
+				return nil, 0, nil
+			}
+			return nil, 1, nil
+		},
+	}
+	var logs bytes.Buffer
+	removed, skipped, failed := removeCandidates([]string{first, last}, env, slog.New(slog.NewTextHandler(&logs, nil)))
+	if removed != 0 || skipped != 1 || failed != 1 {
+		t.Fatalf("removed %d, skipped %d, failed %d; logs %s", removed, skipped, failed, logs.String())
+	}
 }
 
 func TestRunApplySkipsSymlinkedParent(t *testing.T) {

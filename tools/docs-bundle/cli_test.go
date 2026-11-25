@@ -133,7 +133,7 @@ func TestPageErrorWriteFailure(t *testing.T) {
 		files  []string
 	}{
 		{name: "unassigned page", config: "exclude = []\n[[sections]]\nid = \"a\"\nlabel = \"A\"\nroute = \"/a\"\nprefix = \"a/\"\n", files: []string{"other.md"}},
-		{name: "route collision", config: "exclude = []\n", files: []string{"same/README.md", "same/readme.md"}},
+		{name: "route collision", config: "exclude = []\n[[sections]]\nid = \"one\"\nlabel = \"One\"\nroute = \"/same\"\nprefix = \"first/\"\n[[sections]]\nid = \"two\"\nlabel = \"Two\"\nroute = \"/same\"\nprefix = \"second/\"\n", files: []string{"first/readme.md", "second/readme.md"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

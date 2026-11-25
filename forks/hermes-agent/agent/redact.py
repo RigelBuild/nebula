@@ -1657,7 +1657,7 @@ def redact_sensitive_text(text: str, *, force: bool = False, code_file: bool = F
     if "uthorization" in text or "UTHORIZATION" in text:  # cheapest gate over every casing
         text = _AUTH_HEADER_RE.sub(lambda m: m.group(1) + (m.group(2) or "") + _mask_token(m.group(3)), text)
 
-    if ":" in text:
+    if ":" in text or "curl" in text:
         text = redact_header_credentials(text)
         text = _TELEGRAM_RE.sub(_redact_telegram_token, text)
 

@@ -91,7 +91,7 @@ _SECRET_HEADER_JSON_UNTERMINATED_RE = re.compile(
 
 # Tokenize shell segments without searching repeatedly across their suffixes.
 _SHELL_TOKEN_RE = re.compile(r'''\\\r?\n|[^\s;&|<>()`"'\\]+|\\[^\r\n]|"(?:\\[^\r\n]|[^"\\\r\n])*"?|'[^'\r\n]*'?|[;&|<>()`\r\n]''')
-_CURL_SHORT_COOKIE_RE = re.compile(r"-[A-Za-z]*?b")
+_CURL_SHORT_COOKIE_RE = re.compile(r"-[^-\sAbcCdDeEFhHKmoPQrtTuUwxXyYz]*b")
 
 
 def _redact_curl_cookies(text: str) -> str:
@@ -107,7 +107,7 @@ def _redact_curl_cookies(text: str) -> str:
             in_curl = False
             expecting_value = False
             continue
-        if token.rsplit("/", 1)[-1] == "curl":
+        if "://" not in token and token.rsplit("/", 1)[-1] == "curl":
             in_curl = True
             continue
         if not in_curl:

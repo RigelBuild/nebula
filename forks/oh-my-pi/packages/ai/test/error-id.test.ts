@@ -230,6 +230,8 @@ describe("error-id classification", () => {
 		"500 litellm.APIConnectionError: OpenAIException - Refusal (no details provided)",
 		"500 litellm.APIConnectionError: OpenAIException - Refusal",
 		"Refusal",
+		"Refusal: the model declined",
+		'500 {"error":"Refusal"}',
 	])("classifies refusal diagnostics as non-retriable: %s", errorMessage => {
 		const id = AIError.classifyMessage(message({ errorStatus: 500, errorMessage }));
 		expect(AIError.is(id, AIError.Flag.ContentBlocked)).toBe(true);
@@ -241,6 +243,14 @@ describe("error-id classification", () => {
 		"500 connection refused",
 		"500 Refusal to connect to upstream",
 		"500 Refusals from upstream",
+		'500 {"Refusal": true}',
+		'500 tool result: "Refusal" is not a valid enum value',
+		"500 invalid input: Refusal",
+		"500 Bad request at line 3: Refusal, Accepted, Pending are allowed",
+		"500 upstream reported connection Refusal",
+		"500 ECONNREFUSED Refusal, retry later",
+		"500 Policy-Refusal",
+		"500 Internal error: Refusal (bio) heuristics service unavailable",
 	])("does not classify ordinary network errors as refusals: %s", errorMessage => {
 		const id = AIError.classifyMessage(message({ errorStatus: 500, errorMessage }));
 		expect(AIError.is(id, AIError.Flag.ContentBlocked)).toBe(false);

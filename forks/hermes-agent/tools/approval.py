@@ -1220,15 +1220,6 @@ def _review_first_verdict(display_target: str, description: str, pattern_key: st
     return verdict, note
 
 
-def _current_profile_name() -> str | None:
-    """The served Hermes profile name, respecting multiplexed turn scope."""
-    try:
-        from hermes_cli.profiles import current_profile_name
-
-        return current_profile_name()
-    except Exception:
-        return None
-
 
 def _run_approval_gate(
     *, pattern_key: str, description: str, display_target: str, approval_callback=None,
@@ -1264,9 +1255,9 @@ def _run_approval_gate(
         review_first
         and _is_peer_mesh_approval_context()
         and not _is_cron_approval_context()
-        and not _is_single_query_approval_context()
         and tool_name in {"terminal", "read_file", "search_files", "write_file", "patch"}
-        and _current_profile_name() == "nemo"
+        and not _is_single_query_approval_context()
+        and is_truthy_value(approval_context._get_approval_config().get("mesh_review_first"), default=False)
     )
     if peer_mesh_review:
         verdict, note = _review_first_verdict(display_target, description, pattern_key, session_key)

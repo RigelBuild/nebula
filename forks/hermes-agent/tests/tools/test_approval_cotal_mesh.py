@@ -53,7 +53,8 @@ def peer_mesh_turn(monkeypatch):
     monkeypatch.setenv("HERMES_EXEC_ASK", "1")
     monkeypatch.setenv("HERMES_SESSION_PLATFORM", "cotal")
     monkeypatch.setenv("HERMES_SESSION_KEY", SESSION)
-    monkeypatch.setenv("HERMES_PROFILE_NAME", "nemo")
+    monkeypatch.setenv("HERMES_PROFILE_NAME", "default")
+    monkeypatch.setattr(approval_context, "_get_approval_config", lambda: {"mesh_review_first": True})
     monkeypatch.setattr(approval_context, "_get_approval_timeout", lambda: 1)
     sent = []
     approval_mod.register_gateway_notify(SESSION, sent.append)
@@ -83,7 +84,7 @@ def test_plugin_requested_approval_is_blocked_without_prompting_the_peer(cotal_t
 
 
 @pytest.mark.parametrize("tool_name", ["terminal", "read_file", "search_files", "write_file", "patch"])
-def test_nemo_mesh_reviewer_approve_runs_terminal_and_file_tools(peer_mesh_turn, monkeypatch, tool_name):
+def test_mesh_reviewer_approve_runs_terminal_and_file_tools(peer_mesh_turn, monkeypatch, tool_name):
 
     calls = _reviewer(monkeypatch, "approve")
     first = approval_mod.request_tool_approval(
@@ -94,7 +95,7 @@ def test_nemo_mesh_reviewer_approve_runs_terminal_and_file_tools(peer_mesh_turn,
     assert calls == ["git status", "git status"]
     assert peer_mesh_turn == []
 
-def test_nemo_mesh_reviewer_escalate_keeps_peer_block(peer_mesh_turn, monkeypatch):
+def test_mesh_reviewer_escalate_keeps_peer_block(peer_mesh_turn, monkeypatch):
     calls = _reviewer(monkeypatch, "escalate", "check this operation")
     result = approval_mod.request_tool_approval(
         "terminal", "routine operation", display="git status", review=True)
@@ -105,7 +106,7 @@ def test_nemo_mesh_reviewer_escalate_keeps_peer_block(peer_mesh_turn, monkeypatc
     assert peer_mesh_turn == []
 
 
-def test_nemo_mesh_review_false_secret_hit_never_calls_reviewer(peer_mesh_turn, monkeypatch):
+def test_mesh_review_false_secret_hit_never_calls_reviewer(peer_mesh_turn, monkeypatch):
     monkeypatch.setattr(approval_mod, "_smart_verdict",
                         lambda *a, **k: pytest.fail("review=False must not call the reviewer"))
     result = approval_mod.request_tool_approval(
@@ -115,18 +116,21 @@ def test_nemo_mesh_review_false_secret_hit_never_calls_reviewer(peer_mesh_turn, 
     assert peer_mesh_turn == []
 
 
-def test_non_nemo_mesh_reviewer_approve_keeps_peer_block(peer_mesh_turn, monkeypatch):
-    monkeypatch.setenv("HERMES_PROFILE_NAME", "other")
+def test_default_config_off_keeps_peer_block(peer_mesh_turn, monkeypatch):
+    from hermes_cli.config_defaults import DEFAULT_CONFIG
+
+    monkeypatch.setattr(approval_context, "_get_approval_config", lambda: DEFAULT_CONFIG["approvals"])
     monkeypatch.setattr(approval_mod, "_smart_verdict",
-                        lambda *a, **k: pytest.fail("non-Nemo mesh turns must not call the reviewer"))
+                        lambda *a, **k: pytest.fail("default-off mesh turns must not call the reviewer"))
     result = approval_mod.request_tool_approval(
         "terminal", "routine operation", display="git status", review=True)
+    assert DEFAULT_CONFIG["approvals"]["mesh_review_first"] is False
     assert result["approved"] is False
     assert "peer cannot approve" in result["message"]
     assert peer_mesh_turn == []
 
 
-def test_nemo_mesh_plugin_origin_reviewer_approve_runs(peer_mesh_turn, monkeypatch):
+def test_mesh_plugin_origin_reviewer_approve_runs(peer_mesh_turn, monkeypatch):
     monkeypatch.setattr(approval_mod.approval_context, "is_plugin_origin_turn", lambda: True)
     calls = _reviewer(monkeypatch, "approve")
     result = approval_mod.request_tool_approval(

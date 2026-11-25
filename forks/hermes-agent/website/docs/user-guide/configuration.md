@@ -3118,6 +3118,15 @@ approvals:
 
 Smart mode is particularly useful for reducing approval fatigue — it lets the agent work more autonomously on safe operations while still catching genuinely destructive commands.
 
+### Peer mesh review
+
+Set `approvals.mesh_review_first: true` to let the smart reviewer approve terminal and file guard hits during peer mesh turns. This avoids sending an interactive approval request back to a peer that cannot answer it. A reviewer denial or escalation still blocks the action. The default is `false`, which keeps peer turns fail-closed.
+
+```yaml
+approvals:
+  mesh_review_first: true
+```
+
 
 :::warning
 Setting `approvals.mode: off` disables all safety checks for terminal commands. Only use this in trusted, sandboxed environments.

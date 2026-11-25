@@ -6,6 +6,7 @@ import asyncio
 import pathlib
 import threading
 import time
+import pytest
 from unittest.mock import MagicMock, patch
 
 from gateway.shutdown_watchdog import (
@@ -360,3 +361,19 @@ def test_heartbeat_write_does_not_block_the_loop_it_monitors():
     assert ticks >= 5, (
         f'the loop made only {ticks:d} tick(s) while the heartbeat was writing — the write is blocking the loop again'
     )
+
+
+def test_loop_stall_logger_warns_only_over_threshold(caplog):
+    from gateway.shutdown_watchdog import loop_stall_logger
+
+    async def scenario():
+        clock = iter([0.0, 2.9, 3.0, 6.1])
+        loop = asyncio.get_running_loop()
+        with patch.object(loop, 'time', side_effect=lambda: next(clock)), \
+             patch('gateway.shutdown_watchdog.asyncio.sleep', side_effect=[None, None, asyncio.CancelledError]):
+            with pytest.raises(asyncio.CancelledError):
+                await loop_stall_logger()
+
+    asyncio.run(scenario())
+    warnings = [record.message for record in caplog.records if 'event loop stalled' in record.message]
+    assert warnings == ['Gateway event loop stalled for 2.10 seconds']

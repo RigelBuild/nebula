@@ -53,6 +53,17 @@ def _coerce_float(value: Any, default: float, floor: float = 0.0) -> float:
         return default
 
 
+async def loop_stall_logger() -> None:
+    """Warn when the event loop wakes more than two seconds late."""
+    loop = asyncio.get_running_loop()
+    while True:
+        deadline = loop.time() + 1.0
+        await asyncio.sleep(1.0)
+        lag = loop.time() - deadline
+        if lag > 2.0:
+            logger.warning("Gateway event loop stalled for %.2f seconds", lag)
+
+
 class _LoopFloorTimerHandle:
     """Cancelable owner for the currently scheduled selector floor timer."""
     def __init__(self, loop: asyncio.AbstractEventLoop, interval: float):

@@ -14,11 +14,11 @@ import {
 import { JetStreamApiCodes, jetstreamManager, type ConsumerInfo } from "@nats-io/jetstream";
 import type { NatsConnection } from "@nats-io/transport-node";
 import type { MeshTarget } from "../mesh-target.js";
+import type { PsReply } from "../control/actions.js";
 import { CommandFailure } from "../output.js";
 import { NativeChatSession } from "./native-session.js";
 import type { CloseReport, SessionIdentity } from "./session.js";
 import type { ChatWords } from "./words.js";
-
 interface InboxPin {
   readonly streamCreated: string;
   readonly consumerCreated: string;
@@ -32,6 +32,7 @@ export async function openRoutingChatSession(target: MeshTarget, options: {
   readonly label: string;
   readonly channels: readonly string[];
   readonly words: ChatWords;
+  readonly managerCensus?: () => Promise<PsReply>;
 }): Promise<NativeChatSession> {
   if (target.mode !== "open") throw new CommandFailure("refused", "UNSUPPORTED", "the routing-only chat adapter requires a recorded open target; no authentication fallback was attempted", { target: { space: target.space } });
   if (!options.label || options.label.length > 128 || options.channels.some((channel) => !isConcreteChannel(channel)))
@@ -104,7 +105,7 @@ export async function openRoutingChatSession(target: MeshTarget, options: {
   };
   // Register the real participant listeners before starting the endpoint. No fabricated session or
   // connector runtime is involved; NativeChatSession owns its endpoint listeners through close().
-  const session = new NativeChatSession({ endpoint, identity, retire, words: options.words });
+  const session = new NativeChatSession({ endpoint, identity, retire, words: options.words, managerCensus: options.managerCensus });
   try {
     await endpoint.start();
     if (!connection || connection.isClosed()) throw new Error("the opened transport is unavailable");

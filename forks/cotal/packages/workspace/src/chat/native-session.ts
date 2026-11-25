@@ -33,6 +33,7 @@ import {
   type PresenceStatus,
   type PresenceView,
 } from "@cotal-ai/core";
+import type { PsReply } from "../control/actions.js";
 import type { RefusalCode } from "../output.js";
 import { createPresencePoller, type PresencePoller } from "../presence-poller.js";
 import { spaceStreamsAbsent, spaceStreamsExpected } from "../space-streams.js";
@@ -115,14 +116,30 @@ export function grantRefusal(grant: readonly string[], channel: string, use: "re
   return { outcome: "refused", code: "PERMISSION_DENIED", message };
 }
 
+function managerAnsweredFor(census: PsReply | undefined, seat: Presence): boolean {
+  return census?.ok === true && census.silent.length === 0 && census.failed.length === 0 &&
+    seat.lifecycleUid !== undefined && census.answered.some((manager) =>
+      manager.rows.some((row) => row.id === seat.card.id && row.lifecycleUid === seat.lifecycleUid));
+}
+
+function needsManagerCensus(to: DmTarget, roster: readonly Presence[], rosterState: PresenceView["state"], engine: ParticipantEngine, selfPrincipal: string): boolean {
+  if (typeof to !== "string" || rosterState !== "current") return false;
+  const peer = roster.find((p) => p.card.id !== selfPrincipal && p.status !== "offline" && p.card.name.trim().toLowerCase() === to.trim().toLowerCase());
+  return peer !== undefined && engine.sendersNamed(to).some((sender) => {
+    const entry = roster.find((p) => p.card.id === sender.id);
+    return entry?.status === "offline";
+  });
+}
+
 /** Resolve a DM target before effects. Exact principals bypass names; names include roster peers and heard senders.
- * A current roster may ignore an offline heard sender beside a present peer only for an agent row with lifecycle UID. */
+ * Absence is a verdict only on a current roster. An offline heard sender is ignored beside a present peer only when a complete manager census reports that exact managed incarnation. */
 export function resolveDmTarget(
   to: DmTarget,
   roster: readonly Presence[],
   rosterState: PresenceView["state"],
   engine: ParticipantEngine,
   self: { readonly principal: string; readonly name?: string; readonly answerOne: string },
+  census?: PsReply,
 ): { readonly id: string; readonly name: string } | Refused {
   if (typeof to !== "string" || parsePrincipalKey(to)) {
     const principal = typeof to === "string" ? to : to.principal;
@@ -144,8 +161,8 @@ export function resolveDmTarget(
   for (const sender of engine.sendersNamed(to)) {
     if (named.has(sender.id)) continue;
     const rosterEntry = rosterState === "current" ? roster.find((p) => p.card.id === sender.id) : undefined;
-    const isOfflineManagedSeat = rosterEntry?.status === "offline" && rosterEntry.card.kind === "agent" && rosterEntry.lifecycleUid !== undefined;
-    if (presentPeer && isOfflineManagedSeat) continue;
+    const isOfflineManagedSeat = rosterState === "current" && presentPeer && rosterEntry?.status === "offline" && managerAnsweredFor(census, rosterEntry);
+    if (isOfflineManagedSeat) continue;
     named.set(sender.id, sender);
   }
   if (named.size > 1) {
@@ -171,6 +188,8 @@ export interface NativeSessionInputs {
   readonly identity: SessionIdentity;
   /** The admission adapter's own retirement call. This module only invokes it. */
   readonly retire: () => Promise<CloseReport>;
+  /** The manager's current seat census, used to resolve ambiguous names. */
+  readonly managerCensus?: () => Promise<PsReply>;
   /** The front end's clauses that end this session's refusals. */
   readonly words: ChatWords;
 }
@@ -230,7 +249,6 @@ export class NativeChatSession implements AdmittedChatSession {
       : "this session can no longer receive direct messages: its inbox is gone from the broker, because the manager restarted and retired the session; open a new session";
     void this.close();
   };
-
   constructor(private readonly inputs: NativeSessionInputs) {
     this.rosterPoller = createPresencePoller(inputs.endpoint, DEFAULT_HEARTBEAT_MS, (event) => this.onPresence(event), () => {});
     this.engine = new ParticipantEngine(inputs.identity.principal);
@@ -249,6 +267,16 @@ export class NativeChatSession implements AdmittedChatSession {
   /** This session as {@link resolveDmTarget} reads it. */
   private self(): { readonly principal: string; readonly name: string; readonly answerOne: string } {
     return { principal: this.inputs.identity.principal, name: this.inputs.identity.label, answerOne: this.inputs.words.answerOne };
+  }
+
+  /** Read the manager census only when a current roster and offline heard agent make it relevant. */
+  private async managerCensusFor(to: DmTarget, roster: readonly Presence[], rosterState: PresenceView["state"]): Promise<PsReply | undefined> {
+    if (!needsManagerCensus(to, roster, rosterState, this.engine, this.inputs.identity.principal) || !this.inputs.managerCensus) return undefined;
+    try {
+      return await this.inputs.managerCensus();
+    } catch {
+      return undefined;
+    }
   }
 
   subscribe(listener: (event: SessionEvent) => void): () => void {
@@ -328,7 +356,10 @@ export class NativeChatSession implements AdmittedChatSession {
       try { await this.readUserRoster(); }
       catch (error) { return { outcome: "refused", code: "TARGET_UNAVAILABLE", message: `roster read failed: ${error instanceof Error ? error.message : String(error)}` }; }
     }
-    const recipient = resolveDmTarget(to, ep.getRoster(), ep.presenceView().state, this.engine, this.self());
+    const initialRoster = ep.getRoster();
+    const initialState = ep.presenceView().state;
+    const census = await this.managerCensusFor(to, initialRoster, initialState);
+    const recipient = resolveDmTarget(to, initialRoster, initialState, this.engine, this.self(), census);
     return "outcome" in recipient ? recipient : { outcome: "ok", value: recipient };
   }
 
@@ -338,7 +369,10 @@ export class NativeChatSession implements AdmittedChatSession {
       try { await this.readUserRoster(); }
       catch (error) { return { outcome: "refused", code: "TARGET_UNAVAILABLE", message: `roster read failed: ${error instanceof Error ? error.message : String(error)}` }; }
     }
-    const recipient = resolveDmTarget(to, ep.getRoster(), ep.presenceView().state, this.engine, this.self());
+    const initialRoster = ep.getRoster();
+    const initialState = ep.presenceView().state;
+    const census = await this.managerCensusFor(to, initialRoster, initialState);
+    const recipient = resolveDmTarget(to, initialRoster, initialState, this.engine, this.self(), census);
     if ("outcome" in recipient) return recipient;
     const gone = await this.beforePublish();
     if (gone) return gone;

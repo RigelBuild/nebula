@@ -2,4 +2,4 @@
 "@cotal-ai/workspace": patch
 ---
 
-Allow a present agent with a lifecycle-scoped roster record to take its display name from an offline heard sender when resolving direct messages.
+A peer that has heard an offline seat and has a present peer with the same name can resolve that name to the present peer when the manager census confirms it is managed. If managers deny the census or do not all answer, the peer keeps the name ambiguous.

@@ -1,3 +1,4 @@
+import { controlPs, type ControlCtx } from "../control/actions.js";
 import type { ControlClient } from "../control/manager.js";
 import type { MeshTarget } from "../mesh-target.js";
 import { openRoutingChatSession } from "./open-session.js";
@@ -19,16 +20,16 @@ export type ChatAdmission =
   | { readonly mode: "user"; readonly label: string; readonly channels: readonly string[]; readonly read: readonly string[]; readonly post: readonly string[]; readonly ttlSec: number };
 
 /** Admit through the one adapter the mode names. Each adapter refuses a target of another mode.
- *  `words` are the front end's clauses that end the session's refusals; `control` asks the manager
- *  that admits and retires a static session. */
+ * `words` end this session's refusals; `control` supplies its manager census read. */
 export function openChatSession(target: MeshTarget, admission: ChatAdmission, options: {
   readonly words: ChatWords;
   readonly control: ControlClient;
 }): Promise<AdmittedChatSession> {
   const { words, control } = options;
+  const managerCensus = () => controlPs(control, { space: target.space, server: target.server } satisfies Pick<ControlCtx, "space" | "server">, { readOnly: true });
   switch (admission.mode) {
-    case "open": return openRoutingChatSession(target, { ...admission, words });
-    case "auth": return openStaticChatSession(target, { ...admission, words, control });
-    case "user": return openUserChatSession(target, { ...admission, words });
+    case "open": return openRoutingChatSession(target, { ...admission, words, managerCensus });
+    case "auth": return openStaticChatSession(target, { ...admission, words, control, managerCensus });
+    case "user": return openUserChatSession(target, { ...admission, words, managerCensus });
   }
 }

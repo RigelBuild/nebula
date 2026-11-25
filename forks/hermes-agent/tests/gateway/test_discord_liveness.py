@@ -64,14 +64,16 @@ class _LiveBot(FakeBot):
 
 
 class _FakeKeepAlive:
-    def __init__(self, *, ack_age: float = 0.0):
+    def __init__(self, *, ack_age: float = 0.0, interval: float = 41.25):
         self._last_ack = time.perf_counter() - ack_age
+        self._last_send = self._last_ack - interval
+        self.interval = interval
 
 
 class _FakeWebSocket:
-    def __init__(self, *, open: bool = True, ack_age: float = 0.0):
+    def __init__(self, *, open: bool = True, ack_age: float = 0.0, interval: float = 41.25):
         self.open = open
-        self._keep_alive = _FakeKeepAlive(ack_age=ack_age)
+        self._keep_alive = _FakeKeepAlive(ack_age=ack_age, interval=interval)
 
 
 def _set_websocket_health(
@@ -85,6 +87,65 @@ def _set_websocket_health(
     bot._gateway_ready = ready
     bot.latency = latency
     bot.ws = _FakeWebSocket(open=socket_open, ack_age=ack_age)
+
+
+def _health_client(*, latency: float, ack_age: float = 0.0, interval: float = 41.25):
+    return SimpleNamespace(
+        is_ready=lambda: True,
+        is_closed=lambda: False,
+        ws=_FakeWebSocket(ack_age=ack_age, interval=interval),
+        latency=latency,
+    )
+
+
+def test_liveness_ignores_heartbeat_latency_from_ack_race(monkeypatch):
+    adapter = _make_adapter(monkeypatch, max_ack_age=60.0, max_latency=30.0)
+    client = _health_client(latency=41.3)
+
+    assert adapter._read_websocket_health(client) == (True, "healthy")
+
+
+def test_liveness_still_rejects_high_latency_below_heartbeat_interval(monkeypatch):
+    adapter = _make_adapter(monkeypatch, max_ack_age=60.0, max_latency=30.0)
+    client = _health_client(latency=31.0)
+
+    assert adapter._read_websocket_health(client) == (False, "latency_exceeded")
+
+
+def test_liveness_accepts_50_second_race_latency_with_short_round_trip(monkeypatch):
+    adapter = _make_adapter(monkeypatch, max_ack_age=60.0, max_latency=30.0)
+    client = _health_client(latency=50.0)
+
+    assert adapter._read_websocket_health(client) == (True, "healthy")
+
+
+def test_liveness_rejects_race_latency_with_long_round_trip(monkeypatch):
+    adapter = _make_adapter(monkeypatch, max_ack_age=60.0, max_latency=30.0)
+    client = _health_client(latency=72.25)
+
+    assert adapter._read_websocket_health(client) == (False, "latency_exceeded")
+
+
+def test_liveness_without_heartbeat_interval_uses_unadjusted_latency(monkeypatch):
+    adapter = _make_adapter(monkeypatch, max_ack_age=60.0, max_latency=30.0)
+    client = _health_client(latency=41.3)
+    del client.ws._keep_alive.interval
+
+    assert adapter._read_websocket_health(client) == (False, "latency_exceeded")
+
+
+def test_liveness_still_rejects_stale_ack_with_heartbeat_latency(monkeypatch):
+    adapter = _make_adapter(monkeypatch, max_ack_age=60.0, max_latency=30.0)
+    client = _health_client(latency=41.3, ack_age=61.0)
+
+    assert adapter._read_websocket_health(client) == (False, "ack_stale")
+
+
+class _BrokenWebSocket:
+    @property
+    def open(self):
+        raise RuntimeError("socket state unavailable")
+
 
 
 def _make_adapter(
@@ -107,11 +168,6 @@ def _make_adapter(
         extra["websocket_event_max_silence_seconds"] = max_event_silence
     return DiscordAdapter(PlatformConfig(enabled=True, token="test-token", extra=extra))
 
-
-class _BrokenWebSocket:
-    @property
-    def open(self):
-        raise RuntimeError("socket state unavailable")
 
 
 @pytest.mark.parametrize(

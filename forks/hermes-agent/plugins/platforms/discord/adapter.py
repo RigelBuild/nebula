@@ -2032,6 +2032,11 @@ class DiscordAdapter(DiscordAuthorizationMixin, DiscordMediaMixin, DiscordThread
         latency = getattr(client, "latency", None)
         if not isinstance(latency, (int, float)) or not math.isfinite(latency):
             return False, "latency_non_finite"
+        # TODO(RIG-12819, owner: harness): remove when discord.py ships f9c66a6a38 (heartbeat latency race).
+        # An ACK before _last_send updates can include one extra heartbeat interval.
+        interval = getattr(keep_alive, "interval", None)
+        if isinstance(interval, (int, float)) and math.isfinite(interval) and latency >= interval - 1:
+            latency -= interval
         if latency > self._max_latency_seconds:
             return False, "latency_exceeded"
         # Dispatch-side dimension (#109521 incident 2): transport-green + event-starved is the

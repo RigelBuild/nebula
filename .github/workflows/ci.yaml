@@ -82,6 +82,9 @@ jobs:
           oauth-client-id: ${{ vars.TS_OIDC_CLIENT_ID }}
           audience: api.tailscale.com/${{ vars.TS_OIDC_CLIENT_ID }}
           tags: tag:gha-nebula
+      - name: Warn when tailnet cache auth is unavailable
+        if: vars.TS_OIDC_CLIENT_ID == ''
+        run: echo "::warning::TS_OIDC_CLIENT_ID is unset; running without the tailnet caches"
       # Builds every package so a stale vendorHash or FOD hash fails CI.
       - name: Build packages
         run: |
@@ -90,7 +93,7 @@ jobs:
           # Assign first, so set -e fails the step when nix eval fails.
           names="$(nix eval --raw ".#packages.${system}" --apply 'ps: builtins.concatStringsSep "\n" (builtins.attrNames ps)')"
           if [ -z "$names" ]; then echo "no packages found for ${system}" >&2; exit 1; fi
-          mapfile -t attrs <<<"$names"
+          attrs=(); while IFS= read -r a; do attrs+=("$a"); done <<<"$names"
           nix build --no-link "${attrs[@]/#/.#packages.${system}.}"
       - name: Set up Moon
         run: nix develop --command moon --version
@@ -225,6 +228,9 @@ jobs:
           oauth-client-id: ${{ vars.TS_OIDC_CLIENT_ID }}
           audience: api.tailscale.com/${{ vars.TS_OIDC_CLIENT_ID }}
           tags: tag:gha-nebula
+      - name: Warn when tailnet cache auth is unavailable
+        if: vars.TS_OIDC_CLIENT_ID == ''
+        run: echo "::warning::TS_OIDC_CLIENT_ID is unset; running without the tailnet caches"
       # Builds every package so a stale vendorHash or FOD hash fails CI.
       - name: Build packages
         run: |
@@ -233,7 +239,7 @@ jobs:
           # Assign first, so set -e fails the step when nix eval fails.
           names="$(nix eval --raw ".#packages.${system}" --apply 'ps: builtins.concatStringsSep "\n" (builtins.attrNames ps)')"
           if [ -z "$names" ]; then echo "no packages found for ${system}" >&2; exit 1; fi
-          mapfile -t attrs <<<"$names"
+          attrs=(); while IFS= read -r a; do attrs+=("$a"); done <<<"$names"
           nix build --no-link "${attrs[@]/#/.#packages.${system}.}"
       - name: Set up Moon
         run: nix develop --command moon --version
@@ -242,7 +248,7 @@ jobs:
           MOON_CACHE_BASIC: ${{ secrets.MOON_CACHE_BASIC }}
         run: |
           mkdir -p ~/.moon
-          test -n "$MOON_CACHE_BASIC" || { echo '::error::missing secret'; exit 1; }
+          if [ -n "$MOON_REMOTE_HOST" ]; then test -n "$MOON_CACHE_BASIC" || { echo '::error::missing secret'; exit 1; }; fi
           git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git" || true
           git fetch origin main
           nix develop --command moon ci --base origin/main

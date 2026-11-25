@@ -14,8 +14,23 @@ def _ensure_redaction_enabled(monkeypatch):
 
 
 class TestCookieCredentials:
-    def test_curl_short_cookie_flags_require_a_real_cookie_option(self):
-        # Values long enough to count as cookie credentials, so a misparse would mask them.
+    @pytest.mark.parametrize("option", (
+        "ab", "Bb", "fb", "gb", "Gb", "Ib", "ib", "jb", "kb", "lb", "Lb", "Mb",
+        "nb", "Nb", "pb", "qb", "Jb", "Ob", "Rb", "Sb", "sb", "vb", "Vb", "Zb",
+        "0b", "1b", "2b", "3b", "4b", "6b", "#b", ":b", "JOb",
+    ))
+    def test_curl_short_cookie_no_argument_flags_are_masked(self, option):
+        text = f"curl -{option} a=opaque-cookie-secret https://example.com/"
+        result = redact_sensitive_text(text, force=True)
+        assert "opaque-cookie-secret" not in result, result
+
+    @pytest.mark.parametrize("flag", tuple("AbcCdDeEFhHKmoPQrtTuUwxXyYz"))
+    def test_curl_short_cookie_argument_flags_do_not_start_cookie_option(self, flag):
+        text = f"curl -{flag}b a=opaque-cookie-secret https://example.com/"
+        result = redact_sensitive_text(text, force=True)
+        assert "opaque-cookie-secret" in result, result
+
+    def test_curl_data_header_and_url_text_are_not_cookie_flags(self):
         for text in (
             "curl -dbody=opaque-cookie-secret",
             "curl -Hbar=opaque-cookie-secret",
@@ -23,12 +38,12 @@ class TestCookieCredentials:
         ):
             assert redact_sensitive_text(text, force=True) == text, text
 
-        for text, expected_suffix in (
-            ("curl -sb a=opaque-cookie-secret", "-sb ***"),
-            ("/usr/bin/curl -b a=opaque-cookie-secret", "-b ***"),
-        ):
-            result = redact_sensitive_text(text, force=True)
-            assert result.endswith(expected_suffix), result
+        assert "opaque-cookie-secret" not in redact_sensitive_text(
+            "curl -sb a=opaque-cookie-secret", force=True
+        )
+        assert "opaque-cookie-secret" not in redact_sensitive_text(
+            "/usr/bin/curl -b a=opaque-cookie-secret", force=True
+        )
 
     def test_cookie_values_masked_in_assignment_and_inline_header_forms(self):
         for text, secret in (

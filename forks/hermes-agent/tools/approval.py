@@ -1261,7 +1261,7 @@ def _run_approval_gate(
         and is_truthy_value(approval_context._get_approval_config().get("mesh_review_first"), default=False)
     )
     if peer_mesh_review:
-        # Cotal mesh turns are plugin-origin, and reviewer approval is in scope by design.
+        # Plugin-origin turns may take the reviewer approve here too; no plugin_origin check by design.
         verdict, note = _review_first_verdict(display_target, description, pattern_key, session_key)
         if verdict == "approve":
             return _approved()

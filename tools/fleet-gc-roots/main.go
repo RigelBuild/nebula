@@ -39,6 +39,7 @@ type candidates struct {
 	Unreadable int      // /proc entries whose cwd could not be read
 	Vanished   int      // root links whose workspace was deleted or replaced during the run
 	Apply      bool     // whether candidate root links should be removed
+	Skipped    int      // candidate root links that were not removed
 	Removed    int      // candidate root links removed
 	Failed     int      // candidate root links that could not be removed
 }
@@ -63,22 +64,24 @@ func runFromEnvironment(args []string, stdout, stderr io.Writer, getenv func(str
 		return 2
 	}
 	return run(args, stdout, stderr, runEnv{
-		workspaces: workspaces,
-		procRoot:   defaultProc,
-		output:     output,
-		now:        time.Now(),
-		gcRoots:    nixRoots,
+		workspaces:   workspaces,
+		procRoot:     defaultProc,
+		output:       output,
+		now:          time.Now(),
+		gcRoots:      nixRoots,
+		busySnapshot: func() (map[string]bool, int, error) { return busyWorkspaces(defaultProc, workspaces) },
 	})
 }
 
 // runEnv is the input and output of one run. main fills it from the host;
 // tests fill it with temporary paths and fixed input.
 type runEnv struct {
-	workspaces string
-	procRoot   string
-	output     string
-	now        time.Time
-	gcRoots    func() ([]string, error)
+	workspaces   string
+	procRoot     string
+	output       string
+	now          time.Time
+	gcRoots      func() ([]string, error)
+	busySnapshot func() (map[string]bool, int, error)
 }
 
 func run(args []string, stdout, stderr io.Writer, env runEnv) int {
@@ -88,6 +91,22 @@ func run(args []string, stdout, stderr io.Writer, env runEnv) int {
 		return 2
 	}
 	apply := len(args) == 1
+	if apply {
+		requested, err := filepath.Abs(env.workspaces)
+		if err != nil {
+			logger.Error("resolve workspace path for apply", "path", env.workspaces, "error", err)
+			return 2
+		}
+		resolved, err := filepath.EvalSymlinks(requested)
+		if err != nil {
+			logger.Error("resolve workspace path for apply", "path", env.workspaces, "error", err)
+			return 2
+		}
+		if resolved != filepath.Clean(requested) {
+			logger.Error("apply requires a non-symlinked workspace path", "path", env.workspaces, "resolved", resolved)
+			return 2
+		}
+	}
 	roots, err := env.gcRoots()
 	if err != nil {
 		logger.Error("list nix GC roots", "error", err)
@@ -100,13 +119,13 @@ func run(args []string, stdout, stderr io.Writer, env runEnv) int {
 	}
 	found.Apply = apply
 	if apply {
-		found.Removed, found.Failed = removeCandidates(found.Roots, env, logger)
+		found.Removed, found.Skipped, found.Failed = removeCandidates(found.Roots, env, logger)
 	}
 	mode := "dry-run"
 	if apply {
 		mode = "apply"
 	}
-	logger.Info("root report complete", "mode", mode, "removed", found.Removed, "failed", found.Failed)
+	logger.Info("root report complete", "mode", mode, "removed", found.Removed, "skipped", found.Skipped, "failed", found.Failed)
 	report := renderReport(found, env.now, idleAfter, env.output)
 	if _, err := io.WriteString(stdout, report); err != nil {
 		logger.Error("write report to stdout", "error", err)
@@ -123,12 +142,28 @@ func run(args []string, stdout, stderr io.Writer, env runEnv) int {
 }
 
 // removeCandidates removes only reported roots whose workspaces remain idle and not busy.
-func removeCandidates(roots []string, env runEnv, logger *slog.Logger) (removed, failed int) {
-	eligible := make(map[string]bool, len(roots))
-	busy, _, busyErr := busyWorkspaces(env.procRoot, env.workspaces)
-	for _, root := range roots {
+func removeCandidates(roots []string, env runEnv, logger *slog.Logger) (removed, skipped, failed int) {
+	busySnapshot := env.busySnapshot
+	if busySnapshot == nil {
+		busySnapshot = func() (map[string]bool, int, error) {
+			return busyWorkspaces(env.procRoot, env.workspaces)
+		}
+	}
+	_, unreadable, err := busySnapshot()
+	if err != nil {
+		logger.Error("snapshot busy workspaces", "error", err)
+		return 0, 0, 1
+	}
+	if unreadable > 0 {
+		logger.Error("unreadable process cwd prevents apply", "count", unreadable)
+		return 0, 0, 1
+	}
+
+	eligible := make([]bool, len(roots))
+	for i, root := range roots {
 		idle, err := isIdle(env.workspaces, root, env.now, idleAfter)
 		if errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) || (err == nil && !idle) {
+			skipped++
 			continue
 		}
 		if err != nil {
@@ -136,24 +171,27 @@ func removeCandidates(roots []string, env runEnv, logger *slog.Logger) (removed,
 			logger.Error("recheck candidate workspace activity", "path", root, "error", err)
 			continue
 		}
-		if busyErr != nil {
-			failed++
-			logger.Error("snapshot busy workspaces", "path", root, "error", busyErr)
-			continue
-		}
-		eligible[root] = !busy[workspaceDir(root, env.workspaces)]
+		eligible[i] = true
 	}
-	for _, root := range roots {
-		if !eligible[root] {
+	for i, root := range roots {
+		if !eligible[i] {
 			continue
 		}
-		busy, _, err := busyWorkspaces(env.procRoot, env.workspaces)
+		busy, unreadable, err := busySnapshot()
 		if err != nil {
 			failed++
+			skipped += len(roots) - i - 1
 			logger.Error("recheck busy workspaces", "path", root, "error", err)
-			continue
+			return removed, skipped, failed
+		}
+		if unreadable > 0 {
+			failed++
+			skipped += len(roots) - i - 1
+			logger.Error("unreadable process cwd prevents apply", "path", root, "count", unreadable)
+			return removed, skipped, failed
 		}
 		if busy[workspaceDir(root, env.workspaces)] {
+			skipped++
 			continue
 		}
 		unlinked, err := unlinkRoot(env.workspaces, root)
@@ -162,11 +200,13 @@ func removeCandidates(roots []string, env runEnv, logger *slog.Logger) (removed,
 			logger.Error("remove candidate root", "path", root, "error", err)
 			continue
 		}
-		if unlinked {
-			removed++
+		if !unlinked {
+			skipped++
+			continue
 		}
+		removed++
 	}
-	return removed, failed
+	return removed, skipped, failed
 }
 
 // unlinkRoot opens each parent without following symlinks and unlinks only the final symlink.
@@ -205,6 +245,7 @@ func unlinkRoot(workspaces, root string) (removed bool, err error) {
 	if info.Mode()&os.ModeSymlink == 0 {
 		return false, nil
 	}
+	// A same-uid process could swap the entry after Lstat and before Unlinkat.
 	if err := syscall.Unlinkat(fd, base); err != nil {
 		return false, err
 	}
@@ -404,7 +445,7 @@ func renderReport(found candidates, now time.Time, idle time.Duration, outputPat
 	if found.Apply {
 		mode = "apply"
 	}
-	fmt.Fprintf(&b, "fleet-gc-roots: %d idle workspace GC root(s) in %d workspace(s); %s, removed %d, failed %d\n", len(found.Roots), found.Workspaces, mode, found.Removed, found.Failed)
+	fmt.Fprintf(&b, "fleet-gc-roots: %d idle workspace GC root(s) in %d workspace(s); %s, removed %d, skipped %d, failed %d\n", len(found.Roots), found.Workspaces, mode, found.Removed, found.Skipped, found.Failed)
 	fmt.Fprintf(&b, "generated %s, idle after %s, output %s\n", now.Format(time.RFC3339), idle, outputPath)
 	fmt.Fprintf(&b, "skipped busy workspaces: %d; unparsed root lines: %d; unreadable proc cwd: %d; vanished roots: %d\n", found.Busy, found.Unparsed, found.Unreadable, found.Vanished)
 	for _, root := range found.Roots {

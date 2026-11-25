@@ -6,6 +6,7 @@ release: {
 			kind:     "binary"
 			package:  "local:fleet-gc-roots"
 			binaries: ["fleet-gc-roots"]
+			systems: ["x86_64-linux", "aarch64-linux"]
 		}
 	}
 }

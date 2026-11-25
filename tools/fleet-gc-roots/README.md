@@ -12,8 +12,8 @@ FLEET_GC_ROOTS_OUTPUT=/path/to/state/candidates.txt \
   fleet-gc-roots [--apply]
 ```
 
-Run it on a schedule as the user that owns the workspace tree. It writes only to
-`FLEET_GC_ROOTS_OUTPUT` and its `.tmp` sibling.
+Run it on a schedule as the user that owns the workspace tree. It writes the report to
+`FLEET_GC_ROOTS_OUTPUT` and its `.tmp` sibling. With `--apply`, it also removes reported links.
 
 ## Rules
 
@@ -26,7 +26,8 @@ Run it on a schedule as the user that owns the workspace tree. It writes only to
   folder, so its own roots are not scanned.
 - A busy workspace is skipped. A process whose cwd is inside it marks it busy.
 - `--apply` is required to remove reported links. It removes only GC-root symlinks from idle
-  workspaces, never the workspaces themselves, and rechecks process cwd before each unlink.
+  workspaces, never the workspaces themselves. It rechecks process cwd before each unlink and
+  refuses to remove links when a process cwd cannot be read.
 - A workspace deleted or replaced by a file during the run is skipped and counted as vanished. Its roots are not candidates.
 - A root is a candidate when it lies inside an idle workspace and either a path part
   below `<seat>/<ws>` is `.devenv` or `.direnv`, or its base name is `result` or

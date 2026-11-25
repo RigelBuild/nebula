@@ -192,7 +192,7 @@ func TestFindCandidatesListsOnlyIdleWorkspaceRoots(t *testing.T) {
 
 	report := renderReport(got, testNow, testIdle, "/srv/example/state/candidates.txt")
 	firstLine := strings.SplitN(report, "\n", 2)[0]
-	wantFirst := "fleet-gc-roots: 7 idle workspace GC root(s) in 1 workspace(s); dry run, removed 0, failed 0"
+	wantFirst := "fleet-gc-roots: 7 idle workspace GC root(s) in 1 workspace(s); dry run, removed 0, skipped 0, failed 0"
 	if firstLine != wantFirst {
 		t.Fatalf("summary line = %q, want %q", firstLine, wantFirst)
 	}
@@ -216,7 +216,7 @@ func TestRunDryRunLeavesCandidateLinks(t *testing.T) {
 	if _, err := os.Stat(target); err != nil {
 		t.Fatalf("candidate target stat error = %v, want nil", err)
 	}
-	if !strings.Contains(report, "dry run, removed 0, failed 0") {
+	if !strings.Contains(report, "dry run, removed 0, skipped 0, failed 0") {
 		t.Fatalf("report does not identify dry run:\n%s", report)
 	}
 }
@@ -267,9 +267,62 @@ func TestRunApplyRemovesExactlyReportedIdleLinksAndKeepsActiveLink(t *testing.T)
 	assertSymlink(t, nonCandidate)
 	assertSymlink(t, activeRoot)
 	assertSymlink(t, busyRoot)
-	if !strings.Contains(report, "apply, removed 2, failed 0") {
+	if !strings.Contains(report, "apply, removed 2, skipped 0, failed 0") {
 		t.Fatalf("report does not show exactly two removals:\n%s", report)
 	}
+}
+
+func TestRunApplyRejectsSymlinkedWorkspacesPath(t *testing.T) {
+	t.Parallel()
+	fixture := newRunFixture(t)
+	workspaces := filepath.Join(fixture.tree, "real-workspaces")
+	workspace := makeWorkspace(t, workspaces, "seat-a", "ws-idle", 8*24*time.Hour)
+	root := filepath.Join(workspace, "result")
+	makeRootLink(t, root, filepath.Join(fixture.tree, "target"))
+	setRootParentsOld(t, workspace, root)
+	alias := filepath.Join(fixture.tree, "workspaces-link")
+	if err := os.Symlink(workspaces, alias); err != nil {
+		t.Fatal(err)
+	}
+	called := false
+	var stdout, stderr bytes.Buffer
+	env := runEnv{
+		workspaces: alias,
+		procRoot:   fixture.procRoot,
+		output:     fixture.output,
+		now:        testNow,
+		gcRoots: func() ([]string, error) {
+			called = true
+			return []string{rootLine(filepath.Join(alias, "seat-a", "ws-idle", "result"))}, nil
+		},
+	}
+	if code := run([]string{"--apply"}, &stdout, &stderr, env); code != 2 {
+		t.Fatalf("run exit = %d, want 2; stderr:\n%s", code, stderr.String())
+	}
+	if called {
+		t.Fatal("gc roots were read before symlinked workspace path was rejected")
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout = %q, want nothing", stdout.String())
+	}
+	assertSymlink(t, root)
+}
+
+func TestRunApplyFailsClosedOnUnreadableProcessCWD(t *testing.T) {
+	t.Parallel()
+	fixture := newRunFixture(t)
+	idle := makeWorkspace(t, fixture.workspaces, "seat-a", "ws-idle", 8*24*time.Hour)
+	root := filepath.Join(idle, "result")
+	makeRootLink(t, root, filepath.Join(fixture.tree, "target"))
+	setRootParentsOld(t, idle, root)
+	if err := os.Mkdir(filepath.Join(fixture.procRoot, "4242"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	code, report, logs := fixture.run([]string{"--apply"}, root)
+	if code != 1 || !strings.Contains(report, "apply, removed 0, skipped 0, failed 1") {
+		t.Fatalf("run = %d, report %q, logs %q", code, report, logs)
+	}
+	assertSymlink(t, root)
 }
 
 func TestRemoveCandidatesSkipsWorkspaceThatBecomesBusy(t *testing.T) {
@@ -283,18 +336,27 @@ func TestRemoveCandidatesSkipsWorkspaceThatBecomesBusy(t *testing.T) {
 	if err != nil || len(found.Roots) != 1 {
 		t.Fatalf("findCandidates = %v, %v", found.Roots, err)
 	}
-	process := filepath.Join(fixture.procRoot, "4242")
-	if err := os.Mkdir(process, 0o750); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink(workspace, filepath.Join(process, "cwd")); err != nil {
-		t.Fatal(err)
+
+	snapshots := 0
+	env := runEnv{
+		workspaces: fixture.workspaces,
+		procRoot:   fixture.procRoot,
+		now:        testNow,
+		busySnapshot: func() (map[string]bool, int, error) {
+			snapshots++
+			if snapshots == 1 {
+				return nil, 0, nil
+			}
+			return map[string]bool{workspace: true}, 0, nil
+		},
 	}
 	var logs bytes.Buffer
-	env := runEnv{workspaces: fixture.workspaces, procRoot: fixture.procRoot, now: testNow}
-	removed, failed := removeCandidates(found.Roots, env, slog.New(slog.NewTextHandler(&logs, nil)))
-	if removed != 0 || failed != 0 {
-		t.Fatalf("removed %d, failed %d; logs %s", removed, failed, logs.String())
+	removed, skipped, failed := removeCandidates(found.Roots, env, slog.New(slog.NewTextHandler(&logs, nil)))
+	if removed != 0 || skipped != 1 || failed != 0 {
+		t.Fatalf("removed %d, skipped %d, failed %d; logs %s", removed, skipped, failed, logs.String())
+	}
+	if snapshots != 2 {
+		t.Fatalf("busy snapshots = %d, want an initial and per-unlink recheck", snapshots)
 	}
 	assertSymlink(t, root)
 }
@@ -320,7 +382,7 @@ func TestRunApplySkipsSymlinkedParent(t *testing.T) {
 		t.Fatal(err)
 	}
 	code, report, logs := fixture.run([]string{"--apply"}, filepath.Join(middle, "result"))
-	if code != 0 || !strings.Contains(report, "removed 0, failed 0") {
+	if code != 0 || !strings.Contains(report, "removed 0, skipped 1, failed 0") {
 		t.Fatalf("run = %d, report %q, logs %q", code, report, logs)
 	}
 	assertSymlink(t, middle)
@@ -366,7 +428,7 @@ func TestRunApplySkipsReplacedNonSymlinkCandidates(t *testing.T) {
 			if err != nil || info.Mode()&os.ModeSymlink != 0 {
 				t.Fatalf("replacement Lstat = (%v, %v), want existing non-symlink", info, err)
 			}
-			if !strings.Contains(stdout.String(), "apply, removed 0, failed 0") {
+			if !strings.Contains(stdout.String(), "apply, removed 0, skipped 1, failed 0") {
 				t.Fatalf("report has wrong skip counts:\n%s", stdout.String())
 			}
 		})
@@ -380,7 +442,7 @@ func TestRunApplyReportsRemovalFailure(t *testing.T) {
 	root := filepath.Join(idle, "result-"+strings.Repeat("x", 256))
 	setRootParentsOld(t, idle, root)
 	code, report, _ := fixture.run([]string{"--apply"}, root)
-	if code != 1 || !strings.Contains(report, "removed 0, failed 1") {
+	if code != 1 || !strings.Contains(report, "removed 0, skipped 0, failed 1") {
 		t.Fatalf("run = %d, report %q", code, report)
 	}
 }
@@ -571,7 +633,7 @@ func TestRunWritesReportAndCandidatesFile(t *testing.T) {
 	}
 	report := stdout.String()
 	firstLine := strings.SplitN(report, "\n", 2)[0]
-	wantFirst := "fleet-gc-roots: 1 idle workspace GC root(s) in 1 workspace(s); dry run, removed 0, failed 0"
+	wantFirst := "fleet-gc-roots: 1 idle workspace GC root(s) in 1 workspace(s); dry run, removed 0, skipped 0, failed 0"
 	if firstLine != wantFirst {
 		t.Fatalf("summary line = %q, want %q", firstLine, wantFirst)
 	}
@@ -589,27 +651,39 @@ func TestRunWritesReportAndCandidatesFile(t *testing.T) {
 
 func TestRunRejectsExtraArguments(t *testing.T) {
 	t.Parallel()
-	tree := t.TempDir()
-	output := filepath.Join(tree, "candidates.txt")
-	env := runEnv{
-		workspaces: filepath.Join(tree, "workspaces"),
-		procRoot:   filepath.Join(tree, "proc"),
-		output:     output,
-		now:        testNow,
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{name: "unknown argument", args: []string{"extra"}},
+		{name: "repeated apply", args: []string{"--apply", "--apply"}},
+		{name: "single dash spelling", args: []string{"-apply"}},
 	}
-
-	var stdout, stderr bytes.Buffer
-	if code := run([]string{"extra"}, &stdout, &stderr, env); code != 2 {
-		t.Fatalf("run exit = %d, want 2", code)
-	}
-	if stdout.Len() != 0 {
-		t.Fatalf("stdout = %q, want nothing", stdout.String())
-	}
-	if !strings.Contains(stderr.String(), "takes no arguments other than --apply") {
-		t.Fatalf("stderr = %q, want the argument error", stderr.String())
-	}
-	if _, err := os.Stat(output); err == nil {
-		t.Fatal("candidates file was written for rejected arguments")
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			tree := t.TempDir()
+			output := filepath.Join(tree, "candidates.txt")
+			env := runEnv{
+				workspaces: filepath.Join(tree, "workspaces"),
+				procRoot:   filepath.Join(tree, "proc"),
+				output:     output,
+				now:        testNow,
+			}
+			var stdout, stderr bytes.Buffer
+			if code := run(tc.args, &stdout, &stderr, env); code != 2 {
+				t.Fatalf("run exit = %d, want 2", code)
+			}
+			if stdout.Len() != 0 {
+				t.Fatalf("stdout = %q, want nothing", stdout.String())
+			}
+			if !strings.Contains(stderr.String(), "takes no arguments other than --apply") {
+				t.Fatalf("stderr = %q, want the argument error", stderr.String())
+			}
+			if _, err := os.Stat(output); err == nil {
+				t.Fatal("candidates file was written for rejected arguments")
+			}
+		})
 	}
 }
 

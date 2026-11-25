@@ -6,6 +6,7 @@ shares the live ingress dedupe, and admits only allowed users.
 """
 
 import asyncio
+import threading
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -19,19 +20,21 @@ BOT_ID = 999
 
 
 class _SessionStore:
-    """Stands in for ``SessionStore.list_sessions``: one active Discord thread session per id."""
+    """Stands in for ``SessionStore.list_sessions`` with Discord chat origins."""
 
-    def __init__(self, *thread_ids):
-        self._thread_ids = thread_ids
+    def __init__(self, *sessions):
+        self._sessions = []
+        for session in sessions:
+            chat_id, chat_type = session if isinstance(session, tuple) else (session, "thread")
+            self._sessions.append(SimpleNamespace(
+                platform=Platform.DISCORD, chat_type=chat_type,
+                origin=SimpleNamespace(chat_id=str(chat_id)),
+            ))
+        self.active_minutes = None
 
     def list_sessions(self, active_minutes=None):
-        return [
-            SimpleNamespace(
-                platform=Platform.DISCORD, chat_type="thread",
-                origin=SimpleNamespace(chat_id=str(thread_id)),
-            )
-            for thread_id in self._thread_ids
-        ]
+        self.active_minutes = active_minutes
+        return self._sessions
 
 
 class _FakeBot:
@@ -125,13 +128,16 @@ async def test_message_seen_live_and_by_catch_up_is_admitted_once(adapter, monke
 
 
 @pytest.mark.asyncio
-async def test_catch_up_admits_only_allowed_users(adapter, monkeypatch):
-    """Guard: a user outside the allowlist is not admitted by the catch-up."""
-    monkeypatch.setenv("DISCORD_MISSED_MESSAGE_BACKFILL_CHANNELS", "123")
+async def test_session_thread_backfill_admits_only_allowed_users(adapter, monkeypatch):
+    """The session-thread source adds a channel without bypassing the Discord user allow-list."""
+    monkeypatch.delenv("DISCORD_MISSED_MESSAGE_BACKFILL_CHANNELS", raising=False)
+    monkeypatch.setenv("DISCORD_ALLOWED_CHANNELS", "")
+    monkeypatch.setenv("DISCORD_FREE_RESPONSE_CHANNELS", "")
     monkeypatch.delenv("DISCORD_ALLOW_ALL_USERS", raising=False)
     adapter._allowed_user_ids = {"42"}
     channel = FakeChannel(channel_id=123)
     adapter._client.get_channel = lambda channel_id: channel if channel_id == 123 else None
+    adapter._session_store = _SessionStore(123)
     allowed = _mention(201, 42, "allowed", channel)
     denied = _mention(202, 41, "denied", channel)
     channel._history_messages = [denied, allowed]
@@ -139,6 +145,60 @@ async def test_catch_up_admits_only_allowed_users(adapter, monkeypatch):
     await adapter._run_missed_message_backfill()
 
     assert _admitted(adapter) == [allowed]
+
+@pytest.mark.asyncio
+async def test_session_dm_group_and_thread_chats_are_added_to_explicit_channels(adapter):
+    adapter.config.extra["missed_message_backfill"] = {
+        "enabled": True, "channels": ["999"], "window_seconds": 172800,
+    }
+    store = _SessionStore((123, "dm"), (456, "group"), (789, "thread"))
+    adapter._session_store = store
+
+    channels = await adapter._missed_message_backfill_channels()
+
+    assert channels == {"123", "456", "789", "999"}
+    assert store.active_minutes >= 2880
+
+
+@pytest.mark.asyncio
+async def test_failed_recovered_dispatch_releases_dedupe_for_live_retry(adapter, monkeypatch):
+    monkeypatch.setenv("DISCORD_MISSED_MESSAGE_BACKFILL_CHANNELS", "123")
+    channel = FakeChannel(channel_id=123)
+    adapter._client.get_channel = lambda channel_id: channel if channel_id == 123 else None
+    message = _mention(303, 42, "retry me", channel)
+    channel._history_messages = [message]
+    adapter._handle_message = AsyncMock(side_effect=[RuntimeError("temporary dispatch failure"), True])
+
+    await adapter._run_missed_message_backfill()
+
+    assert adapter._dedup.contains(str(message.id)) is False
+    assert await adapter._dispatch_discord_message(message) is True
+    assert [call.args[0] for call in adapter._handle_message.await_args_list] == [message, message]
+
+
+@pytest.mark.asyncio
+async def test_backfill_database_operations_run_off_event_loop(adapter, monkeypatch):
+    monkeypatch.setenv("DISCORD_MISSED_MESSAGE_BACKFILL_CHANNELS", "123")
+    channel = FakeChannel(channel_id=123)
+    channel._history_messages = [_mention(404, 42, "check threads", channel)]
+    adapter._client.get_channel = lambda channel_id: channel if channel_id == 123 else None
+    loop_thread = threading.get_ident()
+    called = set()
+    names = ("_record_discord_message_seen", "_record_recovery_attempt", "_discord_recovery_cursor",
+             "_discord_message_is_persistently_complete", "_discord_message_has_active_claim",
+             "_discord_message_attempts_exhausted")
+    for name in names:
+        original = getattr(adapter, name)
+
+        def checked(*args, _name=name, _original=original, **kwargs):
+            assert threading.get_ident() != loop_thread, _name
+            called.add(_name)
+            return _original(*args, **kwargs)
+
+        monkeypatch.setattr(adapter, name, checked)
+
+    await adapter._run_missed_message_backfill()
+    assert called == set(names)
 
 
 @pytest.mark.asyncio

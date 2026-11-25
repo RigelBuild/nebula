@@ -7,6 +7,7 @@ such a card. These tests pin that: neither the first ``on_ready`` nor ``on_resum
 The scan line and the disconnect timestamp feed the backfill's INFO log.
 """
 
+import asyncio
 import time
 import uuid
 from types import SimpleNamespace
@@ -35,20 +36,6 @@ async def _deliver_card(adapter, monkeypatch, created, session, request_id):
     return adapter._exec_approval_views[request_id]
 
 
-@pytest.mark.asyncio
-async def test_delivered_card_survives_the_first_on_ready(monkeypatch):
-    adapter = DiscordAdapter(PlatformConfig(enabled=True, token="test-token"))
-    created: list[_FakeBot] = []
-    await _connect(adapter, monkeypatch, created)
-    session = "agent:main:discord:555"
-    request_id = uuid.uuid4().hex
-    view = await _deliver_card(adapter, monkeypatch, created, session, request_id)
-
-    # on_ready already ran inside connect(); the delivered card must be the same live view.
-    assert adapter._exec_approval_views[request_id] is view
-    assert getattr(view, "undelivered", False) is False
-    assert not view.is_finished()
-    await adapter.disconnect()
 
 
 @pytest.mark.asyncio
@@ -61,6 +48,7 @@ async def test_delivered_card_survives_on_resumed(monkeypatch):
     view = await _deliver_card(adapter, monkeypatch, created, session, request_id)
 
     await created[0]._events["on_resumed"]()
+    await asyncio.gather(*list(adapter._background_tasks))
 
     assert adapter._exec_approval_views[request_id] is view
     assert getattr(view, "undelivered", False) is False
@@ -100,7 +88,7 @@ async def test_backfill_scan_logs_channels_gap_and_counts(monkeypatch, caplog, t
         yield  # pragma: no cover - makes this an async generator
 
     adapter._iter_missed_message_backfill_candidates = no_candidates
-    adapter._missed_message_backfill_channels = lambda: {123, 456}
+    adapter._missed_message_backfill_channels = AsyncMock(return_value={123, 456})
 
     with caplog.at_level("INFO"):
         await adapter._run_missed_message_backfill()

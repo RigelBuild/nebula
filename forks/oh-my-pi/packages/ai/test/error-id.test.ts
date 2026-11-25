@@ -232,6 +232,15 @@ describe("error-id classification", () => {
 		"Refusal",
 		"Refusal: the model declined",
 		'500 {"error":"Refusal"}',
+		"500 - {'error': {'message': 'Refusal (cyber): blocked'}}",
+		String.raw`{"error":{"message":"{\"detail\":\"Refusal (cyber)\"}"}}`,
+		String.raw`{"error":{"message":"OpenAIException - Refusal (cyber)\nTraceback"}}`,
+		"Refusal (Cyber): blocked",
+		"Refusal (cyber-v2): blocked",
+		"Refusal (cyber). blocked",
+		"Refusal (cyber); blocked",
+		"Refusal (cyber)]",
+		"Refusal.",
 	])("classifies refusal diagnostics as non-retriable: %s", errorMessage => {
 		const id = AIError.classifyMessage(message({ errorStatus: 500, errorMessage }));
 		expect(AIError.is(id, AIError.Flag.ContentBlocked)).toBe(true);

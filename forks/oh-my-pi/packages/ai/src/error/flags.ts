@@ -242,7 +242,7 @@ const MALFORMED_RESPONSE_FINISH_PATTERN = /\bfinish reason:\s*MALFORMED_RESPONSE
 const CONTENT_FILTER_PATTERN = /\b(?:incomplete:\s*)?content_filter\b/i;
 /** LiteLLM provider exceptions and bare classifier refusal diagnostics. */
 const WRAPPED_REFUSAL_PATTERN =
-	/(?:^|\b\d{3} |Exception - )Refusal(?: \([a-z_ ]+\))?(?=$|\s*$|[:"'\\.,;)\]}]|\s+[-:])|["']Refusal(?: \([a-z_ ]+\))?(?=[:\\.,;)\]}]|["'](?:\s*[,}\]]|\s*$))/;
+	/(?:^|\b\d{3} |Exception - )Refusal(?: \([a-zA-Z0-9_ -]+\))?(?=$|\s*$|[:"'\\.,;)\]}]|\s+[-:])|["']Refusal(?: \([a-zA-Z0-9_ -]+\))?(?=[:\\.,;)\]}]|["'](?:\s*[,}\]]|\s*$))/;
 
 export function isClassifierRefusalText(text: string): boolean {
 	return WRAPPED_REFUSAL_PATTERN.test(text);

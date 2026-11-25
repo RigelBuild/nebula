@@ -198,6 +198,7 @@ describe("error-id classification", () => {
 		);
 		expect(AIError.retriable(id)).toBe(false);
 	});
+
 	it("classifies a LiteLLM-wrapped refusal as non-retriable despite HTTP 500", () => {
 		const errorMessage =
 			"500 litellm.APIConnectionError: APIConnectionError: OpenAIException - Refusal (reasoning_extraction): This request was blocked";
@@ -255,6 +256,7 @@ describe("error-id classification", () => {
 		expect(AIError.retriable(id)).toBe(true);
 		expect(AIError.isProviderRetryableError(new AIError.ProviderHttpError(errorMessage, 500))).toBe(true);
 	});
+
 	it("keeps authenticated connection rejections non-retryable", () => {
 		const assistant = message({
 			errorMessage: "Unable to connect: 401 Unauthorized",

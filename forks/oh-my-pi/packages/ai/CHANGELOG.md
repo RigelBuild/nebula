@@ -6,6 +6,10 @@
 
 - Added `pinModels` to `auth.accountPolicies`: anchored model-id globs (for example `claude-fable-*`) keep matching requests on one account. Among unblocked accounts that pass the reserve and hot-5h guards, the one whose model-scoped weekly window is most used but still below its cap ranks first, so traffic stays on it until that window caps. For a pinned account the reserve counts only its shared 5h and 7d windows, not its pinned model-scoped row.
 
+### Fixed
+
+- Classifier refusals wrapped in HTTP 5xx errors no longer trigger transport retries.
+
 ## [18.22.2] - 2026-11-18
 
 ### Added

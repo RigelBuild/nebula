@@ -41,6 +41,7 @@ import {
 	validateRetryFallbackChains,
 } from "@oh-my-pi/pi-coding-agent/session/retry-fallback-chains";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import { TurnRecovery } from "@oh-my-pi/pi-coding-agent/session/turn-recovery";
 import { computerTurnInFlight, registerComputerController } from "@oh-my-pi/pi-coding-agent/tools/computer/supervisor";
 import { convertToLlm, USER_INTERRUPT_LABEL } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
@@ -4342,6 +4343,7 @@ describe("AgentSession retry fallback", () => {
 		if (!primaryModel || !fallbackModel) throw new Error("Expected bundled refusal fallback models");
 
 		const requestedModels: string[] = [];
+		const cooldown = vi.spyOn(TurnRecovery.prototype, "noteRetryFallbackCooldown");
 		const mock = createMockModel();
 		const agent = new Agent({
 			getApiKey: model => `${model.provider}-test-key`,
@@ -4379,6 +4381,7 @@ describe("AgentSession retry fallback", () => {
 			`${primaryModel.provider}/${primaryModel.id}`,
 			`${fallbackModel.provider}/${fallbackModel.id}`,
 		]);
+		expect(cooldown).not.toHaveBeenCalled();
 		expect(session.model?.id).toBe(fallbackModel.id);
 	});
 	it("surfaces a 5xx refusal after one request when no fallback chain exists", async () => {
@@ -5042,6 +5045,17 @@ describe("AgentSession retry fallback", () => {
 				"anthropic/claude-sonnet-4-5 omit=true",
 			]);
 			expect(answer.content).toEqual([{ type: "text", text: "Claude answer" }]);
+		});
+
+		it("strips demoted reasoning for a wrapped reasoning extraction refusal", async () => {
+			const wrapped = reasoningRefusal(2);
+			wrapped.stopDetails = undefined;
+			wrapped.errorMessage = "500 OpenAIException - Refusal (reasoning_extraction): blocked";
+			const { requests } = await promptThroughRefusals([wrapped]);
+			expect(requests).toEqual([
+				"anthropic/claude-sonnet-4-5 omit=false",
+				"anthropic/claude-sonnet-4-5 omit=true",
+			]);
 		});
 
 		it("walks the fallback chain without a same-model retry when the refused request carried no reasoning", async () => {

@@ -13,8 +13,8 @@
  *     and model roles (`auth-gateway-stdio.ts`).
  *   - `token` / `token --regenerate` — manages the gateway bearer token file.
  *   - `status` — prints the locally-stored gateway token and bind hint.
- *   - `validate` — checks the serve config (`PI_CONFIG_FILES` overlays, `--clients`,
- *     `--api-key-limit-model-classes`) without binding a port, calling the broker, or reading credentials.
+	 *   - `validate` — checks global/project/overlay settings plus broker pool, `--clients`,
+	 *     and `--api-key-limit-model-classes` without binding a port, calling the broker, or reading credentials.
  */
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
@@ -63,6 +63,7 @@ import { ModelRegistry } from "../config/model-registry";
 import { cfgDisabledProviders, cfgModelProviderOrder } from "../config/model-settings";
 import { resolveProviderModelReference } from "../config/model-resolver";
 import { type Settings, unknownSettingPaths } from "../config/settings";
+import { all as allSettings } from "../config/registry";
 import {
 	overlayLiveResetCredits,
 	planCodexResetRedemptions,
@@ -1228,29 +1229,41 @@ async function runStatus(flags: AuthGatewayCommandArgs["flags"]): Promise<void> 
 }
 
 /**
- * Load the gateway's config inputs as `serve` does and return every problem found: the settings (the
- * loader checks each configured value), overlay keys that name no setting, `--api-key-limit-model-classes`,
- * and `--clients`. Binds no port, makes no network call, and reads no credentials: no broker config, no
- * token, and no `applyUnpausedProviders`. An empty list means valid.
+ * Load the gateway's config inputs as `serve` does and return every problem found: invalid configured settings,
+ * unknown keys in global, project, and overlay settings, the broker account pool file, `--api-key-limit-model-classes`,
+ * and `--clients`. Binds no port or network connection and reads no credentials. An empty list means valid.
  */
 export async function validateAuthGatewayConfig(flags: AuthGatewayCommandArgs["flags"]): Promise<string[]> {
 	const problems: string[] = [];
-	const collect = async (load: () => Promise<unknown>): Promise<void> => {
+	const collect = async (load: () => unknown | Promise<unknown>): Promise<void> => {
 		try {
 			await load();
 		} catch (error) {
 			problems.push(error instanceof Error ? error.message : String(error));
 		}
 	};
+	let loadedSettings: Settings | undefined;
 	await collect(async () => {
-		const settings = await resolveEffectiveSettings();
-		for (const id of unknownSettingPaths(settings.getConfigOverlaySettings())) {
-			problems.push(`Unknown setting "${id}"`);
-		}
-		await loadEffectiveAuthAccountPolicyConfig({ settings });
+		loadedSettings = await resolveEffectiveSettings();
 	});
+	const settings = loadedSettings;
+	if (settings) {
+		for (const layer of [settings.getGlobalSettings(), settings.getProjectSettings(), settings.getConfigOverlaySettings()]) {
+			for (const id of unknownSettingPaths(layer)) problems.push(`Unknown setting "${id}"`);
+		}
+		for (const setting of allSettings()) {
+			if (!settings.isConfigured(setting)) continue;
+			await collect(() => {
+				const value = settings.rawValue(setting);
+				const normalized = setting.definition.normalize ? setting.definition.normalize(value) : value;
+				setting.assertWritable(normalized);
+			});
+		}
+		await collect(() => loadEffectiveAuthAccountPolicyConfig({ settings }));
+	}
 	await collect(() => loadApiKeyLimitModelClasses(flags.apiKeyLimitModelClasses));
 	await collect(() => readGatewayClientsFile(flags.clients));
+	await collect(() => loadAuthBrokerAccountPool());
 	return problems;
 }
 

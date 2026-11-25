@@ -287,7 +287,7 @@ function pendingChangeApplies(
 
 /**
  * Dotted paths of the leaves of `layer` that name no registered setting, in layer order. A typo guard:
- * constructor overrides reject them, and `auth-gateway validate` reports them in config overlays.
+ * constructor overrides reject them, and `auth-gateway validate` reports them in config layers.
  */
 export function unknownSettingPaths(layer: RawSettings, prefix = ""): string[] {
 	const unknown: string[] = [];
@@ -295,7 +295,7 @@ export function unknownSettingPaths(layer: RawSettings, prefix = ""): string[] {
 		const id = prefix ? `${prefix}.${key}` : key;
 		if (lookupSetting(id)) continue;
 		const value = layer[key];
-		if (isRecord(value)) unknown.push(...unknownSettingPaths(value, id));
+		if (isRecord(value) && Object.keys(value).length > 0) unknown.push(...unknownSettingPaths(value, id));
 		else unknown.push(id);
 	}
 	return unknown;

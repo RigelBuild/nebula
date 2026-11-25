@@ -22,6 +22,7 @@ describe("omp auth-gateway validate", () => {
 	const originalPiProfile = process.env.PI_PROFILE;
 	const originalConfigFiles = process.env.PI_CONFIG_FILES;
 	const originalLimitClasses = process.env.OMP_AUTH_GATEWAY_API_KEY_LIMIT_MODEL_CLASSES;
+	const originalAccountPoolFile = process.env.OMP_AUTH_BROKER_ACCOUNT_POOL_FILE;
 	const originalExitCode = process.exitCode;
 
 	let dir = "";
@@ -32,6 +33,7 @@ describe("omp auth-gateway validate", () => {
 	let stderrSpy: Mock<typeof process.stderr.write>;
 
 	beforeEach(async () => {
+		delete process.env.OMP_AUTH_BROKER_ACCOUNT_POOL_FILE;
 		dir = await fs.mkdtemp(path.join(os.tmpdir(), "gateway-validate-"));
 		overlay = path.join(dir, "overlay.yml");
 		await fs.mkdir(path.join(dir, "agent"));
@@ -57,8 +59,9 @@ describe("omp auth-gateway validate", () => {
 		fetchSpy.mockRestore();
 		stdoutSpy.mockRestore();
 		stderrSpy.mockRestore();
-		process.exitCode = originalExitCode;
 		restoreEnvValue("PI_CONFIG_FILES", originalConfigFiles);
+		process.exitCode = originalExitCode;
+		restoreEnvValue("OMP_AUTH_BROKER_ACCOUNT_POOL_FILE", originalAccountPoolFile);
 		restoreEnvValue("OMP_AUTH_GATEWAY_API_KEY_LIMIT_MODEL_CLASSES", originalLimitClasses);
 		restoreEnvValue("PI_CODING_AGENT_DIR", originalAgentDir);
 		restoreEnvValue("OMP_PROFILE", originalOmpProfile);
@@ -88,7 +91,7 @@ describe("omp auth-gateway validate", () => {
 		await runAuthGatewayCommand({ action: "validate", flags: {} });
 
 		expect(process.exitCode).toBe(1);
-		expect(stderrSpy).toHaveBeenCalled();
+		expect(stderrSpy.mock.calls.map(([message]) => message).join("")).toContain("disassembler.memoryMax");
 		expect(listenSpy).not.toHaveBeenCalled();
 		expect(fetchSpy).not.toHaveBeenCalled();
 	});
@@ -100,6 +103,63 @@ describe("omp auth-gateway validate", () => {
 		await runAuthGatewayCommand({ action: "validate", flags: {} });
 
 		expect(process.exitCode).toBe(1);
+		expect(stderrSpy.mock.calls.map(([message]) => message).join("")).toContain("disassemblr.memoryMax");
+		expect(listenSpy).not.toHaveBeenCalled();
+		expect(fetchSpy).not.toHaveBeenCalled();
+	});
+
+	it("rejects a wrong-type setting without a validate hook and names its key", async () => {
+		await Bun.write(overlay, 'retry:\n  usageReservePct: "ten"\n');
+
+		await runAuthGatewayCommand({ action: "validate", flags: {} });
+
+		expect(process.exitCode).toBe(1);
+		expect(stderrSpy.mock.calls.map(([message]) => message).join("")).toContain("retry.usageReservePct");
+		expect(listenSpy).not.toHaveBeenCalled();
+		expect(fetchSpy).not.toHaveBeenCalled();
+	});
+
+	it("rejects an unknown key in the global config.yml layer", async () => {
+		await Bun.write(path.join(dir, "agent", "config.yml"), "disassemblr:\n  memoryMax: 1G\n");
+
+		await runAuthGatewayCommand({ action: "validate", flags: {} });
+
+		expect(process.exitCode).toBe(1);
+		expect(stderrSpy.mock.calls.map(([message]) => message).join("")).toContain("disassemblr.memoryMax");
+		expect(listenSpy).not.toHaveBeenCalled();
+		expect(fetchSpy).not.toHaveBeenCalled();
+	});
+
+	it("rejects an unknown key with an empty mapping", async () => {
+		await Bun.write(overlay, "disassemblr: {}\n");
+
+		await runAuthGatewayCommand({ action: "validate", flags: {} });
+
+		expect(process.exitCode).toBe(1);
+		expect(stderrSpy.mock.calls.map(([message]) => message).join("")).toContain("disassemblr");
+	});
+
+	it("rejects a malformed --clients file", async () => {
+		const clientsPath = path.join(dir, "clients.json");
+		await Bun.write(clientsPath, "{");
+
+		await runAuthGatewayCommand({ action: "validate", flags: { clients: clientsPath } });
+
+		expect(process.exitCode).toBe(1);
+		expect(stderrSpy.mock.calls.map(([message]) => message).join("")).toContain("--clients");
+		expect(listenSpy).not.toHaveBeenCalled();
+		expect(fetchSpy).not.toHaveBeenCalled();
+	});
+
+	it("reports a malformed auth broker account pool file without reading credentials", async () => {
+		const accountPoolPath = path.join(dir, "account-pool.json");
+		await Bun.write(accountPoolPath, "{");
+		process.env.OMP_AUTH_BROKER_ACCOUNT_POOL_FILE = accountPoolPath;
+
+		await runAuthGatewayCommand({ action: "validate", flags: {} });
+
+		expect(process.exitCode).toBe(1);
+		expect(stderrSpy.mock.calls.map(([message]) => message).join("")).toContain("OMP_AUTH_BROKER_ACCOUNT_POOL_FILE");
 		expect(listenSpy).not.toHaveBeenCalled();
 		expect(fetchSpy).not.toHaveBeenCalled();
 	});

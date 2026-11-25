@@ -31,6 +31,7 @@
         deploy-output = "sha256-Zox9Va4DSkxx0nAjNBwu7XaXel6dIWvbNYQ15RtUOrc=";
         depsupdate-wake = null;
         design-ledger-gate = "sha256-euBbY7ewPBNIwVPjPkAX9DVbH6XaJ81n+5aMJfBzPW8=";
+        docs-bundle = "sha256-+YjbSB8hWuiEeoIqwNTKsoaH3ASxObXf3c9KTVPhlLA=";
         dev-hygiene = null;
         dl-claim = "sha256-3EcIygo4CNKJmMCIWrIL/bFMqBUznQCV9HI6h1EyeGU=";
         dl-list = "sha256-+YGOcD3K7shRymY29qRJa49GfFkOc8wsdeMdmpvv44A=";
@@ -225,61 +226,6 @@
           in
           builtins.mapAttrs wrap (lib.filterAttrs (name: p: p ? ${system}) (builtins.removeAttrs manifest [ "source" "tag" "held" "images" ]));
 
-      # docs-bundle is a TypeScript CLI run by Bun. Dependencies are fetched
-      # as a fixed-output derivation pinned by outputHash, then the wrapper
-      # runs cli.ts on the pinned Bun. Installs production deps only, so the
-      # output is the same on every system.
-      docsBundleFor = system:
-        let
-          pkgs = import nixpkgs { inherit system; };
-          # The build reads ../tsconfig/base.json through tools/docs-bundle/tsconfig.json,
-          # so the source carries both trees and the build runs in tools/docs-bundle.
-          # The packaged tsconfig.json's extends does not resolve; harmless, since nothing runs tsc on the package.
-          docsBundleSource = lib.fileset.toSource {
-            root = ./.;
-            fileset = lib.fileset.unions [
-              ./tools/docs-bundle
-              ./tools/tsconfig
-            ];
-          };
-          docsBundleDeps = pkgs.stdenvNoCC.mkDerivation {
-            pname = "docs-bundle-deps";
-            version = "1.2.2";
-            src = docsBundleSource;
-            # Unpacks to ./tools/{docs-bundle,tsconfig}; the build runs in tools/docs-bundle.
-            nativeBuildInputs = [ pkgs.bun ];
-            outputHashMode = "recursive";
-            outputHashAlgo = "sha256";
-            outputHash = "sha256-unItFE38ueLWvI/ZbHpNbjm9rqCGyYI0ScQTqXfa9/k=";
-            buildPhase = ''
-              cd tools/docs-bundle
-              export HOME="$TMPDIR"
-              bun install --frozen-lockfile --ignore-scripts --production
-            '';
-            installPhase = ''
-              mkdir -p "$out"
-              cp -R node_modules "$out/"
-            '';
-          };
-          docsBundle = pkgs.stdenvNoCC.mkDerivation {
-            pname = "docs-bundle";
-            version = "1.2.2";
-            src = docsBundleSource;
-            # Unpacks to ./tools/{docs-bundle,tsconfig}; the build runs in tools/docs-bundle.
-            nativeBuildInputs = [ pkgs.makeWrapper ];
-            installPhase = ''
-              runHook preInstall
-              cd tools/docs-bundle
-              mkdir -p "$out/lib/docs-bundle" "$out/bin"
-              cp -R . "$out/lib/docs-bundle"
-              cp -R ${docsBundleDeps}/node_modules "$out/lib/docs-bundle/"
-              makeWrapper ${pkgs.bun}/bin/bun "$out/bin/docs-bundle" \
-                --add-flags "$out/lib/docs-bundle/cli.ts"
-              runHook postInstall
-            '';
-          };
-        in
-        { "docs-bundle" = docsBundle; };
 
       # Static on Linux so the asset passes CD's check-asset gate (no /nix/store
       # interpreter). A released manifest entry of the same name overrides it.
@@ -318,13 +264,11 @@
         };
     in
     {
-      # Later attrs win. Source builds come first, then docs-bundle and
-      # nix2container, and released manifest packages last, so a release
-      # overrides the source build of the same name.
+      # Source builds come first, then nix2container and released packages.
+      # A release manifest entry wins over any source build with the same name.
       packages = forAllSystems (
         system:
         commandPackagesFor system
-        // docsBundleFor system
         // nix2containerFor system
         // rumdlBaseConfigFor system
         // packagesFor manifest system
@@ -380,7 +324,6 @@
           };
           merged =
             commandPackagesFor system
-            // docsBundleFor system
             // nix2containerFor system
             // packagesFor fixture system;
           expected = "9.9.9";

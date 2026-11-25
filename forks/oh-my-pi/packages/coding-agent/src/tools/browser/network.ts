@@ -14,6 +14,21 @@ const PASS_THROUGH_INTERCEPT_PRIORITY = 0;
 const REQUEST_RECORD = Symbol("omp.browser.requestRecord");
 /** Request types a look waits for after an action; long-lived streams and subresources are excluded. */
 const SETTLE_RESOURCE_TYPES: Record<string, true> = { document: true, fetch: true, xhr: true };
+const SENSITIVE_NETWORK_HEADERS: Record<string, true> = {
+	cookie: true,
+	"set-cookie": true,
+	"x-csrf-token": true,
+	"x-xsrf-token": true,
+	"x-csrftoken": true,
+};
+
+export function publicHeaders(headers: Record<string, string>): Record<string, string> {
+	const result: Record<string, string> = {};
+	for (const name in headers) {
+		result[name] = Object.hasOwn(SENSITIVE_NETWORK_HEADERS, name.toLowerCase()) ? "***" : headers[name]!;
+	}
+	return result;
+}
 
 /** URL pattern accepted by persistent tab routes and request filters. */
 export type NetworkPattern = string | RegExp;
@@ -231,7 +246,7 @@ export class BrowserNetworkManager {
 		record.response = response;
 		record.status = response.status();
 		record.ok = response.ok();
-		record.responseHeaders = response.headers();
+		record.responseHeaders = publicHeaders(response.headers());
 		const contentLength = parseContentLength(record.responseHeaders);
 		if (contentLength !== undefined) record.sizes.responseBody = contentLength;
 	};
@@ -437,7 +452,7 @@ export class BrowserNetworkManager {
 			method: request.method().toUpperCase(),
 			url: request.url(),
 			resourceType: request.resourceType(),
-			requestHeaders: request.headers(),
+			requestHeaders: publicHeaders(request.headers()),
 			sizes: { requestBody: postData === undefined ? 0 : Buffer.byteLength(postData) },
 			request,
 		};
@@ -755,8 +770,8 @@ export function toPublicRecord(record: NetworkRequestRecord): NetworkRequestReco
 		ok: record.ok,
 		failureText: record.failureText,
 		durationMs: record.durationMs,
-		requestHeaders: { ...record.requestHeaders },
-		responseHeaders: record.responseHeaders ? { ...record.responseHeaders } : undefined,
+		requestHeaders: publicHeaders(record.requestHeaders),
+		responseHeaders: record.responseHeaders ? publicHeaders(record.responseHeaders) : undefined,
 		sizes: { ...record.sizes },
 	};
 }
@@ -816,7 +831,9 @@ export function headerValue(headers: Record<string, string> | undefined, name: s
 
 function headersToHar(headers: Record<string, string>): Array<{ name: string; value: string }> {
 	const result: Array<{ name: string; value: string }> = [];
-	for (const name in headers) result.push({ name, value: headers[name]! });
+	for (const [name, value] of Object.entries(publicHeaders(headers))) {
+		result.push({ name, value });
+	}
 	return result;
 }
 

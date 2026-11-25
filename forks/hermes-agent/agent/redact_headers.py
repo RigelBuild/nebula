@@ -10,8 +10,28 @@ import re
 
 # API-key style headers (single opaque value, no scheme word): non-vendor-prefix
 # values would otherwise leak when a curl command is echoed into tool output.
-SECRET_HEADER_NAME_LIST = ("x-api-key", "x-goog-api-key", "api-key", "apikey", "x-api-token", "x-auth-token", "x-access-token")
+SECRET_HEADER_NAME_LIST = (
+    "x-api-key",
+    "x-goog-api-key",
+    "api-key",
+    "apikey",
+    "x-api-token",
+    "x-auth-token",
+    "x-access-token",
+    "x-csrf-token",
+    "x-xsrf-token",
+    "x-csrftoken",
+)
+_COOKIE_HEADER_NAMES = ("cookie", "set-cookie")
+_SENSITIVE_HEADER_NAMES = rf"(?:{'|'.join((*SECRET_HEADER_NAME_LIST, *_COOKIE_HEADER_NAMES))})"
 _SECRET_HEADER_NAMES = rf"(?:{'|'.join(SECRET_HEADER_NAME_LIST)})"
+
+_HAR_HEADER_ENTRY_RE = re.compile(
+    rf'("name"\s*:\s*")({_SENSITIVE_HEADER_NAMES})("\s*,\s*"value"\s*:\s*")((?:\\[^\r\n]|[^"\\\r\n])*)(")',
+    re.IGNORECASE,
+)
+_HAR_COOKIE_ARRAY_START_RE = re.compile(r'"cookies"\s*:\s*\[', re.IGNORECASE)
+_HAR_COOKIE_VALUE_RE = re.compile(r'("value"\s*:\s*")((?:\\[^\r\n]|[^"\\\r\n])*)(")')
 _SECRET_HEADER_LINE_RE = re.compile(
     rf"(^[ \t]*(?:[<>][ \t]+)?{_SECRET_HEADER_NAMES}[ \t]*:[ \t]*)([^\r\n]+)",
     re.IGNORECASE | re.MULTILINE,
@@ -68,6 +88,89 @@ _SECRET_HEADER_JSON_UNTERMINATED_RE = re.compile(
     rf'("{_SECRET_HEADER_NAMES}"\s*:\s*")((?:\\[^\r\n]|[^"\\\r\n])*(?:\\)?)(?=\r?\n|\Z)',
     re.IGNORECASE | re.MULTILINE,
 )
+
+# Tokenize shell segments without searching repeatedly across their suffixes.
+_SHELL_TOKEN_RE = re.compile(r'''\\\r?\n|[^\s;&|<>()`"'\\]+|\\[^\r\n]|"(?:\\[^\r\n]|[^"\\\r\n])*"?|'[^'\r\n]*'?|[;&|<>()`\r\n]''')
+_CURL_SHORT_COOKIE_RE = re.compile(r"-[A-Za-z]*?b")
+
+
+def _redact_curl_cookies(text: str) -> str:
+    parts = []
+    last = 0
+    in_curl = False
+    expecting_value = False
+    for match in _SHELL_TOKEN_RE.finditer(text):
+        token = match.group()
+        if token in ("\\\n", "\\\r\n"):
+            continue
+        if token in ';&|<>()`\r\n':
+            in_curl = False
+            expecting_value = False
+            continue
+        if token.rsplit("/", 1)[-1] == "curl":
+            in_curl = True
+            continue
+        if not in_curl:
+            continue
+        value_start = None
+        if expecting_value:
+            value_start = match.start()
+            expecting_value = False
+        elif token in ("-b", "--cookie"):
+            expecting_value = True
+            continue
+        elif token.startswith("--cookie="):
+            value_start = match.start() + len("--cookie=")
+        elif short_option := _CURL_SHORT_COOKIE_RE.match(token):
+            value_start = match.start() + short_option.end()
+        if value_start is None:
+            continue
+        # Attached options may be followed by a separately tokenized quoted value.
+        if value_start == match.end():
+            expecting_value = True
+            continue
+        value = text[value_start:match.end()]
+        if "=" not in value and not (value.startswith('"') and '\\"' in value):
+            continue
+        quote = value[0] if value[0] in "\"'" else ""
+        parts.append(text[last:value_start])
+        parts.append(quote + "***" + (quote if quote and value.endswith(quote) else ""))
+        last = match.end()
+    parts.append(text[last:])
+    return "".join(parts)
+
+
+# A cut-off cookies array masks to the end of the text deliberately.
+def _redact_har_cookie_arrays(text: str) -> str:
+    parts = []
+    last = 0
+    while match := _HAR_COOKIE_ARRAY_START_RE.search(text, last):
+        start = match.end()
+        depth = 1
+        in_string = False
+        escaped = False
+        end = start
+        while end < len(text) and depth:
+            char = text[end]
+            if in_string:
+                if escaped:
+                    escaped = False
+                elif char == "\\":
+                    escaped = True
+                elif char == '"':
+                    in_string = False
+            elif char == '"':
+                in_string = True
+            elif char == "[":
+                depth += 1
+            elif char == "]":
+                depth -= 1
+            end += 1
+        parts.append(text[last:start])
+        parts.append(_HAR_COOKIE_VALUE_RE.sub(lambda m: m.group(1) + "***" + m.group(3), text[start:end]))
+        last = end
+    parts.append(text[last:])
+    return "".join(parts)
 
 # Cookie: / Set-Cookie: headers carry session, auth and CSRF tokens and were
 # previously unhandled. The full cookie payload is masked while the header name
@@ -190,8 +293,11 @@ def redact_header_credentials(text: str) -> str:
         text,
     )
     text = _SECRET_HEADER_INLINE_RE.sub(_redact_inline_secret_header, text)
+    if "curl" in text:
+        text = _redact_curl_cookies(text)
 
-    # Cookie: / Set-Cookie: header values (session/auth/CSRF tokens), whole payload masked.
+    text = _HAR_HEADER_ENTRY_RE.sub(lambda m: m.group(1) + m.group(2) + m.group(3) + "***" + m.group(5), text)
+    text = _redact_har_cookie_arrays(text)
     # Not gated on ``code_file``: terminal output from ``curl -i`` is scrubbed with
     # code_file=True, and a raw ``Cookie: name=value`` line is a credential wherever it
     # appears, like the secret headers above. The JSON-fixture exemption lives in the

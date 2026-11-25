@@ -48,7 +48,7 @@ import type {
 	NetworkRouteDescription,
 	NetworkRouteOptions,
 } from "../network";
-import { urlMatcher } from "../network";
+import { publicHeaders, urlMatcher } from "../network";
 import { extractReadableFromHtml, type ReadableExtractOptions, type ReadableFormat } from "../readable";
 import { normalizeSelectOptions, type SelectOptionInput } from "../select-options";
 import { assertTabPressArgs } from "../tab-arguments";
@@ -2532,8 +2532,8 @@ function cmuxRequestRecord(record: CmuxResponseRecord): NetworkRequestRecord {
 		status: record.status,
 		ok: record.status >= 200 && record.status < 300,
 		durationMs: record.durationMs,
-		requestHeaders: { ...record.requestHeaders },
-		responseHeaders: { ...record.headers },
+		requestHeaders: publicHeaders(record.requestHeaders),
+		responseHeaders: publicHeaders(record.headers),
 		sizes: { requestBody: 0, responseBody: Buffer.byteLength(record.body) },
 	};
 }

@@ -25,8 +25,8 @@ Run it on a schedule as the user that owns the workspace tree. It writes only to
 - A workspace directly under `<workspaces>`, such as `<workspaces>/ws-9027`, has no seat
   folder, so its own roots are not scanned.
 - A busy workspace is skipped. A process whose cwd is inside it marks it busy.
-- `--apply` is required to remove reported links. It removes only GC-root symlinks, never the
-  workspaces, and rechecks workspace age and process cwd before each unlink.
+- `--apply` is required to remove reported links. It removes only GC-root symlinks from idle
+  workspaces, never the workspaces themselves, and rechecks process cwd before each unlink.
 - A workspace deleted or replaced by a file during the run is skipped and counted as vanished. Its roots are not candidates.
 - A root is a candidate when it lies inside an idle workspace and either a path part
   below `<seat>/<ws>` is `.devenv` or `.direnv`, or its base name is `result` or

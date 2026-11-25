@@ -147,15 +147,6 @@ func removeCandidates(roots []string, env runEnv, logger *slog.Logger) (removed,
 		if !eligible[root] {
 			continue
 		}
-		idle, err := isIdle(env.workspaces, root, env.now, idleAfter)
-		if errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) || (err == nil && !idle) {
-			continue
-		}
-		if err != nil {
-			failed++
-			logger.Error("recheck candidate workspace activity before removal", "path", root, "error", err)
-			continue
-		}
 		busy, _, err := busyWorkspaces(env.procRoot, env.workspaces)
 		if err != nil {
 			failed++

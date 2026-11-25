@@ -225,7 +225,7 @@ func TestRunApplyRemovesExactlyReportedIdleLinksAndKeepsActiveLink(t *testing.T)
 	t.Parallel()
 	fixture := newRunFixture(t)
 	idle := makeWorkspace(t, fixture.workspaces, "seat-a", "ws-idle", 8*24*time.Hour)
-	active := makeWorkspace(t, fixture.workspaces, "ws-active", 24*time.Hour)
+	active := makeWorkspace(t, fixture.workspaces, "seat-a", "ws-active", 24*time.Hour)
 	busy := makeWorkspace(t, fixture.workspaces, "seat-b", "ws-busy", 8*24*time.Hour)
 	idleLinks := []string{
 		filepath.Join(idle, "result"),
@@ -237,6 +237,10 @@ func TestRunApplyRemovesExactlyReportedIdleLinksAndKeepsActiveLink(t *testing.T)
 	links := append(append([]string{}, idleLinks...), nonCandidate, activeRoot, busyRoot)
 	for i, link := range links {
 		makeRootLink(t, link, filepath.Join(fixture.tree, "target-"+strconv.Itoa(i)))
+	}
+	activeTime := testNow.Add(-24 * time.Hour)
+	if err := os.Chtimes(active, activeTime, activeTime); err != nil {
+		t.Fatal(err)
 	}
 	for _, link := range idleLinks {
 		setRootParentsOld(t, idle, link)
@@ -374,11 +378,13 @@ func TestRunApplyReportsRemovalFailure(t *testing.T) {
 	fixture := newRunFixture(t)
 	idle := makeWorkspace(t, fixture.workspaces, "seat-a", "ws-idle", 8*24*time.Hour)
 	root := filepath.Join(idle, "result-"+strings.Repeat("x", 256))
+	setRootParentsOld(t, idle, root)
 	code, report, _ := fixture.run([]string{"--apply"}, root)
 	if code != 1 || !strings.Contains(report, "removed 0, failed 1") {
 		t.Fatalf("run = %d, report %q", code, report)
 	}
 }
+
 func TestFindCandidatesCountsNestedWorkspaceActivity(t *testing.T) {
 	t.Parallel()
 	tree := t.TempDir()

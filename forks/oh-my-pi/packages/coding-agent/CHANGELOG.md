@@ -14,6 +14,7 @@
 - Disassembler hosts on Linux now run in a memory-limited systemd scope inherited from the caller's slice; `disassembler.memoryMax` sets each host's limit (default `6G`, empty disables it). If the host exits before readiness and a scope probe fails, that process retries once without the scope and disables it for later hosts.
 
 ### Fixed
+- Fixed settings files without `disassembler.memoryMax` failing to load; the setting now uses its `6G` default when unset.
 - The auth gateway retries its first broker snapshot for up to 30s on connection refused or reset, so a gateway that starts with its broker no longer exits while the broker binds. `omp auth-gateway status` and `check` can now wait that long when the broker is down before they report it.
 - Disconnecting a disassembler database now reports it as not connected at once, so a closed reference fails with the reopen hint instead of a host-exited error.
 - Fixed bash original-output artifacts (`*.bash-original.log` spills of minimized output) being written unredacted, so secrets an extension masks in the tool result still reached disk; the artifact text now passes through the new `artifact_text` extension event before it is written

@@ -40,7 +40,7 @@ func TestStepRelaunchesIdleSeatOverThreshold(t *testing.T) {
 
 func TestStepSkipsSeatWithLiveSubagents(t *testing.T) {
 	w := newWorld(foreman(1), idleSeat("accounts", 10))
-	w.liveSubagents = 1
+	w.seats[1].subagents = 1
 	w.run(t.Context())
 	assertCalls(t, w)
 	assertLogs(t, w, outcomeLine("skipped:subagents", "accounts", 10))
@@ -307,6 +307,28 @@ func TestStepBackgroundRunningIsNotIdle(t *testing.T) {
 	w.run(t.Context())
 	assertCalls(t, w)
 	assertLogs(t, w, outcomeLine("skipped:working", "accounts", 10))
+}
+
+func TestStepRosterWithoutBackgroundSelectsNoSeat(t *testing.T) {
+	w := newWorld(foreman(1), seat{name: "accounts", gib: 12, idle: true, noBackground: true})
+	w.run(t.Context())
+	assertCalls(t, w)
+	assertLogs(t, w, outcomeLine("skipped:working", "accounts", 12))
+}
+
+func TestStepSubagentAppearingBeforeStopSkipsSeat(t *testing.T) {
+	w := newWorld(foreman(1), idleSeat("accounts", 10))
+	w.subagentAfter = map[string]int{"accounts": 1}
+	w.run(t.Context())
+	assertCalls(t, w)
+	assertLogs(t, w, outcomeLine("skipped:subagents", "accounts", 10))
+}
+
+func TestStepBackgroundIdleSelectedOverLegacyRow(t *testing.T) {
+	w := newWorld(foreman(1), seat{name: "legacy", gib: 12, idle: true, noBackground: true}, idleSeat("accounts", 10))
+	w.run(t.Context())
+	assertCalls(t, w, "cotal stop --name accounts --space main", "wave-seats restart accounts")
+	assertLogs(t, w, outcomeLine("skipped:working", "legacy", 12), outcomeLine("relaunched", "accounts", 10))
 }
 
 func TestStepNonSeatsRosterFails(t *testing.T) {

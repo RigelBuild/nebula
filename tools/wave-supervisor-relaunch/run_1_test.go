@@ -118,7 +118,7 @@ func newRunHarness() *runHarness {
 	}
 	initializeRunHarnessDeps(h)
 	finishRunHarnessDeps(h)
-	h.fs.files["/sessions/-agents-workspaces-foreman/session.jsonl"] = []byte(`{"type":"session","id":"supervisor-session","title":"foreman","cwd":"/home/mattw/agents/workspaces/foreman"}`)
+	h.fs.files["/sessions/-agents-workspaces-foreman/session.jsonl"] = []byte(`{"type":"session","id":"supervisor-session","title":"foreman","cwd":"/home/example/agents/workspaces/foreman"}`)
 	h.fs.times["/sessions/-agents-workspaces-foreman/session.jsonl"] = h.time
 	return h
 }
@@ -133,7 +133,7 @@ func initializeRunHarnessDeps(h *runHarness) {
 			Manifest:       "/state/wave-relaunch-manifest.json",
 			RestartRequest: "/state/wave-zellij-restart-request.json",
 			Sessions:       "/sessions",
-			Home:           "/home/mattw",
+			Home:           "/home/example",
 			Proc:           "/proc",
 			Seats:          "/state/wave-seats.json",
 		},
@@ -177,7 +177,7 @@ func initializeRunHarnessDeps(h *runHarness) {
 		SeatNames: func(context.Context) (map[string]struct{}, error) {
 			return map[string]struct{}{"foreman": {}, "accounts": {}, "runners": {}}, nil
 		},
-		ReadRootCWD: func(context.Context) (string, error) { return "/home/mattw/agents/workspaces/foreman", nil },
+		ReadRootCWD: func(context.Context) (string, error) { return "/home/example/agents/workspaces/foreman", nil },
 	}
 }
 
@@ -228,12 +228,11 @@ func (h *runHarness) requireSingleSpawnPrefix(t *testing.T, prefix string) {
 func (h *runHarness) installWaveScope() {
 	h.fs.files["/proc/111/cgroup"] = []byte("0::/wave-agents.slice/scope")
 	h.fs.files["/proc/111/cmdline"] = []byte("omp\x00--fork\x00parent-session\x00")
-	h.fs.files["/proc/111/environ"] = []byte("COTAL_AGENT_FILE=/agents/foreman.md\x00HOME=/home/mattw\x00")
-	h.fs.links["/proc/111/fd/1"] = "/sessions/-home-mattw-agents/session_census-supervisor.jsonl"
-	h.fs.files["/sessions/-home-mattw-agents/session_census-supervisor.jsonl"] = []byte(`{"type":"session","id":"census-supervisor","parentSession":"parent-session"}`)
-	h.fs.times["/sessions/-home-mattw-agents/session_census-supervisor.jsonl"] = h.time
+	h.fs.files["/proc/111/environ"] = []byte("COTAL_AGENT_FILE=/agents/foreman.md\x00HOME=/home/example\x00")
+	h.fs.links["/proc/111/fd/1"] = "/sessions/-home-example-agents/session_census-supervisor.jsonl"
+	h.fs.files["/sessions/-home-example-agents/session_census-supervisor.jsonl"] = []byte(`{"type":"session","id":"census-supervisor","parentSession":"parent-session"}`)
+	h.fs.times["/sessions/-home-example-agents/session_census-supervisor.jsonl"] = h.time
 }
-
 func TestCotalFailureFormatsCommandAndFirstStderrLine(t *testing.T) {
 	if got := cotalFailure([]string{"ps", "--space"}, cotalreach.CommandResult{ExitCode: 3, Stderr: "\n  nats: timeout\nmore"}, 31878*time.Millisecond); got != "cotal ps exit=3 ms=31878 stderr=nats: timeout" {
 		t.Fatalf("cotalFailure() = %q", got)

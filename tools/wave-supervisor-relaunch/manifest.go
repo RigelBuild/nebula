@@ -375,8 +375,8 @@ func stopWaveSeats(ctx context.Context, deps stopWaveDeps) {
 	case <-seatCtx.Done():
 		deps.noteSeatStopFailure(seatCtx.Err())
 	}
-
 }
+
 func sleepContext(ctx context.Context, delay time.Duration) error {
 	timer := time.NewTimer(delay)
 	defer timer.Stop()

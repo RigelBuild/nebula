@@ -284,6 +284,20 @@ func (f *memoryFS) ReadPrefix(path string, maxBytes int) ([]byte, error) {
 	return data[:min(len(data), maxBytes)], nil
 }
 
+// ReadTail serves a bounded tail read, so a caller that reads only the last record never hits ReadFile.
+func (f *memoryFS) ReadTail(path string, maxBytes int) ([]byte, error) {
+	if f.readHook != nil {
+		if data, err, handled := f.readHook(path); handled {
+			return data, err
+		}
+	}
+	data, ok := f.files[path]
+	if !ok {
+		return nil, fs.ErrNotExist
+	}
+	return data[max(0, len(data)-maxBytes):], nil
+}
+
 func (f *memoryFS) Stat(path string) (fs.FileInfo, error) {
 	if _, ok := f.files[path]; ok {
 		return memoryFileInfo{name: filepath.Base(path), mod: f.times[path]}, nil

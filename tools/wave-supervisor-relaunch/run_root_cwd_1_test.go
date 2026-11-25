@@ -11,7 +11,7 @@ import (
 
 // The root seat's recorded cwd must select the session dir and the spawn cwd.
 func TestRootSeatRecordedCWDDrivesSessionLookupAndSpawn(t *testing.T) {
-	const rootCWD = "/home/mattw/agents/workspaces/foreman"
+	const rootCWD = "/home/example/agents/workspaces/foreman"
 	seatsPath := filepath.Join(t.TempDir(), "wave-seats.json")
 	list := waveseats.SeatListV2{Version: 2, Revision: 1, Seats: []waveseats.SeatEntryV2{{
 		Name: "foreman", SeatRevision: 1, CWD: rootCWD, Tab: "foreman", State: waveseats.SeatV2Active,
@@ -40,7 +40,7 @@ func TestRootSeatRecordedCWDDrivesSessionLookupAndSpawn(t *testing.T) {
 	h.fs.times[rootSession] = h.time
 	// A newer decoy in the old fixed -agents dir must never be picked.
 	decoy := "/sessions/-agents/decoy.jsonl"
-	h.fs.files[decoy] = []byte(`{"type":"session","id":"decoy-session","title":"foreman","cwd":"/home/mattw/agents"}`)
+	h.fs.files[decoy] = []byte(`{"type":"session","id":"decoy-session","title":"foreman","cwd":"/home/example/agents"}`)
 	h.fs.times[decoy] = h.time.Add(1)
 	var spawnCWD string
 	spawn := h.deps.Spawn

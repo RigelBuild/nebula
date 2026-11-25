@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -223,6 +224,22 @@ func TestPicksByMtimeNotFilenameAndSkipsBurnedSessionIDs(t *testing.T) {
 	pick, err := NewestSession("/sessions", "supervisor", "/home/example/agents", map[string]struct{}{"newer": {}}, SessionDeps{FileSystem: fsys})
 	if err != nil || pick == nil || pick.ID != "older" {
 		t.Fatalf("NewestSession() = %#v, %v; want older session", pick, err)
+	}
+}
+
+func TestReadTailFrom(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "tail.jsonl")
+	if err := os.WriteFile(path, []byte("first\nsecond\nthird\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	got, err := readTailFrom(file, len("third\n"))
+	if err != nil || string(got) != "third\n" {
+		t.Fatalf("readTailFrom() = %q, %v; want %q", got, err, "third\n")
 	}
 }
 

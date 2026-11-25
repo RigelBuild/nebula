@@ -69,6 +69,11 @@ func ReadTail(fileSystem FileSystem, path string, maxBytes int) ([]byte, error) 
 	return data[len(data)-maxBytes:], nil
 }
 
+// ReadSessionHeader reads a session file's header from a bounded prefix, never the whole file.
+func ReadSessionHeader(fileSystem FileSystem, path string) (SessionHeader, bool) {
+	return readHeader(fileSystem, path)
+}
+
 // ReadHeaderFromText reads session fields through the first session row.
 func ReadHeaderFromText(text string) SessionHeader {
 	var header SessionHeader

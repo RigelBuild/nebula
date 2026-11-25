@@ -165,6 +165,32 @@ func TestTopLevelSessionFileByNameDoesNotReadContents(t *testing.T) {
 	}
 }
 
+// TestTopLevelSessionFileHeaderFallback finds a file not named by id through its prefix header.
+func TestTopLevelSessionFileHeaderFallback(t *testing.T) {
+	fsys := newMemoryFS()
+	path := "/sessions/-home-example/accounts.jsonl"
+	fsys.files[path] = []byte(`{"type":"session","id":"session-id"}` + "\n" + strings.Repeat("x", 1<<17))
+	got, err := topLevelSessionFile("/sessions", "session-id", fsys)
+	if err != nil || got != path || len(fsys.readBytes) != 0 {
+		t.Fatalf("topLevelSessionFile = %q, %v; whole reads %v", got, err, fsys.readBytes)
+	}
+}
+
+func TestLiveSubagentsReadsOnlyTails(t *testing.T) {
+	const seatFile = "/sessions/seat-id.jsonl"
+	fsys := newMemoryFS()
+	fsys.files[seatFile] = []byte(finishedSessionRecord)
+	big := strings.Repeat(`{"type":"model_usage"}`+"\n", 2*subagentTailBytes/23) + finishedSessionRecord
+	fsys.files["/sessions/seat-id/Big.jsonl"] = []byte(big)
+	got, err := liveSubagents(t.Context(), fsys, seatFile, time.Time{})
+	if err != nil || got != 0 {
+		t.Fatalf("liveSubagents = %d, %v; want 0", got, err)
+	}
+	if len(fsys.readBytes) != 0 {
+		t.Fatalf("whole-file reads = %v, want none", fsys.readBytes)
+	}
+}
+
 func TestGateSliceOmpPIDsReadErrorsFailClosed(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
@@ -193,31 +219,38 @@ func TestGateSliceOmpPIDsReadErrorsFailClosed(t *testing.T) {
 		})
 	}
 }
+
 func TestStopWaveRefusesSubagentStateBeforeSliceStop(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
-		check     func(int) error
+		check     func(context.Context, int) error
 		wantSeats int
 	}{
-		{name: "initial check", check: func(int) error { return errSubagentsGate }},
-		{name: "after seat stops", check: func(call int) error {
+		{name: "initial check", check: func(context.Context, int) error { return errSubagentsGate }},
+		{name: "after seat stops", check: func(_ context.Context, call int) error {
 			if call == 2 {
 				return errSubagentsGate
 			}
 			return nil
 		}, wantSeats: 1},
+		{name: "deadline expiry", check: func(ctx context.Context, _ int) error { <-ctx.Done(); return nil }},
+		{name: "no check wired"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			checks, seats, slices := 0, 0, 0
-			result := stopWave(t.Context(), stopWaveDeps{
-				CheckSubagents: func(context.Context) error {
+			deps := stopWaveDeps{
+				CheckDeadline: 5 * time.Millisecond,
+				StopSeats:     func(context.Context) error { seats++; return nil },
+				StopSlice:     func(context.Context) (bool, error) { slices++; return true, nil },
+				PresenceGone:  func(context.Context) (bool, error) { return true, nil },
+			}
+			if tc.name != "no check wired" {
+				deps.CheckSubagents = func(ctx context.Context) error {
 					checks++
-					return tc.check(checks)
-				},
-				StopSeats:    func(context.Context) error { seats++; return nil },
-				StopSlice:    func(context.Context) (bool, error) { slices++; return true, nil },
-				PresenceGone: func(context.Context) (bool, error) { return true, nil },
-			})
+					return tc.check(ctx, checks)
+				}
+			}
+			result := stopWave(t.Context(), deps)
 			if result != "skipped:subagents" || seats != tc.wantSeats || slices != 0 {
 				t.Fatalf("stopWave() = %q, seat stops = %d, slice stops = %d", result, seats, slices)
 			}
@@ -236,6 +269,35 @@ func waveProcFixture(fileSystem *memoryFS, pid, seat, sessionID, child string) {
 	fileSystem.files[file] = []byte(`{"type":"session","id":"` + sessionID + `"}` + "\n")
 	if child != "" {
 		fileSystem.files[strings.TrimSuffix(file, ".jsonl")+"/Sub.jsonl"] = []byte(child)
+	}
+}
+
+func stopRecorder(argvs *[]string) processRunner {
+	return func(_ context.Context, argv []string, _ string) (cotalreach.CommandResult, error) {
+		*argvs = append(*argvs, strings.Join(argv, " "))
+		return cotalreach.CommandResult{}, nil
+	}
+}
+
+func TestStopOneSeatFinishedSubagentsStop(t *testing.T) {
+	var argvs []string
+	live := func(context.Context, string) (int, error) { return 0, nil }
+	if err := stopOneSeat(t.Context(), "accounts", "main", stopRecorder(&argvs), live); err != nil {
+		t.Fatalf("stopOneSeat = %v", err)
+	}
+	if len(argvs) != 1 {
+		t.Fatalf("argv = %q, want one cotal stop", argvs)
+	}
+}
+
+func TestStopManagedSeatsDeadSeatStops(t *testing.T) {
+	var argvs []string
+	live := liveCheckFor("/proc", newMemoryFS(), "/sessions", "wave-agents.slice")
+	if err := stopManagedSeats(t.Context(), []string{"accounts"}, "main", stopRecorder(&argvs), live); err != nil {
+		t.Fatalf("stopManagedSeats = %v", err)
+	}
+	if len(argvs) != 1 {
+		t.Fatalf("argv = %q, want one cotal stop", argvs)
 	}
 }
 
@@ -293,6 +355,20 @@ func TestWaveLiveSubagentsRequiresResolvedSession(t *testing.T) {
 	fsys.files["/proc/123/environ"] = []byte("COTAL_AGENT_FILE=accounts\x00")
 	if err := waveLiveSubagents(t.Context(), "/proc", fsys, "/sessions", "wave-agents.slice"); err == nil {
 		t.Fatal("waveLiveSubagents accepted an unresolved process session")
+	}
+}
+
+func TestWaveLiveSubagentsStaleForkIsBusy(t *testing.T) {
+	fsys := newMemoryFS()
+	fsys.files["/proc/300/cgroup"] = []byte("0::/user.slice/wave-agents.slice/run-accounts.scope\n")
+	fsys.files["/proc/300/cmdline"] = []byte("omp\x00--fork\x00parent-1\x00")
+	fsys.files["/proc/300/environ"] = []byte("COTAL_AGENT_FILE=/agents/accounts.md\x00HOME=/home/example\x00")
+	fsys.files["/sessions/-agents/2026_parent-1.jsonl"] = []byte(`{"type":"session","id":"parent-1"}` + "\n")
+	if err := waveLiveSubagents(t.Context(), "/proc", fsys, "/sessions", "wave-agents.slice"); err == nil {
+		t.Fatal("waveLiveSubagents = nil for a stale fork guess; want busy")
+	}
+	if got, err := liveSubagentsFor(t.Context(), "/proc", fsys, "/sessions", "wave-agents.slice", "accounts"); err == nil {
+		t.Fatalf("liveSubagentsFor = %d, nil for a stale fork guess; want an error", got)
 	}
 }
 

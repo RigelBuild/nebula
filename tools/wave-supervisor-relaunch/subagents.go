@@ -290,14 +290,17 @@ func processLiveSubagents(ctx context.Context, procRoot string, fileSystem relau
 	return liveSubagents(ctx, fileSystem, seatFile, processStartTime(base, fileSystem))
 }
 
-// topLevelSessionFile finds the seat's top-level session file under the session root by filename.
+// topLevelSessionFile finds the seat's top-level session file under the session root. omp names it
+// `<timestamp>_<session-id>.jsonl`, so a name match needs only directory listings. With no name
+// match it falls back to each top-level file's header, read from a bounded prefix. A missing or
+// ambiguous match is an error, never a guess.
 func topLevelSessionFile(sessionDir, sessionID string, fileSystem relaunch.FileSystem) (string, error) {
 	dirs, err := fileSystem.ReadDir(sessionDir)
 	if err != nil {
 		return "", err
 	}
 	suffix := "_" + sessionID + ".jsonl"
-	var found []string
+	var named, all []string
 	for _, dir := range dirs {
 		if !dir.IsDir() {
 			continue
@@ -307,8 +310,21 @@ func topLevelSessionFile(sessionDir, sessionID string, fileSystem relaunch.FileS
 			return "", err
 		}
 		for _, entry := range entries {
-			if !entry.IsDir() && strings.HasSuffix(entry.Name(), suffix) {
-				found = append(found, filepath.Join(sessionDir, dir.Name(), entry.Name()))
+			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".jsonl") {
+				continue
+			}
+			path := filepath.Join(sessionDir, dir.Name(), entry.Name())
+			all = append(all, path)
+			if strings.HasSuffix(entry.Name(), suffix) {
+				named = append(named, path)
+			}
+		}
+	}
+	found := named
+	if len(found) == 0 {
+		for _, file := range all {
+			if header, ok := relaunch.ReadSessionHeader(fileSystem, file); ok && header.ID == sessionID {
+				found = append(found, file)
 			}
 		}
 	}

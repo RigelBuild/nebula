@@ -11,6 +11,7 @@ import {
 	setAgentDir,
 	setProjectDir,
 } from "@oh-my-pi/pi-utils";
+import { asGlobalFetch } from "./helpers/fetch-mock";
 import { restoreEnvValue } from "./helpers/settings-test-state";
 
 // Captured at module load, before any test repoints the shared dirs resolver.
@@ -46,8 +47,8 @@ describe("omp auth-gateway validate", () => {
 		listenSpy = spyOn(Bun, "serve").mockImplementation(() => {
 			throw new Error("validate must not listen");
 		});
-		fetchSpy = spyOn(globalThis, "fetch").mockImplementation(() =>
-			Promise.reject(new Error("validate must not fetch")),
+		fetchSpy = spyOn(globalThis, "fetch").mockImplementation(
+			asGlobalFetch(() => Promise.reject(new Error("validate must not fetch"))),
 		);
 		stdoutSpy = spyOn(process.stdout, "write").mockImplementation(() => true);
 		stderrSpy = spyOn(process.stderr, "write").mockImplementation(() => true);

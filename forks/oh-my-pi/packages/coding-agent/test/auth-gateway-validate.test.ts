@@ -23,7 +23,6 @@ describe("omp auth-gateway validate", () => {
 	const originalConfigFiles = process.env.PI_CONFIG_FILES;
 	const originalLimitClasses = process.env.OMP_AUTH_GATEWAY_API_KEY_LIMIT_MODEL_CLASSES;
 	const originalAccountPoolFile = process.env.OMP_AUTH_BROKER_ACCOUNT_POOL_FILE;
-	const originalExitCode = process.exitCode;
 
 	let dir = "";
 	let overlay = "";
@@ -42,7 +41,7 @@ describe("omp auth-gateway validate", () => {
 		setProjectDir(path.join(dir, "project"));
 		process.env.PI_CONFIG_FILES = overlay;
 		delete process.env.OMP_AUTH_GATEWAY_API_KEY_LIMIT_MODEL_CLASSES;
-		process.exitCode = undefined;
+		process.exitCode = 0;
 		resetSettingsForTest();
 		listenSpy = spyOn(Bun, "serve").mockImplementation(() => {
 			throw new Error("validate must not listen");
@@ -59,8 +58,8 @@ describe("omp auth-gateway validate", () => {
 		fetchSpy.mockRestore();
 		stdoutSpy.mockRestore();
 		stderrSpy.mockRestore();
+		process.exitCode = 0;
 		restoreEnvValue("PI_CONFIG_FILES", originalConfigFiles);
-		process.exitCode = originalExitCode;
 		restoreEnvValue("OMP_AUTH_BROKER_ACCOUNT_POOL_FILE", originalAccountPoolFile);
 		restoreEnvValue("OMP_AUTH_GATEWAY_API_KEY_LIMIT_MODEL_CLASSES", originalLimitClasses);
 		restoreEnvValue("PI_CODING_AGENT_DIR", originalAgentDir);
@@ -135,6 +134,31 @@ describe("omp auth-gateway validate", () => {
 		await Bun.write(overlay, "");
 		await fs.mkdir(path.join(dir, "project", ".omp"));
 		await Bun.write(path.join(dir, "project", ".omp", "config.yml"), "disassemblr:\n  memoryMax: 1G\n");
+
+		await runAuthGatewayCommand({ action: "validate", flags: {} });
+
+		expect(process.exitCode).toBe(1);
+		expect(stderrSpy.mock.calls.map(([message]) => message).join("")).toContain("disassemblr.memoryMax");
+	});
+
+	it("accepts a legacy setting in the project's omp config.yml", async () => {
+		await Bun.write(overlay, "");
+		await fs.mkdir(path.join(dir, "project", ".omp"));
+		await Bun.write(path.join(dir, "project", ".omp", "config.yml"), "lastChangelogVersion: 1.0.0\n");
+
+		await runAuthGatewayCommand({ action: "validate", flags: {} });
+
+		expect(process.exitCode).toBe(0);
+		expect(stderrSpy).not.toHaveBeenCalled();
+	});
+
+	it("rejects an unknown key in the project's omp settings.json", async () => {
+		await Bun.write(overlay, "");
+		await fs.mkdir(path.join(dir, "project", ".omp"));
+		await Bun.write(
+			path.join(dir, "project", ".omp", "settings.json"),
+			JSON.stringify({ disassemblr: { memoryMax: "1G" } }),
+		);
 
 		await runAuthGatewayCommand({ action: "validate", flags: {} });
 

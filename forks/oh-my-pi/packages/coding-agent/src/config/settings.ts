@@ -1979,6 +1979,10 @@ export class Settings {
 	getConfigOverlaySettings(): RawSettings {
 		return structuredClone(this.#configOverlay);
 	}
+	/** Apply the same schema migrations used by loaded settings, without recording legacy changelog state. */
+	migrateRawSettings(raw: RawSettings): RawSettings {
+		return this.#migrateRawSettings(raw, false);
+	}
 
 	/**
 	 * Raw project settings layer (`.claude/settings.yml`, `.omp/config.yml`,

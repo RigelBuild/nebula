@@ -1253,14 +1253,25 @@ export async function validateAuthGatewayConfig(flags: AuthGatewayCommandArgs["f
 			for (const id of unknownSettingPaths(layer)) problems.push(`Unknown setting "${id}"`);
 		}
 		await collect(async () => {
-			const projectConfig = Bun.file(path.join(getProjectAgentDir(settings.getCwd()), "config.yml"));
-			if (!(await projectConfig.exists())) return;
-			const projectLayer: unknown = YAML.parse(await projectConfig.text());
-			if (isRecord(projectLayer)) {
-				for (const id of unknownSettingPaths(projectLayer)) problems.push(`Unknown setting "${id}"`);
-			} else if (projectLayer !== null && projectLayer !== undefined) {
-				throw new Error("Settings YAML must contain a mapping at the document root");
+			const projectAgentDir = getProjectAgentDir(settings.getCwd());
+			const projectConfig = Bun.file(path.join(projectAgentDir, "config.yml"));
+			if (await projectConfig.exists()) {
+				const projectLayer: unknown = YAML.parse(await projectConfig.text());
+				if (isRecord(projectLayer)) {
+					const migrated = settings.migrateRawSettings(projectLayer);
+					for (const id of unknownSettingPaths(migrated)) problems.push(`Unknown setting "${id}"`);
+				} else if (projectLayer !== null && projectLayer !== undefined) {
+					throw new Error("Settings YAML must contain a mapping at the document root");
+				}
 			}
+		});
+		await collect(async () => {
+			const projectSettings = Bun.file(path.join(getProjectAgentDir(settings.getCwd()), "settings.json"));
+			if (!(await projectSettings.exists())) return;
+			const projectLayer: unknown = JSON.parse(await projectSettings.text());
+			if (!isRecord(projectLayer)) return;
+			const migrated = settings.migrateRawSettings(projectLayer);
+			for (const id of unknownSettingPaths(migrated)) problems.push(`Unknown setting "${id}"`);
 		});
 		for (const setting of allSettings()) {
 			if (!settings.isConfigured(setting)) continue;

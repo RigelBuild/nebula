@@ -354,6 +354,119 @@ const tick = (): Promise<void> => new Promise((resolve) => setImmediate(resolve)
   );
 }
 
+// Settled idle publishes wait on the bound context and cannot overwrite a newer run.
+{
+  const mesh = new FakeMesh();
+  const driver = new PiDriver(mesh as unknown as MeshAgent, 20);
+  driver.bind(new FakeHost());
+  const ctxA = context();
+  driver.onSessionStart(ctxA);
+  driver.onAgentStart(ctxA);
+  const ctxB = context();
+  driver.onAgentStart(ctxB);
+  driver.onAgentEnd([{ role: "assistant", stopReason: "error", errorStatus: 503 }], ctxA);
+  await driver.flushPresence();
+  ok(mesh.statuses.at(-1)?.status === "working", "a late error end cannot replace a newer run's working presence");
+  driver.requestShutdown();
+}
+
+{
+  const mesh = new FakeMesh();
+  const driver = new PiDriver(mesh as unknown as MeshAgent, 20);
+  driver.bind(new FakeHost());
+  const ctxA = context();
+  driver.onSessionStart(ctxA);
+  driver.onAgentStart(ctxA);
+  const ctxB = context();
+  ctxB.idle = true;
+  driver.onAgentEnd([{ role: "assistant", stopReason: "error", errorStatus: 503 }], ctxB);
+  await driver.flushPresence();
+  ok(mesh.statuses.at(-1)?.status === "working", "an error end waits for the bound context to become idle");
+  ctxA.idle = true;
+  await delay(20);
+  await driver.flushPresence();
+  ok(
+    mesh.statuses.at(-1)?.status === "idle" && mesh.statuses.at(-1)?.activity === "error: provider 503",
+    "an error turn with no Cotal batch reports idle after the bound context settles",
+  );
+  driver.requestShutdown();
+}
+
+{
+  const mesh = new FakeMesh();
+  const driver = new PiDriver(mesh as unknown as MeshAgent, 20);
+  driver.bind(new FakeHost());
+  const ctxA = context();
+  driver.onSessionStart(ctxA);
+  driver.onAgentStart(ctxA);
+  const ctxB = context();
+  ctxA.idle = true;
+  ctxB.idle = true;
+  driver.onAgentEnd([{ role: "assistant", stopReason: "length", usage: { output: 0 } }], ctxB);
+  await driver.flushPresence();
+  ok(mesh.statuses.at(-1)?.status === "idle" && mesh.statuses.at(-1)?.activity === undefined,
+    "a zero-output length end reports idle without an activity note");
+}
+
+{
+  const mesh = new FakeMesh();
+  const driver = new PiDriver(mesh as unknown as MeshAgent, 20);
+  driver.bind(new FakeHost());
+  const ctxA = context();
+  driver.onSessionStart(ctxA);
+  driver.onAgentStart(ctxA);
+  const ctxB = context();
+  ctxA.idle = true;
+  ctxB.idle = true;
+  driver.onAgentEnd([], ctxB);
+  await driver.flushPresence();
+  ok(mesh.statuses.at(-1)?.status === "idle", "an end with no assistant message reports idle");
+}
+
+{
+  const mesh = new FakeMesh();
+  const driver = new PiDriver(mesh as unknown as MeshAgent, 20);
+  driver.bind(new FakeHost());
+  const controller = new AbortController();
+  const ctxA = context(controller.signal);
+  driver.onSessionStart(ctxA);
+  driver.onAgentStart(ctxA);
+  const ctxB = context();
+  ctxB.idle = true;
+  controller.abort();
+  driver.onAgentEnd([{ role: "assistant", stopReason: "error" }], ctxB);
+  await driver.flushPresence();
+  ok(mesh.statuses.at(-1)?.status === "working", "an aborted signal waits for the bound context to settle");
+  ctxA.idle = true;
+  await delay(20);
+  await driver.flushPresence();
+  ok(mesh.statuses.at(-1)?.status === "idle" && mesh.statuses.at(-1)?.activity === "aborted",
+    "an aborted signal labels an error end as aborted");
+  driver.requestShutdown();
+}
+
+
+{
+  const mesh = new FakeMesh();
+  mesh.items = [item("normal-turn")];
+  const host = new FakeHost();
+  const driver = new PiDriver(mesh as unknown as MeshAgent, 20);
+  driver.bind(host);
+  const sessionCtx = context();
+  driver.onSessionStart(sessionCtx);
+  const details = startBatch(driver, host);
+  const ctxA = context();
+  driver.onAgentStart(ctxA);
+  confirm(driver, details);
+  const ctxB = context();
+  ctxA.idle = true;
+  ctxB.idle = true;
+  driver.onAgentEnd([{ role: "assistant", stopReason: "stop" }], ctxB);
+  await driver.flushPresence();
+  ok(mesh.statuses.at(-1)?.status === "idle" && mesh.statuses.at(-1)?.activity === undefined,
+    "a normal turn end keeps idle presence without an activity note");
+}
+
 // Background work mirrors to presence as running while jobs or agents run, clears at zero, and stops at shutdown.
 {
   const mesh = new FakeMesh();

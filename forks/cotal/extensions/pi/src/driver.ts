@@ -294,9 +294,14 @@ export class PiDriver {
     const lastAssistant = [...messages]
       .reverse()
       .find((message) => message && typeof message === "object" && (message as { role?: unknown }).role === "assistant") as
-      | { stopReason?: string; usage?: { output?: number }; errorMessage?: string }
+      | { stopReason?: string; usage?: { output?: number }; errorMessage?: string; errorStatus?: number }
       | undefined;
     const aborted = this.activeSignal?.aborted === true;
+    const turnEndActivity = aborted || lastAssistant?.stopReason === "aborted"
+      ? "aborted"
+      : lastAssistant?.stopReason === "error"
+        ? (lastAssistant.errorStatus === undefined ? "error" : `error: provider ${lastAssistant.errorStatus}`)
+        : undefined;
     this.activeSignal = undefined;
     this.contextBatchIds.clear();
     this.requestBatchIds.clear();
@@ -315,11 +320,12 @@ export class PiDriver {
 
     if (!terminal) {
       this.terminalEvidenceBatchIds.clear();
+      // An error or abort has ended the turn even if Cotal has no delivery batch to hold.
       if (this.batches.length === 0) {
         this.inboundDuringTurn = undefined;
         this.continuationAttempts = 0;
         this._state = "idle";
-        this.publishIdleWhenSettled(context);
+        this.publishIdleWhenSettled(this.context ?? context, turnEndActivity);
         return;
       }
       this.pendingContinuation = true;
@@ -598,7 +604,7 @@ export class PiDriver {
     this._state = "idle";
     this.heldReason = undefined;
     this.pump();
-    if (this._state === "idle") this.publishIdleWhenSettled(context);
+    if (this._state === "idle") this.publishIdleWhenSettled(this.context ?? context);
   }
 
   /** Fires once after the fixed backoff to re-dispatch the still-unconfirmed batch through the same
@@ -674,15 +680,16 @@ export class PiDriver {
     return this._state === "held" && this.heldReason ? `${text} · Cotal delivery held: ${this.heldReason}` : text;
   }
 
-  private publishIdleWhenSettled(context: PiContextLike): void {
+  private publishIdleWhenSettled(context: PiContextLike, activity?: string): void {
+    const runSeq = this.runSeq;
     const check = (): void => {
-      if (this._state !== "idle") return;
+      if (this._state !== "idle" || this.runSeq !== runSeq) return;
       if (this.context !== context) return;
       if (!context.isIdle()) {
         setTimeout(check, 10).unref?.();
         return;
       }
-      this.enqueuePresence("idle");
+      this.enqueuePresence("idle", activity);
     };
     check();
   }

@@ -389,12 +389,32 @@ func TestPlanSkipsNonGoBinaries(t *testing.T) {
 	}
 }
 
-func TestPublishRefusesAReRunOfTheReleasedRun(t *testing.T) {
+func TestPublishReturnsExistingCommitForSameTagAndSource(t *testing.T) {
+	f := newPublishFixture(t)
+	tag := "nebula-20261117-6"
+	release(t, f.work, tag, f.source, nil)
+	testGit(t, f.work, "push", "-q", "origin", "main", "--tags")
+	before := testGit(t, f.remote, "rev-parse", "main")
+	want := testGit(t, f.work, "rev-parse", tag+"^{commit}")
+
+	got, err := publish(context.Background(), f.options(tag))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Fatalf("publish() = %s, want existing tag commit %s", got, want)
+	}
+	if after := testGit(t, f.remote, "rev-parse", "main"); after != before {
+		t.Fatalf("remote main moved from %s to %s", before, after)
+	}
+}
+
+func TestPublishRefusesSameSourceWithDifferentTag(t *testing.T) {
 	f := newPublishFixture(t)
 	release(t, f.work, "nebula-20261117-6", f.source, nil)
 	testGit(t, f.work, "push", "-q", "origin", "main", "--tags")
-	if _, err := publish(context.Background(), f.options("nebula-20261117-6")); !errors.Is(err, errStaleRelease) {
-		t.Fatalf("err = %v, want errStaleRelease for a re-run of the same source", err)
+	if _, err := publish(context.Background(), f.options("nebula-20261117-7")); !errors.Is(err, errStaleRelease) {
+		t.Fatalf("err = %v, want errStaleRelease for the same source under a different tag", err)
 	}
 }
 

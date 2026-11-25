@@ -71,8 +71,12 @@ func publish(ctx context.Context, o publishOptions) (string, error) {
 			"+refs/heads/"+o.branch+":"+ref, "+refs/tags/nebula-*:refs/tags/nebula-*"); err != nil {
 			return "", err
 		}
-		if err := checkNewestRelease(ctx, o.repo, source); err != nil {
+		existing, err := checkNewestRelease(ctx, o.repo, source, o.manifest.tag)
+		if err != nil {
 			return "", err
+		}
+		if existing != "" {
+			return existing, nil
 		}
 		tip, err := git(ctx, o.repo, "rev-parse", ref)
 		if err != nil {
@@ -119,21 +123,28 @@ func publish(ctx context.Context, o publishOptions) (string, error) {
 	return "", fmt.Errorf("%w (%d attempts)", errPushRejected, o.attempts)
 }
 
-// checkNewestRelease refuses unless the newest nebula-* tag's source is an
-// ancestor of source, so a re-run of an older run never rolls the manifest back.
-func checkNewestRelease(ctx context.Context, repo, source string) error {
+// checkNewestRelease returns the existing tag commit for this exact release and
+// refuses stale runs so an older run never rolls the manifest back.
+func checkNewestRelease(ctx context.Context, repo, source, plannedTag string) (string, error) {
 	tag, prev, _, err := newestRelease(ctx, repo)
 	if err != nil || tag == "" {
-		return err
+		return "", err
+	}
+	if tag == plannedTag && prev.Source == source {
+		commit, err := git(ctx, repo, "rev-parse", tag+"^{commit}")
+		if err != nil {
+			return "", err
+		}
+		return commit, nil
 	}
 	ok, err := isAncestor(ctx, repo, prev.Source, source)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if !ok || prev.Source == source {
-		return fmt.Errorf("%w: %s has source %s; this run tested %s", errStaleRelease, tag, prev.Source, source)
+		return "", fmt.Errorf("%w: %s has source %s; this run tested %s", errStaleRelease, tag, prev.Source, source)
 	}
-	return nil
+	return "", nil
 }
 
 // push pushes refspec. It reports retry=true only for a non-fast-forward

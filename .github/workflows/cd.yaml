@@ -649,7 +649,25 @@ jobs:
         env:
           TAG: ${{ steps.publish.outputs.tag }}
           COMMIT: ${{ steps.publish.outputs.commit }}
-        run: git push origin "$COMMIT:refs/tags/$TAG"
+        run: |
+          # Compare peeled tags so annotated and lightweight tags resolve alike.
+          remote_tags=$(git ls-remote origin "refs/tags/$TAG" "refs/tags/$TAG^{}")
+          remote_commit=
+          while IFS=$'\t' read -r object ref; do
+            [ -n "$ref" ] || continue
+            if [ "$ref" = "refs/tags/$TAG^{}" ] || [ -z "$remote_commit" ]; then
+              remote_commit=$object
+            fi
+          done <<< "$remote_tags"
+          if [ -n "$remote_commit" ]; then
+            if [ "$remote_commit" = "$COMMIT" ]; then
+              echo "Tag $TAG already points to $COMMIT"
+              exit 0
+            fi
+            echo "::error::Tag $TAG already points to $remote_commit, not $COMMIT"
+            exit 1
+          fi
+          git push origin "$COMMIT:refs/tags/$TAG"
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
@@ -678,8 +696,30 @@ jobs:
               runtime_files+=("$RUNNER_TEMP"/runtime/$rt-*.tar.gz "$RUNNER_TEMP/runtime/$rt-SHA256SUMS")
             fi
           done
-          gh release create "$TAG" --verify-tag --title "$TAG" --notes "$notes" \
-            "$RUNNER_TEMP/release-manifest.json" "$RUNNER_TEMP/SHA256SUMS" "${files[@]}" "${runtime_files[@]}"
+          release_assets=("$RUNNER_TEMP/release-manifest.json" "$RUNNER_TEMP/SHA256SUMS" "${files[@]}" "${runtime_files[@]}")
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" --clobber "${release_assets[@]}"
+          else
+            retry_delays=(5 15 45)
+            for attempt in 0 1 2 3; do
+              if [ "$attempt" -gt 0 ]; then
+                sleep "${retry_delays[$((attempt - 1))]}"
+                # A failed create may have succeeded remotely; check before retrying.
+                if gh release view "$TAG" >/dev/null 2>&1; then
+                  gh release upload "$TAG" --clobber "${release_assets[@]}"
+                  exit 0
+                fi
+              fi
+              if gh release create "$TAG" --verify-tag --title "$TAG" --notes "$notes" \
+                "${release_assets[@]}"; then
+                exit 0
+              fi
+              if [ "$attempt" -eq 3 ]; then
+                echo "::error::Failed to create GitHub Release $TAG after 4 attempts"
+                exit 1
+              fi
+            done
+          fi
 
   sync-out:
     name: Sync out (jj-hooks, homebrew-tap)

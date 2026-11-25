@@ -72,7 +72,7 @@ omp auth-broker status    [--json]
 | Method   | Path                         | Auth   | Purpose                                                            |
 | -------- | ---------------------------- | ------ | ------------------------------------------------------------------ |
 | `GET`    | `/v1/healthz`                | none   | Liveness + version                                                 |
-| `GET`    | `/v1/readyz`                 | none   | Credential readiness; 503 when none are usable                    |
+| `GET`    | `/v1/readyz`                 | none   | Credential readiness; 503 when none are usable                     |
 | `GET`    | `/v1/snapshot`               | bearer | Redacted snapshot (refresh tokens replaced by sentinel)            |
 | `GET`    | `/v1/snapshot/stream`        | bearer | SSE snapshot stream with delta events and keepalives               |
 | `POST`   | `/v1/credential`             | bearer | Upsert one OAuth or API-key credential                             |

@@ -122,12 +122,59 @@ describe("omp auth-gateway validate", () => {
 	it("rejects an unknown key in the global config.yml layer", async () => {
 		await Bun.write(path.join(dir, "agent", "config.yml"), "disassemblr:\n  memoryMax: 1G\n");
 
+		await Bun.write(overlay, "");
 		await runAuthGatewayCommand({ action: "validate", flags: {} });
 
 		expect(process.exitCode).toBe(1);
 		expect(stderrSpy.mock.calls.map(([message]) => message).join("")).toContain("disassemblr.memoryMax");
 		expect(listenSpy).not.toHaveBeenCalled();
 		expect(fetchSpy).not.toHaveBeenCalled();
+	});
+
+	it("rejects an unknown key in the project's omp config.yml", async () => {
+		await Bun.write(overlay, "");
+		await fs.mkdir(path.join(dir, "project", ".omp"));
+		await Bun.write(path.join(dir, "project", ".omp", "config.yml"), "disassemblr:\n  memoryMax: 1G\n");
+
+		await runAuthGatewayCommand({ action: "validate", flags: {} });
+
+		expect(process.exitCode).toBe(1);
+		expect(stderrSpy.mock.calls.map(([message]) => message).join("")).toContain("disassemblr.memoryMax");
+	});
+
+	it("ignores unknown keys in other tools' project settings", async () => {
+		await Bun.write(overlay, "");
+		await fs.mkdir(path.join(dir, "project", ".claude"));
+		await Bun.write(
+			path.join(dir, "project", ".claude", "settings.json"),
+			JSON.stringify({ permissions: { allow: ["Bash"] }, enabledPlugins: { "a@b": true } }),
+		);
+
+		await runAuthGatewayCommand({ action: "validate", flags: {} });
+
+		expect(process.exitCode ?? 0).toBe(0);
+		expect(listenSpy).not.toHaveBeenCalled();
+		expect(fetchSpy).not.toHaveBeenCalled();
+	});
+
+	it("does not print an invalid credential value", async () => {
+		await Bun.write(overlay, "auth:\n  broker:\n    token: 1234567890\n");
+
+		await runAuthGatewayCommand({ action: "validate", flags: {} });
+
+		const stderr = stderrSpy.mock.calls.map(([message]) => message).join("");
+		expect(process.exitCode).toBe(1);
+		expect(stderr).toContain("auth.broker.token");
+		expect(stderr).not.toContain("1234567890");
+	});
+
+	it("rejects a raw string for a normalized numeric setting", async () => {
+		await Bun.write(overlay, 'tui:\n  maxFps: "60"\n');
+
+		await runAuthGatewayCommand({ action: "validate", flags: {} });
+
+		expect(process.exitCode).toBe(1);
+		expect(stderrSpy.mock.calls.map(([message]) => message).join("")).toContain("tui.maxFps");
 	});
 
 	it("rejects an unknown key with an empty mapping", async () => {

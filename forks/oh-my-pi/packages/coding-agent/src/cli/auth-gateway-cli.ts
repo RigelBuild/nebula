@@ -13,9 +13,10 @@
  *     and model roles (`auth-gateway-stdio.ts`).
  *   - `token` / `token --regenerate` — manages the gateway bearer token file.
  *   - `status` — prints the locally-stored gateway token and bind hint.
-	 *   - `validate` — checks global/project/overlay settings plus broker pool, `--clients`,
-	 *     and `--api-key-limit-model-classes` without binding a port, calling the broker, or reading credentials.
+ *   - `validate` — checks global/project/overlay settings plus broker pool, `--clients`,
+ *     and `--api-key-limit-model-classes` without binding a port, calling the broker, or reading credentials.
  */
+import { YAML } from "bun";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import {
@@ -56,7 +57,7 @@ import { authPolicyFor } from "@oh-my-pi/pi-catalog/compat/auth";
 import { buildModelProviderPriorityRank } from "@oh-my-pi/pi-catalog/identity";
 import { type GeneratedProvider, getBundledModels, getEffectiveTokenCost } from "@oh-my-pi/pi-catalog/models";
 import { modelKind } from "@oh-my-pi/pi-catalog/types";
-import { getConfigRootDir, logger, postmortem, VERSION } from "@oh-my-pi/pi-utils";
+import { getConfigRootDir, getProjectAgentDir, isRecord, logger, postmortem, VERSION } from "@oh-my-pi/pi-utils";
 import { setTransports as setLoggerTransports } from "@oh-my-pi/pi-utils/logger";
 import chalk from "@oh-my-pi/pi-utils/chalk";
 import { ModelRegistry } from "../config/model-registry";
@@ -1248,15 +1249,31 @@ export async function validateAuthGatewayConfig(flags: AuthGatewayCommandArgs["f
 	});
 	const settings = loadedSettings;
 	if (settings) {
-		for (const layer of [settings.getGlobalSettings(), settings.getProjectSettings(), settings.getConfigOverlaySettings()]) {
+		for (const layer of [settings.getGlobalSettings(), settings.getConfigOverlaySettings()]) {
 			for (const id of unknownSettingPaths(layer)) problems.push(`Unknown setting "${id}"`);
 		}
+		await collect(async () => {
+			const projectConfig = Bun.file(path.join(getProjectAgentDir(settings.getCwd()), "config.yml"));
+			if (!(await projectConfig.exists())) return;
+			const projectLayer: unknown = YAML.parse(await projectConfig.text());
+			if (isRecord(projectLayer)) {
+				for (const id of unknownSettingPaths(projectLayer)) problems.push(`Unknown setting "${id}"`);
+			} else if (projectLayer !== null && projectLayer !== undefined) {
+				throw new Error("Settings YAML must contain a mapping at the document root");
+			}
+		});
 		for (const setting of allSettings()) {
 			if (!settings.isConfigured(setting)) continue;
 			await collect(() => {
-				const value = settings.rawValue(setting);
-				const normalized = setting.definition.normalize ? setting.definition.normalize(value) : value;
-				setting.assertWritable(normalized);
+				const raw = settings.rawValue(setting);
+				try {
+					if (!setting.accepts(raw)) throw new Error(`Invalid value for ${setting.id}`);
+					const normalized = setting.definition.normalize ? setting.definition.normalize(raw) : raw;
+					setting.assertWritable(normalized);
+				} catch (error) {
+					if (setting.isCredential) throw new Error(`Invalid value for ${setting.id}`);
+					throw error;
+				}
 			});
 		}
 		await collect(() => loadEffectiveAuthAccountPolicyConfig({ settings }));

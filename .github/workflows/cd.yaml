@@ -668,6 +668,7 @@ jobs:
             exit 1
           fi
           git push origin "$COMMIT:refs/tags/$TAG"
+      # Resume works only through "Re-run failed jobs"; a full re-run plans a new tag.
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
@@ -699,6 +700,7 @@ jobs:
           release_assets=("$RUNNER_TEMP/release-manifest.json" "$RUNNER_TEMP/SHA256SUMS" "${files[@]}" "${runtime_files[@]}")
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" --clobber "${release_assets[@]}"
+            if [ "$(gh release view "$TAG" --json isDraft --jq .isDraft)" = true ]; then gh release edit "$TAG" --draft=false; fi
           else
             retry_delays=(5 15 45)
             for attempt in 0 1 2 3; do
@@ -707,6 +709,7 @@ jobs:
                 # A failed create may have succeeded remotely; check before retrying.
                 if gh release view "$TAG" >/dev/null 2>&1; then
                   gh release upload "$TAG" --clobber "${release_assets[@]}"
+                  if [ "$(gh release view "$TAG" --json isDraft --jq .isDraft)" = true ]; then gh release edit "$TAG" --draft=false; fi
                   exit 0
                 fi
               fi

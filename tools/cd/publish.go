@@ -3,7 +3,9 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -13,9 +15,10 @@ import (
 )
 
 var (
-	errGuard        = errors.New("release commit must change only " + manifestFile)
-	errPushRejected = errors.New("push rejected on every attempt")
-	errStaleRelease = errors.New("a newer Release already covers this source")
+	errGuard          = errors.New("release commit must change only " + manifestFile)
+	errPushRejected   = errors.New("push rejected on every attempt")
+	errStaleRelease   = errors.New("a newer Release already covers this source")
+	errResumeMismatch = errors.New("tag already exists with a different manifest")
 )
 
 // guard refuses a commit unless it has one parent and changes only release-manifest.json.
@@ -71,7 +74,12 @@ func publish(ctx context.Context, o publishOptions) (string, error) {
 			"+refs/heads/"+o.branch+":"+ref, "+refs/tags/nebula-*:refs/tags/nebula-*"); err != nil {
 			return "", err
 		}
-		existing, err := checkNewestRelease(ctx, o.repo, source, o.manifest.tag)
+		if attempt > 1 {
+			if data, err = o.manifest.build(); err != nil {
+				return "", err
+			}
+		}
+		existing, err := checkNewestRelease(ctx, o.repo, source, o.manifest.tag, data)
 		if err != nil {
 			return "", err
 		}
@@ -88,13 +96,6 @@ func publish(ctx context.Context, o publishOptions) (string, error) {
 		}
 		if !ok {
 			return "", fmt.Errorf("%w: source %s is not on %s tip %s", errNotDescendant, source, o.branch, tip)
-		}
-		// Regenerate on each tip: rebuild the manifest bytes after any retry so a
-		// changed plan or asset set fails here, not after the push.
-		if attempt > 1 {
-			if data, err = o.manifest.build(); err != nil {
-				return "", err
-			}
 		}
 		makeCommit := o.commit
 		if makeCommit == nil {
@@ -125,12 +126,33 @@ func publish(ctx context.Context, o publishOptions) (string, error) {
 
 // checkNewestRelease returns the existing tag commit for this exact release and
 // refuses stale runs so an older run never rolls the manifest back.
-func checkNewestRelease(ctx context.Context, repo, source, plannedTag string) (string, error) {
-	tag, prev, _, err := newestRelease(ctx, repo)
+func checkNewestRelease(ctx context.Context, repo, source, plannedTag string, data []byte) (string, error) {
+	tag, prev, previous, err := newestRelease(ctx, repo)
 	if err != nil || tag == "" {
 		return "", err
 	}
-	if tag == plannedTag && prev.Source == source {
+	if tag == plannedTag {
+		if prev.Source != source {
+			return "", fmt.Errorf("%w: %s has source %s; this run tested %s", errStaleRelease, tag, prev.Source, source)
+		}
+		var expected, existing any
+		if err := json.Unmarshal(data, &expected); err != nil {
+			return "", err
+		}
+		if err := json.Unmarshal([]byte(previous), &existing); err != nil {
+			return "", err
+		}
+		expectedJSON, err := json.Marshal(expected)
+		if err != nil {
+			return "", err
+		}
+		existingJSON, err := json.Marshal(existing)
+		if err != nil {
+			return "", err
+		}
+		if !bytes.Equal(expectedJSON, existingJSON) {
+			return "", fmt.Errorf("%w: tag %s already exists with a different manifest; re-run all jobs on a new commit", errResumeMismatch, tag)
+		}
 		commit, err := git(ctx, repo, "rev-parse", tag+"^{commit}")
 		if err != nil {
 			return "", err

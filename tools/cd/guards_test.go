@@ -392,12 +392,19 @@ func TestPlanSkipsNonGoBinaries(t *testing.T) {
 func TestPublishReturnsExistingCommitForSameTagAndSource(t *testing.T) {
 	f := newPublishFixture(t)
 	tag := "nebula-20261117-6"
-	release(t, f.work, tag, f.source, nil)
+	o := f.options(tag)
+	data, err := o.manifest.build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, f.work, manifestFile, string(data))
+	commitAll(t, f.work, "release: "+tag)
+	testGit(t, f.work, "tag", tag)
 	testGit(t, f.work, "push", "-q", "origin", "main", "--tags")
 	before := testGit(t, f.remote, "rev-parse", "main")
 	want := testGit(t, f.work, "rev-parse", tag+"^{commit}")
 
-	got, err := publish(context.Background(), f.options(tag))
+	got, err := publish(context.Background(), o)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -406,6 +413,29 @@ func TestPublishReturnsExistingCommitForSameTagAndSource(t *testing.T) {
 	}
 	if after := testGit(t, f.remote, "rev-parse", "main"); after != before {
 		t.Fatalf("remote main moved from %s to %s", before, after)
+	}
+}
+
+func TestPublishRefusesSameTagWithDifferentManifest(t *testing.T) {
+	f := newPublishFixture(t)
+	tag := "nebula-20261117-6"
+	release(t, f.work, tag, f.source, nil)
+	testGit(t, f.work, "push", "-q", "origin", "main", "--tags")
+	if _, err := publish(context.Background(), f.options(tag)); !errors.Is(err, errResumeMismatch) {
+		t.Fatalf("err = %v, want errResumeMismatch for a different manifest", err)
+	}
+}
+
+func TestPublishRefusesSameTagWithDifferentSource(t *testing.T) {
+	f := newPublishFixture(t)
+	tag := "nebula-20261117-6"
+	release(t, f.work, tag, f.source, nil)
+	writeFile(t, f.work, "tools/beta/new.go", "package main\n")
+	source := commitAll(t, f.work, "new source")
+	f.plan = writePlan(t, Plan{Source: source, Build: []string{"alpha"}, Binaries: []Binary{{Package: "alpha", Version: "1.2.0"}}})
+	testGit(t, f.work, "push", "-q", "origin", "main", "--tags")
+	if _, err := publish(context.Background(), f.options(tag)); !errors.Is(err, errStaleRelease) {
+		t.Fatalf("err = %v, want errStaleRelease for a different source", err)
 	}
 }
 

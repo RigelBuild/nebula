@@ -1288,6 +1288,8 @@ class DiscordAdapter(DiscordAuthorizationMixin, DiscordMediaMixin, DiscordThread
         # connection, which is not silence.
         self._last_dispatched_event_monotonic: Optional[float] = None
         self._missed_message_backfill_task: Optional[asyncio.Task] = None
+        # Monotonic time of the last gateway disconnect; the next catch-up logs the gap it left.
+        self._disconnected_at: Optional[float] = None
         from hermes_constants import get_hermes_home
         from plugins.platforms.discord.recovery import DiscordRecoveryStore
         self._discord_recovery_store = DiscordRecoveryStore(get_hermes_home())
@@ -1480,6 +1482,11 @@ class DiscordAdapter(DiscordAuthorizationMixin, DiscordMediaMixin, DiscordThread
                     adapter_self._run_post_connect_initialization()
                 )
                 adapter_self._start_reconnect_recovery()
+
+            @self._client.event
+            async def on_disconnect():
+                # The gap starts here; the next catch-up logs how long it lasted.
+                adapter_self._disconnected_at = time.monotonic()
 
             @self._client.event
             async def on_resumed():
@@ -2575,6 +2582,12 @@ class DiscordAdapter(DiscordAuthorizationMixin, DiscordMediaMixin, DiscordThread
         repost.add_done_callback(self._background_tasks.discard)
         repost.add_done_callback(_consume_background_task_result)
 
+    def _gap_seconds(self) -> Optional[float]:
+        """Seconds since the last disconnect, rounded to 0.1; None when this process never disconnected."""
+        if self._disconnected_at is None:
+            return None
+        return round(time.monotonic() - self._disconnected_at, 1)
+
     async def _finish_recovery_scan(self, scan_id: str, status: str, counts: dict, error: Optional[str] = None) -> None:
         await asyncio.to_thread(self._record_recovery_scan_complete, scan_id, status=status, error=error, **counts)
 
@@ -2633,8 +2646,9 @@ class DiscordAdapter(DiscordAuthorizationMixin, DiscordMediaMixin, DiscordThread
                     break
             await self._finish_recovery_scan(scan_id, "success", counts)
             logger.info(
-                "[%s] Missed-message backfill complete: scanned=%d missed=%d dispatched=%d",
-                self.name, counts["scanned"], counts["missed"], counts["dispatched"],
+                "[%s] Missed-message backfill complete: channels=%d scanned=%d missed=%d dispatched=%d gap_seconds=%s",
+                self.name, len(channels), counts["scanned"], counts["missed"], counts["dispatched"],
+                self._gap_seconds(),
             )
         except asyncio.CancelledError:
             await self._finish_recovery_scan(scan_id, "cancelled", counts)

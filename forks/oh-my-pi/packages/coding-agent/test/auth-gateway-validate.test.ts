@@ -167,6 +167,17 @@ describe("omp auth-gateway validate", () => {
 		expect(stderrSpy.mock.calls.map(([message]) => message).join("")).toContain("disassemblr.memoryMax");
 	});
 
+	it("accepts an empty project omp settings.json", async () => {
+		await Bun.write(overlay, "");
+		await fs.mkdir(path.join(dir, "project", ".omp"));
+		await Bun.write(path.join(dir, "project", ".omp", "settings.json"), "");
+
+		await runAuthGatewayCommand({ action: "validate", flags: {} });
+
+		expect(process.exitCode ?? 0).toBe(0);
+		expect(stderrSpy).not.toHaveBeenCalled();
+	});
+
 	it("rejects a non-object root in the project's omp settings.json", async () => {
 		await Bun.write(overlay, "");
 		await fs.mkdir(path.join(dir, "project", ".omp"));

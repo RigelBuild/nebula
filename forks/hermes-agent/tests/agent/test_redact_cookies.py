@@ -14,6 +14,22 @@ def _ensure_redaction_enabled(monkeypatch):
 
 
 class TestCookieCredentials:
+    def test_curl_short_cookie_flags_require_a_real_cookie_option(self):
+        # Values long enough to count as cookie credentials, so a misparse would mask them.
+        for text in (
+            "curl -dbody=opaque-cookie-secret",
+            "curl -Hbar=opaque-cookie-secret",
+            "see https://example.com/docs/curl and also -b a=opaque-cookie-secret",
+        ):
+            assert redact_sensitive_text(text, force=True) == text, text
+
+        for text, expected_suffix in (
+            ("curl -sb a=opaque-cookie-secret", "-sb ***"),
+            ("/usr/bin/curl -b a=opaque-cookie-secret", "-b ***"),
+        ):
+            result = redact_sensitive_text(text, force=True)
+            assert result.endswith(expected_suffix), result
+
     def test_cookie_values_masked_in_assignment_and_inline_header_forms(self):
         for text, secret in (
             ("cookie=opaque-session-value-1234567890; Path=/", "opaque-session-value"),

@@ -18,6 +18,7 @@ import os
 import sys
 import threading
 import time
+import traceback
 from datetime import datetime, timezone, UTC
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
@@ -51,6 +52,50 @@ def _coerce_float(value: Any, default: float, floor: float = 0.0) -> float:
         return max(float(value), floor)
     except (TypeError, ValueError):
         return default
+
+
+class _LoopStallLogger:
+    """Watch an on-loop heartbeat from a thread and capture the blocked loop's stack."""
+    def __init__(self, loop: asyncio.AbstractEventLoop):
+        self._loop = loop
+        self._thread_id = threading.get_ident()
+        self._stop = threading.Event()
+        self._last_beat = time.monotonic()
+        self._timer = loop.call_later(0.5, self._beat)
+        self._thread = threading.Thread(target=self._watch, daemon=True, name="gateway-loop-stall-logger")
+        self._thread.start()
+
+    def _beat(self):
+        self._last_beat = time.monotonic()
+        if not self._stop.is_set():
+            self._timer = self._loop.call_later(0.5, self._beat)
+
+    def _watch(self):
+        reported = False
+        longest_lag = 0.0
+        while not self._stop.wait(0.25):
+            lag = time.monotonic() - self._last_beat
+            if lag <= 2.0:
+                if reported:
+                    logger.warning("Gateway event loop recovered after %.2f seconds", longest_lag)
+                reported = False
+                longest_lag = 0.0
+            elif not reported:
+                frame = sys._current_frames().get(self._thread_id)
+                stack = ''.join(traceback.format_stack(frame, limit=25)) if frame else '(stack unavailable)'
+                logger.warning("Gateway event loop stalled for %.2f seconds; loop stack:\n%s", lag, stack)
+                reported = True
+                longest_lag = lag
+            else:
+                longest_lag = max(longest_lag, lag)
+
+    def stop(self):
+        self._stop.set()
+        self._timer.cancel()
+
+
+def start_loop_stall_logger(loop: asyncio.AbstractEventLoop) -> _LoopStallLogger:
+    return _LoopStallLogger(loop)
 
 
 class _LoopFloorTimerHandle:

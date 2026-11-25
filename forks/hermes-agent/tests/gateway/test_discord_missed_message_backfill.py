@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from gateway.config import PlatformConfig
+from gateway.config import Platform, PlatformConfig
 from gateway.platforms.event import MessageEvent, MessageType, ProcessingOutcome
 
 
@@ -218,7 +218,7 @@ async def test_run_backfill_dispatches_unaddressed_messages(adapter, monkeypatch
     monkeypatch.setattr(adapter, "_iter_missed_message_backfill_candidates", fake_candidates)
     monkeypatch.setattr(adapter, "_should_backfill_discord_message", AsyncMock(return_value=True))
     monkeypatch.setattr(adapter, "_missed_message_backfill_max_dispatches", lambda: 10)
-    monkeypatch.setattr(adapter, "_missed_message_backfill_channels", lambda: {"123"})
+    monkeypatch.setattr(adapter, "_missed_message_backfill_channels", AsyncMock(return_value={"123"}))
     monkeypatch.setattr("asyncio.sleep", AsyncMock())
 
     await adapter._run_missed_message_backfill()
@@ -231,24 +231,28 @@ async def test_run_backfill_dispatches_unaddressed_messages(adapter, monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_repeated_ready_coalesces_instead_of_cancelling_active_recovery(adapter):
+async def test_repeated_ready_queues_only_one_follow_up_recovery(adapter):
     started = asyncio.Event()
     release = asyncio.Event()
+    scans = 0
 
     async def slow_recovery():
-        started.set()
-        await release.wait()
+        nonlocal scans
+        scans += 1
+        if scans == 1:
+            started.set()
+            await release.wait()
 
-    first = asyncio.create_task(slow_recovery())
-    adapter._missed_message_backfill_task = first
+    adapter._run_missed_message_backfill = slow_recovery
+    first = adapter._ensure_missed_message_backfill_task()
     await started.wait()
 
-    second = adapter._ensure_missed_message_backfill_task()
-
-    assert second is first
-    assert first.cancelled() is False
+    assert adapter._ensure_missed_message_backfill_task() is first
+    assert adapter._ensure_missed_message_backfill_task() is first
     release.set()
     await first
+
+    assert scans == 2
 
 
 @pytest.mark.asyncio
@@ -282,7 +286,8 @@ async def test_recovered_mention_reuses_live_auth_and_mention_gates(adapter, mon
     )
 
 
-def test_missed_message_backfill_config_stays_per_adapter():
+@pytest.mark.asyncio
+async def test_missed_message_backfill_config_stays_per_adapter():
     first_extra = _apply_yaml_config(
         {},
         {
@@ -312,28 +317,38 @@ def test_missed_message_backfill_config_stays_per_adapter():
     second = DiscordAdapter(PlatformConfig(enabled=True, token="two", extra=second_extra or {}))
 
     assert first._missed_message_backfill_enabled() is True
-    assert first._missed_message_backfill_channels() == {"111"}
+    assert await first._missed_message_backfill_channels() == {"111"}
     assert first._missed_message_backfill_window_seconds() == 60
     assert first._missed_message_backfill_limit() == 5
     assert first._missed_message_backfill_max_dispatches() == 2
     assert second._missed_message_backfill_enabled() is False
-    assert second._missed_message_backfill_channels() == {"222"}
+    assert await second._missed_message_backfill_channels() == {"222"}
     assert second._missed_message_backfill_window_seconds() == 120
     assert second._missed_message_backfill_limit() == 6
     assert second._missed_message_backfill_max_dispatches() == 3
 
 
-def test_explicit_empty_backfill_channel_list_disables_the_scan(monkeypatch):
-    """``channels: []`` is the operator saying "scan nothing" — it must not fall through to the
-    allowed ∪ free-response default (which would scan channels they disabled). The default
-    ``channels: ""`` still falls through."""
+@pytest.mark.asyncio
+async def test_explicit_empty_backfill_channel_list_disables_the_scan(monkeypatch):
+    """An explicit empty list disables all scanning, even for active DM sessions."""
     monkeypatch.setenv("DISCORD_ALLOWED_CHANNELS", "555")
+
+    class SessionStore:
+        def list_sessions(self, active_minutes=None):
+            return [SimpleNamespace(
+                platform=Platform.DISCORD,
+                chat_type="dm",
+                origin=SimpleNamespace(chat_id="777"),
+            )]
+
     explicit = DiscordAdapter(PlatformConfig(
         enabled=True, token="one", extra={"missed_message_backfill": {"enabled": True, "channels": []}}))
-    assert explicit._missed_message_backfill_channels() == set()
+    explicit._session_store = SessionStore()
+    assert await explicit._missed_message_backfill_channels() == set()
+
     default = DiscordAdapter(PlatformConfig(
         enabled=True, token="two", extra={"missed_message_backfill": {"enabled": True, "channels": ""}}))
-    assert "555" in default._missed_message_backfill_channels()
+    assert "555" in await default._missed_message_backfill_channels()
 
 
 def test_recovery_ledger_prunes_expired_rows(adapter):
@@ -513,7 +528,7 @@ async def test_redispatch_of_one_message_is_bounded(adapter, monkeypatch):
         yield message
 
     monkeypatch.setattr(adapter, "_iter_missed_message_backfill_candidates", fake_candidates)
-    monkeypatch.setattr(adapter, "_missed_message_backfill_channels", lambda: {"123"})
+    monkeypatch.setattr(adapter, "_missed_message_backfill_channels", AsyncMock(return_value={"123"}))
     monkeypatch.setattr(adapter, "_missed_message_backfill_max_attempts", lambda: 2)
 
     # Dispatch leaves the row 'processing' (turn still running): back-to-back scans re-offer it.

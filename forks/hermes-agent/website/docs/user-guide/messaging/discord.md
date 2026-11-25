@@ -382,7 +382,7 @@ discord:
   history_backfill_limit: 50      # Max messages to scan backwards (default: 50)
   missed_message_backfill:        # Replay messages missed while disconnected (opt-in)
     enabled: false
-    channels: []                  # Empty uses free_response_channels
+    channels: []                  # Empty list disables scanning; otherwise adds active session chats
     window_seconds: 21600         # Look back at most 6 hours
     limit: 100                    # Global scan cap per reconnect
     max_dispatches: 10            # Recovery dispatch cap per reconnect
@@ -615,7 +615,7 @@ discord:
     max_attempts: 3
 ```
 
-If `channels` is empty, Hermes uses `discord.free_response_channels`. Set it to `"*"` only when the bot should inspect every reachable server text channel. The recovery ledger is stored per profile under `gateway/discord_message_recovery.db`, preventing a successfully answered message from being replayed again after a later restart. A message counts as answered once its turn delivered a final reply, whether or not that reply carried a Discord reply reference (`reply_to_mode: "off"`, streamed replies and media-only replies included).
+An explicit channel list is scanned alongside chats with active Discord sessions (including DMs, group chats, and threads). An explicit empty list (`[]`) disables the scan, including active session chats. Set `channels: "*"` to inspect every reachable server text channel and all active session chats. When channels are omitted or empty as a string, Hermes uses `discord.allowed_channels` and `discord.free_response_channels` as the configured channel defaults, then adds active session chats. The recovery ledger is stored per profile under `gateway/discord_message_recovery.db`, preventing a successfully answered message from being replayed again after a later restart. A message counts as answered once its turn delivered a final reply, whether or not that reply carried a Discord reply reference (`reply_to_mode: "off"`, streamed replies and media-only replies included).
 
 `max_dispatches` caps one scan; `max_attempts` (default 3) caps how many times a single message can ever be re-dispatched, so a message whose turn keeps failing is not re-run on every reconnect. `window_seconds` is always honoured: the per-channel scan cursor can narrow a scan but never reaches further back than the window.
 

@@ -1288,6 +1288,9 @@ class DiscordAdapter(DiscordAuthorizationMixin, DiscordMediaMixin, DiscordThread
         # connection, which is not silence.
         self._last_dispatched_event_monotonic: Optional[float] = None
         self._missed_message_backfill_task: Optional[asyncio.Task] = None
+        self._missed_message_backfill_rerun = False
+        # Monotonic time of the last gateway disconnect; the next catch-up logs the gap it left.
+        self._disconnected_at: Optional[float] = None
         from hermes_constants import get_hermes_home
         from plugins.platforms.discord.recovery import DiscordRecoveryStore
         self._discord_recovery_store = DiscordRecoveryStore(get_hermes_home())
@@ -1479,12 +1482,17 @@ class DiscordAdapter(DiscordAuthorizationMixin, DiscordMediaMixin, DiscordThread
                 adapter_self._post_connect_task = asyncio.create_task(
                     adapter_self._run_post_connect_initialization()
                 )
-                if adapter_self._missed_message_backfill_enabled():
-                    adapter_self._ensure_missed_message_backfill_task()
-                repost = asyncio.create_task(adapter_self._repost_undelivered_exec_approval_cards())
-                adapter_self._background_tasks.add(repost)
-                repost.add_done_callback(adapter_self._background_tasks.discard)
-                repost.add_done_callback(_consume_background_task_result)
+                adapter_self._start_reconnect_recovery()
+
+            @self._client.event
+            async def on_disconnect():
+                # The gap starts here; the next catch-up logs how long it lasted.
+                adapter_self._disconnected_at = time.monotonic()
+
+            @self._client.event
+            async def on_resumed():
+                # RESUME replays events, but catch-up covers gaps it cannot replay.
+                adapter_self._start_reconnect_recovery()
 
             @self._client.event
             async def on_socket_event_type(event_type: str):
@@ -2491,22 +2499,33 @@ class DiscordAdapter(DiscordAuthorizationMixin, DiscordMediaMixin, DiscordThread
         raw = _scoped_gate_env("DISCORD_MISSED_MESSAGE_BACKFILL", "false")
         return str(raw).strip().lower() in ("true", "1", "yes", "on")
 
-    def _missed_message_backfill_channels(self) -> set[str]:
-        """Channels to scan for missed messages after reconnect: union of allowed and
-        free-response channels by default; ``channels: "*"`` scans every text channel."""
+    async def _missed_message_backfill_channels(self) -> set[str]:
+        """Resolve explicit channels and active session chats; an explicit empty list disables scanning."""
         configured = self.config.extra.get("missed_message_backfill")
-        if isinstance(configured, dict) and "channels" in configured:
-            raw = configured.get("channels")
-            channels = self._gate_csv_set(raw)
-            # An explicit list (YAML list or JSON-list string, even empty) is authoritative — the
-            # operator disabled the scan; only the default "" string falls through to the env/default.
-            if channels or isinstance(_decode_json_list_literal(raw), list):
-                return channels
-        raw = self._gate_env("DISCORD_MISSED_MESSAGE_BACKFILL_CHANNELS")
-        if not raw.strip():
-            allowed = self._get_allowed_channels()
-            return allowed | self._discord_free_response_channels()
-        return self._gate_csv_set(raw)
+        raw = configured.get("channels") if isinstance(configured, dict) else None
+        decoded = _decode_json_list_literal(raw)
+        channels = self._gate_csv_set(raw)
+        if isinstance(decoded, list) and not channels:
+            return set()
+        if not channels and not isinstance(decoded, list):
+            raw = self._gate_env("DISCORD_MISSED_MESSAGE_BACKFILL_CHANNELS")
+            channels = self._gate_csv_set(raw) if raw.strip() else (
+                self._get_allowed_channels() | self._discord_free_response_channels()
+            )
+        return channels | await asyncio.to_thread(self._active_discord_session_thread_ids)
+
+    def _active_discord_session_thread_ids(self) -> set[str]:
+        """Return Discord session chat IDs, including DMs and channels."""
+        store = getattr(self, "_session_store", None)
+        if store is None:
+            return set()
+        window_minutes = max(1440, int(self._missed_message_backfill_window_seconds() / 60 + 0.999999))
+        return {
+            str(entry.origin.chat_id)
+            for entry in store.list_sessions(active_minutes=window_minutes)
+            if entry.platform == Platform.DISCORD and entry.chat_type in {"dm", "group", "thread"}
+            and entry.origin is not None
+        }
 
     def _missed_message_backfill_number(self, key: str, env_key: str, default, cast, lo, hi=None):
         """Numeric ``missed_message_backfill.<key>`` (dict extra wins over env), clamped to [lo, hi]."""
@@ -2537,11 +2556,13 @@ class DiscordAdapter(DiscordAuthorizationMixin, DiscordMediaMixin, DiscordThread
             "max_attempts", "DISCORD_MISSED_MESSAGE_BACKFILL_MAX_ATTEMPTS", 3, int, 1, 100)
 
     def _ensure_missed_message_backfill_task(self) -> asyncio.Task:
-        """Return the active recovery task, or start one when none is running."""
+        """Run one scan at a time and coalesce reconnects into one follow-up."""
         task = self._missed_message_backfill_task
         if task is not None and not task.done():
+            self._missed_message_backfill_rerun = True
             return task
-        task = asyncio.create_task(self._run_missed_message_backfill())
+        self._missed_message_backfill_rerun = False
+        task = asyncio.create_task(self._run_missed_message_backfill_until_idle())
         self._missed_message_backfill_task = task
         runner = getattr(self, "gateway_runner", None)
         if runner is not None and getattr(runner, "_startup_restore_in_progress", False):
@@ -2552,16 +2573,41 @@ class DiscordAdapter(DiscordAuthorizationMixin, DiscordMediaMixin, DiscordThread
             tasks.append(task)
         return task
 
+    async def _run_missed_message_backfill_until_idle(self) -> None:
+        try:
+            while True:
+                await self._run_missed_message_backfill()
+                if not self._missed_message_backfill_rerun:
+                    break
+                self._missed_message_backfill_rerun = False
+        finally:
+            self._missed_message_backfill_rerun = False
+
+    def _start_reconnect_recovery(self) -> None:
+        """Recover missed messages and undelivered approval cards after a reconnect."""
+        if self._missed_message_backfill_enabled():
+            self._ensure_missed_message_backfill_task()
+        repost = asyncio.create_task(self._repost_undelivered_exec_approval_cards())
+        self._background_tasks.add(repost)
+        repost.add_done_callback(self._background_tasks.discard)
+        repost.add_done_callback(_consume_background_task_result)
+
+    def _gap_seconds(self) -> Optional[float]:
+        """Seconds since the last disconnect, rounded to 0.1; None when this process never disconnected."""
+        if self._disconnected_at is None:
+            return None
+        return round(time.monotonic() - self._disconnected_at, 1)
+
     async def _finish_recovery_scan(self, scan_id: str, status: str, counts: dict, error: Optional[str] = None) -> None:
         await asyncio.to_thread(self._record_recovery_scan_complete, scan_id, status=status, error=error, **counts)
 
     async def _run_missed_message_backfill(self) -> None:
-        """Enqueue recent Discord messages missed while the bot was down: Gateway events aren't
-        replayed offline, so scan history and re-dispatch messages lacking a substantive bot
-        response (emoji-only acks aren't completion evidence)."""
+        """Re-dispatch recent messages that lack a substantive bot response."""
+        gap_seconds = self._gap_seconds()
+        disconnected_at = self._disconnected_at
         if not self._client:
             return
-        channels = self._missed_message_backfill_channels()
+        channels = await self._missed_message_backfill_channels()
         ledger_ok = await self._with_discord_recovery_db_async(
             lambda conn: conn.execute("SELECT 1").fetchone() is not None, False,
         )
@@ -2581,8 +2627,8 @@ class DiscordAdapter(DiscordAuthorizationMixin, DiscordMediaMixin, DiscordThread
             async for message in self._iter_missed_message_backfill_candidates(channels):
                 counts["scanned"] += 1
                 message_id = str(getattr(message, "id", ""))
-                self._record_discord_message_seen(message, status="discovered")
-                # Live events may race this REST scan: check without claiming; ingress owns the dedup write.
+                await asyncio.to_thread(self._record_discord_message_seen, message, status="discovered")
+                # Live events may race this REST scan: check without claiming; the dispatch below claims on admission.
                 if self._dedup.contains(message_id):
                     continue
                 if not await self._should_backfill_discord_message(message):
@@ -2593,25 +2639,28 @@ class DiscordAdapter(DiscordAuthorizationMixin, DiscordMediaMixin, DiscordThread
                     getattr(message, "id", "unknown"),
                     getattr(getattr(message, "channel", None), "id", "unknown"),
                 )
-                self._record_recovery_attempt(message, status="queued")
+                await asyncio.to_thread(self._record_recovery_attempt, message, status="queued")
                 try:
                     admitted = await self._dispatch_recovered_message(message)
                     if admitted:
                         counts["dispatched"] += 1
                 except asyncio.CancelledError:
                     self._dedup.discard(message_id)
-                    self._record_recovery_attempt(message, status="cancelled")
+                    await asyncio.to_thread(self._record_recovery_attempt, message, status="cancelled")
                     raise
                 except Exception as exc:
                     self._dedup.discard(message_id)
-                    self._record_recovery_attempt(message, status="failed", error=str(exc))
+                    await asyncio.to_thread(self._record_recovery_attempt, message, status="failed", error=str(exc))
                     raise
                 if counts["dispatched"] >= max_dispatches:
                     break
             await self._finish_recovery_scan(scan_id, "success", counts)
+            channel_ids = sorted(channels)
+            logged_channels = channel_ids[:20] + (["…"] if len(channel_ids) > 20 else [])
             logger.info(
-                "[%s] Missed-message backfill complete: scanned=%d missed=%d dispatched=%d",
-                self.name, counts["scanned"], counts["missed"], counts["dispatched"],
+                "[%s] Missed-message backfill complete: channels=%s scanned=%d missed=%d dispatched=%d gap_seconds=%s",
+                self.name, logged_channels, counts["scanned"], counts["missed"], counts["dispatched"],
+                gap_seconds,
             )
         except asyncio.CancelledError:
             await self._finish_recovery_scan(scan_id, "cancelled", counts)
@@ -2619,6 +2668,9 @@ class DiscordAdapter(DiscordAuthorizationMixin, DiscordMediaMixin, DiscordThread
         except Exception as exc:  # pragma: no cover - defensive logging
             await self._finish_recovery_scan(scan_id, "failed", counts, error=str(exc))
             logger.warning("[%s] Missed-message backfill failed: %s", self.name, exc, exc_info=True)
+        finally:
+            if self._disconnected_at == disconnected_at:
+                self._disconnected_at = None
 
     def _in_bot_thread(self, message: Any) -> bool:
         """Thread the bot already joined skips the mention check — unless
@@ -2643,7 +2695,7 @@ class DiscordAdapter(DiscordAuthorizationMixin, DiscordMediaMixin, DiscordThread
                 and not self._self_is_explicitly_mentioned(message)
             ):
                 return False
-        admitted, role_authorized = self._discord_message_admission(message, claim=False)
+        admitted, role_authorized = self._discord_message_admission(message, claim=True)
         if not admitted:
             return False
         if self._consume_text_approval(message):
@@ -2662,20 +2714,19 @@ class DiscordAdapter(DiscordAuthorizationMixin, DiscordMediaMixin, DiscordThread
         if "*" in channel_ids:
             for guild in getattr(self._client, "guilds", []) or []:
                 candidate_channels.extend(getattr(guild, "text_channels", []) or [])
-        else:
-            for channel_id in sorted(channel_ids):
+        for channel_id in sorted(channel_ids - {"*"}):
+            channel = None
+            try:
+                channel = self._client.get_channel(int(channel_id))
+            except Exception:
                 channel = None
+            if channel is None:
                 try:
-                    channel = self._client.get_channel(int(channel_id))
-                except Exception:
-                    channel = None
-                if channel is None:
-                    try:
-                        channel = await self._client.fetch_channel(int(channel_id))
-                    except Exception as exc:
-                        logger.debug("[%s] Cannot fetch backfill channel %s: %s", self.name, channel_id, exc)
-                        continue
-                candidate_channels.append(channel)
+                    channel = await self._client.fetch_channel(int(channel_id))
+                except Exception as exc:
+                    logger.debug("[%s] Cannot fetch backfill channel %s: %s", self.name, channel_id, exc)
+                    continue
+            candidate_channels.append(channel)
         # Obfuscated placeholders (bot lost VIEW_CHANNEL) fail every history read — drop them
         # from both the wildcard and the explicit-id branch (#90154).
         candidate_channels = [ch for ch in candidate_channels if not is_discord_channel_obfuscated(ch)]
@@ -2710,7 +2761,7 @@ class DiscordAdapter(DiscordAuthorizationMixin, DiscordMediaMixin, DiscordThread
             return
         seen_channels.add(channel_key)
         channel_after = after
-        cursor = self._discord_recovery_cursor(channel_key)
+        cursor = await asyncio.to_thread(self._discord_recovery_cursor, channel_key)
         if cursor:
             with suppress(ValueError, TypeError):
                 cursor_id = int(cursor)
@@ -2779,11 +2830,12 @@ class DiscordAdapter(DiscordAuthorizationMixin, DiscordMediaMixin, DiscordThread
             return False
         if getattr(getattr(message, "author", None), "id", None) == getattr(self._client.user, "id", None):
             return False
-        if self._discord_message_is_persistently_complete(str(getattr(message, "id", ""))):
+        message_id = str(getattr(message, "id", ""))
+        if await asyncio.to_thread(self._discord_message_is_persistently_complete, message_id):
             return False
-        if self._discord_message_has_active_claim(str(getattr(message, "id", ""))):
+        if await asyncio.to_thread(self._discord_message_has_active_claim, message_id):
             return False
-        if self._discord_message_attempts_exhausted(str(getattr(message, "id", ""))):
+        if await asyncio.to_thread(self._discord_message_attempts_exhausted, message_id):
             return False
         # A success reaction is only an ack, not evidence the substantive response completed.
         return not await self._message_has_non_down_bot_response(message)

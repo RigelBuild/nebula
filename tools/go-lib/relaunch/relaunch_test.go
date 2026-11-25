@@ -241,6 +241,10 @@ func TestReadTailFrom(t *testing.T) {
 	if err != nil || string(got) != "third\n" {
 		t.Fatalf("readTailFrom() = %q, %v; want %q", got, err, "third\n")
 	}
+	got, err = readTailFrom(file, len("first\nsecond\nthird\n"))
+	if err != nil || string(got) != "first\nsecond\nthird\n" {
+		t.Fatalf("readTailFrom() = %q, %v; want complete file", got, err)
+	}
 }
 
 const (

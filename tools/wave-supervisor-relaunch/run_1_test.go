@@ -233,6 +233,7 @@ func (h *runHarness) installWaveScope() {
 	h.fs.files["/sessions/-home-example-agents/session_census-supervisor.jsonl"] = []byte(`{"type":"session","id":"census-supervisor","parentSession":"parent-session"}`)
 	h.fs.times["/sessions/-home-example-agents/session_census-supervisor.jsonl"] = h.time
 }
+
 func TestCotalFailureFormatsCommandAndFirstStderrLine(t *testing.T) {
 	if got := cotalFailure([]string{"ps", "--space"}, cotalreach.CommandResult{ExitCode: 3, Stderr: "\n  nats: timeout\nmore"}, 31878*time.Millisecond); got != "cotal ps exit=3 ms=31878 stderr=nats: timeout" {
 		t.Fatalf("cotalFailure() = %q", got)

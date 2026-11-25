@@ -381,6 +381,7 @@ func (i memoryFileInfo) Mode() fs.FileMode {
 func (i memoryFileInfo) ModTime() time.Time { return i.mod }
 func (i memoryFileInfo) IsDir() bool        { return i.dir }
 func (i memoryFileInfo) Sys() any           { return nil }
+
 func procStat(start string) string {
 	fields := make([]string, 20)
 	for index := range fields {

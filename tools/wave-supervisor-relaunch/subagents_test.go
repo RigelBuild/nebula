@@ -151,6 +151,21 @@ func TestSubagentFilesIgnoresNonSessionFiles(t *testing.T) {
 	}
 }
 
+func TestSubagentFilesMissingStemIsEmpty(t *testing.T) {
+	const stem = "/sessions/missing-stem"
+	fsys := newMemoryFS()
+	fsys.readDirHook = func(path string) ([]fs.DirEntry, error, bool) {
+		if path == stem {
+			return nil, fs.ErrNotExist, true
+		}
+		return nil, nil, false
+	}
+	files, err := subagentFiles(fsys, stem)
+	if err != nil || len(files) != 0 {
+		t.Fatalf("subagentFiles(%q) = %v, %v; want empty", stem, files, err)
+	}
+}
+
 func TestTopLevelSessionFileByNameDoesNotReadContents(t *testing.T) {
 	fsys := newMemoryFS()
 	path := "/sessions/-home-example/2026_session-id.jsonl"
@@ -308,6 +323,15 @@ func TestLiveSubagentsForUnresolvableSessionFailsClosed(t *testing.T) {
 	delete(fsys.links, "/proc/123/fd/3")
 	if _, err := liveSubagentsFor(t.Context(), "/proc", fsys, "/sessions", "wave-agents.slice", "accounts"); err == nil {
 		t.Fatal("liveSubagentsFor accepted an unresolved seat session")
+	}
+}
+
+func TestLiveSubagentsForUnmappedProcessFailsClosed(t *testing.T) {
+	fsys := newMemoryFS()
+	waveProcFixture(fsys, "123", "accounts", "session-id", "")
+	fsys.files["/proc/123/environ"] = []byte("HOME=/home/example\x00")
+	if _, err := liveSubagentsFor(t.Context(), "/proc", fsys, "/sessions", "wave-agents.slice", "accounts"); err == nil {
+		t.Fatal("liveSubagentsFor accepted an omp process with no seat mapping")
 	}
 }
 

@@ -146,7 +146,7 @@ func liveCheckFor(procRoot string, fileSystem relaunch.FileSystem, sessionDir, w
 }
 
 // liveSubagentsFor counts live subagents across the named seat's omp processes in the wave slice. A
-// dead seat has none; a process that cannot be read or resolved is an error.
+// dead seat has none; an unnamed process, or one that cannot be read or resolved, is an error.
 func liveSubagentsFor(ctx context.Context, procRoot string, fileSystem relaunch.FileSystem, sessionDir, waveSlice, name string) (int, error) {
 	pids, err := gateSliceOmpPIDs(procRoot, fileSystem, waveSlice)
 	if err != nil {
@@ -158,7 +158,13 @@ func liveSubagentsFor(ctx context.Context, procRoot string, fileSystem relaunch.
 		if err != nil {
 			return 0, err
 		}
-		if gone || seat != name {
+		if gone {
+			continue
+		}
+		if seat == "" {
+			return 0, fmt.Errorf("omp process %s maps to no seat", pid)
+		}
+		if seat != name {
 			continue
 		}
 		count, err := processLiveSubagents(ctx, procRoot, fileSystem, sessionDir, pid)

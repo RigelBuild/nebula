@@ -74,7 +74,7 @@ func prepareOrphan(ctx context.Context, deps runDeps, state relaunch.RelaunchSta
 	if holdActive(deps) {
 		return finish(Outcome{Outcome: outcomeSkipped, Reason: reasonHold, ElapsedMS: elapsedMS(deps, startedAt)})
 	}
-	// A subagent refusal must not spend a spawn slot.
+	// A refusal here does not spend a spawn slot; a later stopWave check may do so.
 	if err := checkWaveSubagents(ctx, waveStopDeps(deps)); err != nil {
 		waveStopDeps(deps).noteSubagentRefusal(err)
 		return finish(Outcome{Outcome: outcomeSkipped, Reason: "skipped:subagents", State: stateOrphaned, ElapsedMS: elapsedMS(deps, startedAt)})

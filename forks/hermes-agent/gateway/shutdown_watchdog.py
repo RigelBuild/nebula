@@ -72,15 +72,22 @@ class _LoopStallLogger:
 
     def _watch(self):
         reported = False
+        longest_lag = 0.0
         while not self._stop.wait(0.25):
             lag = time.monotonic() - self._last_beat
             if lag <= 2.0:
+                if reported:
+                    logger.warning("Gateway event loop recovered after %.2f seconds", longest_lag)
                 reported = False
+                longest_lag = 0.0
             elif not reported:
                 frame = sys._current_frames().get(self._thread_id)
                 stack = ''.join(traceback.format_stack(frame, limit=25)) if frame else '(stack unavailable)'
                 logger.warning("Gateway event loop stalled for %.2f seconds; loop stack:\n%s", lag, stack)
                 reported = True
+                longest_lag = lag
+            else:
+                longest_lag = max(longest_lag, lag)
 
     def stop(self):
         self._stop.set()

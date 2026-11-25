@@ -893,8 +893,9 @@ class GatewayStartupMixin:
         from gateway.shutdown_watchdog import _arm_loop_floor_timer, start_loop_liveness_watchdog
         if os.getenv("HERMES_LOOP_STALL_LOG", "").lower() in {"1", "true", "yes"}:
             if getattr(self, "_loop_stall_logger", None) is None:
-                from gateway.shutdown_watchdog import start_loop_stall_logger
-                self._loop_stall_logger = start_loop_stall_logger(loop)
+                with _log_suppressed(logging.WARNING, "Failed to start gateway loop stall logger", exc_info=True):
+                    from gateway.shutdown_watchdog import start_loop_stall_logger
+                    self._loop_stall_logger = start_loop_stall_logger(loop)
         config = getattr(self, "config", None)
         if config is not None and not getattr(config, "loop_watchdog", True):
             return

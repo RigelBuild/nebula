@@ -6,6 +6,7 @@ import asyncio
 import pathlib
 import threading
 import time
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from gateway.shutdown_watchdog import (
@@ -364,6 +365,7 @@ def test_heartbeat_write_does_not_block_the_loop_it_monitors():
 
 def test_loop_stall_logger_captures_blocked_loop_once(caplog):
     from gateway.shutdown_watchdog import start_loop_stall_logger
+    from tests.waiting import async_wait_until
 
     async def scenario():
         guard = start_loop_stall_logger(asyncio.get_running_loop())
@@ -371,10 +373,56 @@ def test_loop_stall_logger_captures_blocked_loop_once(caplog):
             def blocking_call():
                 time.sleep(2.8)
             blocking_call()
+            await async_wait_until(
+                lambda: any('event loop recovered' in record.message for record in caplog.records),
+                timeout=5,
+                what='the loop stall recovery warning',
+            )
         finally:
             guard.stop()
 
     asyncio.run(scenario())
-    warnings = [record.message for record in caplog.records if 'event loop stalled' in record.message]
-    assert len(warnings) == 1
-    assert 'blocking_call' in warnings[0]
+    stalls = [record for record in caplog.records if 'event loop stalled' in record.message]
+    recoveries = [record for record in caplog.records if 'event loop recovered' in record.message]
+    assert len(stalls) == 1
+    assert 'blocking_call' in stalls[0].message
+    assert len(recoveries) == 1
+    assert recoveries[0].args[0] >= 2.5
+
+
+def test_loop_stall_logger_is_opt_in(monkeypatch):
+    from gateway import shutdown_watchdog
+    from gateway.run_startup import GatewayStartupMixin
+
+    runner = object.__new__(GatewayStartupMixin)
+    runner.config = SimpleNamespace(loop_watchdog=False)
+    loop = MagicMock(spec=asyncio.AbstractEventLoop)
+    logger = MagicMock()
+    monkeypatch.setattr(shutdown_watchdog, 'start_loop_stall_logger', lambda _loop: logger)
+
+    monkeypatch.delenv('HERMES_LOOP_STALL_LOG', raising=False)
+    runner._start_loop_liveness_guards(loop)
+    assert getattr(runner, '_loop_stall_logger', None) is None
+
+    monkeypatch.setenv('HERMES_LOOP_STALL_LOG', '1')
+    runner._start_loop_liveness_guards(loop)
+    assert runner._loop_stall_logger is logger
+    runner._stop_loop_liveness_guards()
+    logger.stop.assert_called_once_with()
+
+def test_loop_stall_logger_start_failure_does_not_abort_startup(monkeypatch, caplog):
+    from gateway import shutdown_watchdog
+    from gateway.run_startup import GatewayStartupMixin
+
+    runner = object.__new__(GatewayStartupMixin)
+    runner.config = SimpleNamespace(loop_watchdog=False)
+
+    def fail_start(_loop):
+        raise RuntimeError('cannot start thread')
+
+    monkeypatch.setattr(shutdown_watchdog, 'start_loop_stall_logger', fail_start)
+    monkeypatch.setenv('HERMES_LOOP_STALL_LOG', '1')
+    runner._start_loop_liveness_guards(MagicMock(spec=asyncio.AbstractEventLoop))
+
+    assert getattr(runner, '_loop_stall_logger', None) is None
+    assert any('Failed to start gateway loop stall logger' in record.message for record in caplog.records)

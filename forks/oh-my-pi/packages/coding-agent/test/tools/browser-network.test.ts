@@ -9,6 +9,10 @@ import { releaseAllTabs } from "@oh-my-pi/pi-coding-agent/tools/browser/tab-supe
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools/index";
 import { chromiumAvailable } from "./chromium-probe";
 
+function expectMaskedOrAbsent(value: string | undefined): void {
+	expect(value === undefined || value === "***").toBe(true);
+}
+
 const CHROMIUM_AVAILABLE = await chromiumAvailable();
 const server = Bun.serve({
 	port: 0,
@@ -210,8 +214,8 @@ return { body, seen };`,
 		const capturedSeed = publicRequests.find(request => request.url.endsWith("/seed"));
 		expect(capturedApi).toBeDefined();
 		expect(capturedSeed).toBeDefined();
-		// Puppeteer request.headers() omits browser-added cookies; this capture does not merge CDP extra-info headers.
-		expect(Object.entries(capturedApi!.requestHeaders).find(([name]) => name.toLowerCase() === "cookie")).toBeUndefined();
+		// Puppeteer request.headers() may include or omit browser-added cookies.
+		expectMaskedOrAbsent(Object.entries(capturedApi!.requestHeaders).find(([name]) => name.toLowerCase() === "cookie")?.[1]);
 		for (const name of ["x-csrf-token", "x-xsrf-token", "x-csrftoken"]) {
 			expect(Object.entries(capturedApi!.requestHeaders).find(([header]) => header.toLowerCase() === name)?.[1]).toBe("***");
 		}
@@ -220,7 +224,7 @@ return { body, seen };`,
 		const apiDetail = valueOf(
 			await invoke({ action: "call", name: "log", chain: [{ method: "request", args: [capturedApi!.id] }] }),
 		) as { requestHeaders: Record<string, string> };
-		expect(Object.entries(apiDetail.requestHeaders).find(([name]) => name.toLowerCase() === "cookie")).toBeUndefined();
+		expectMaskedOrAbsent(Object.entries(apiDetail.requestHeaders).find(([name]) => name.toLowerCase() === "cookie")?.[1]);
 		for (const name of ["x-csrf-token", "x-xsrf-token", "x-csrftoken"]) {
 			expect(Object.entries(apiDetail.requestHeaders).find(([header]) => header.toLowerCase() === name)?.[1]).toBe("***");
 		}
@@ -260,7 +264,7 @@ return { body, seen };`,
 		expect(apiHarEntry).toBeDefined();
 		expect(seedHarEntry!.response.headers.find(header => header.name.toLowerCase() === "set-cookie")?.value).toBe("***");
 		expect(seedHarEntry!.response.headers.find(header => header.name.toLowerCase() === "x-csrf-token")?.value).toBe("***");
-		expect(apiHarEntry!.request.headers.find(header => header.name.toLowerCase() === "cookie")).toBeUndefined();
+		expectMaskedOrAbsent(apiHarEntry!.request.headers.find(header => header.name.toLowerCase() === "cookie")?.value);
 		for (const name of ["x-csrf-token", "x-xsrf-token", "x-csrftoken"]) {
 			expect(apiHarEntry!.request.headers.find(header => header.name.toLowerCase() === name)?.value).toBe("***");
 		}

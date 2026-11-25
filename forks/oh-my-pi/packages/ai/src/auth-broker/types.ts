@@ -181,8 +181,8 @@ export interface SnapshotStreamRemovedEvent {
 export type SnapshotStreamEvent = SnapshotStreamSnapshotEvent | SnapshotStreamEntryEvent | SnapshotStreamRemovedEvent;
 
 /**
- * Default bearer-protected route prefix. The broker exposes `/v1/healthz`
- * unauthenticated for liveness probes; everything else requires a bearer.
+ * Default bearer-protected route prefix. The broker exposes `/v1/healthz` and
+ * `/v1/readyz` unauthenticated for liveness and readiness probes; all other routes require a bearer.
  */
 export const AUTH_BROKER_API_PREFIX = "/v1";
 

@@ -3,7 +3,7 @@
  *
  * Used by {@link RemoteAuthCredentialStore} (snapshot pulls) and by
  * `omp auth-broker status` (liveness checks). All endpoints except
- * `/v1/healthz` require a bearer token.
+ * `/v1/healthz` and `/v1/readyz` require a bearer token.
  */
 
 import { type } from "@oh-my-pi/omptype";

@@ -68,7 +68,10 @@ export interface AuthBrokerServerOptions {
 	storage: AuthStorage;
 	/** Listen address; accepts `host:port` or just `port`. */
 	bind?: string;
-	/** Accept any of these bearer tokens. Empty disables auth only on a loopback bind; elsewhere every route but healthz returns 401. */
+	/**
+	 * Accept any of these bearer tokens. Empty disables auth only on a loopback
+	 * bind; elsewhere every route but `/v1/healthz` and `/v1/readyz` returns 401.
+	 */
 	bearerTokens: string[];
 	/**
 	 * Scrape-scoped read-only tokens accepted ONLY for `GET /metrics`.
@@ -503,9 +506,15 @@ class SnapshotSource {
 	/** Check cached credential rows without reloading storage or invoking refresh. */
 	hasUsableCredential(): boolean {
 		const now = Date.now();
+		// Persisted rate-limit blocks do not affect readiness, because blocked rows are still served.
 		return this.#currentRows().credentials.some(({ credential }) => {
-			if (credential.type === "api_key") return credential.key.length > 0;
-			return credential.access.length > 0 && Number.isFinite(credential.expires) && credential.expires > now;
+			if (credential.type === "api_key") return typeof credential.key === "string" && credential.key.length > 0;
+			return (
+				typeof credential.access === "string" &&
+				credential.access.length > 0 &&
+				typeof credential.expires === "number" &&
+				credential.expires > now
+			);
 		});
 	}
 

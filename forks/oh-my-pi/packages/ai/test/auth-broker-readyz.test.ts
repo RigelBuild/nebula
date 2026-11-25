@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -72,6 +72,95 @@ describe("auth-broker GET /v1/readyz", () => {
 			refresh: "refresh-token",
 			expires: Date.now() + 60_000,
 		});
+
+		const response = await fetch(`${handle.url}/v1/readyz`);
+		expect(response.status).toBe(200);
+		expect(await response.json()).toEqual({ ok: true });
+	});
+
+	test("treats an infinite OAuth expiry as long-lived", async () => {
+		if (!store || !storage || !handle) throw new Error("expected broker storage from beforeEach");
+		await storage.credentials.upsert("anthropic", {
+			type: "oauth",
+			access: "long-lived-access",
+			refresh: "refresh-token",
+			expires: Date.now() + 60_000,
+		});
+		const row = store.listAuthCredentials("anthropic")[0];
+		if (!row) throw new Error("expected OAuth credential row");
+
+		const writer = new Database(path.join(tempDir, "agent.db"));
+		try {
+			writer.run("UPDATE auth_credentials SET data = ? WHERE id = ?", [
+				'{"access":"long-lived-access","refresh":"refresh-token","expires":1e999}',
+				row.id,
+			]);
+		} finally {
+			writer.close();
+		}
+		await storage.credentials.reload();
+
+		const response = await fetch(`${handle.url}/v1/readyz`);
+		expect(response.status).toBe(200);
+		expect(await response.json()).toEqual({ ok: true });
+	});
+
+	test("returns 200 when a cached API key is non-empty", async () => {
+		if (!storage || !handle) throw new Error("expected broker storage from beforeEach");
+		await storage.credentials.upsert("anthropic", { type: "api_key", key: "usable-key" });
+
+		const response = await fetch(`${handle.url}/v1/readyz`);
+		expect(response.status).toBe(200);
+		expect(await response.json()).toEqual({ ok: true });
+	});
+
+	test("returns 503 when a cached API key is empty", async () => {
+		if (!storage || !handle) throw new Error("expected broker storage from beforeEach");
+		await storage.credentials.upsert("anthropic", { type: "api_key", key: "" });
+
+		const response = await fetch(`${handle.url}/v1/readyz`);
+		expect(response.status).toBe(503);
+		expect(await response.json()).toEqual({ ok: false, reason: "no_usable_credentials" });
+	});
+
+	test("does not reload credentials written directly to the store", async () => {
+		if (!store || !storage || !handle) throw new Error("expected broker storage from beforeEach");
+		const generation = storage.credentials.generation;
+		await store.upsertAuthCredential("anthropic", { type: "api_key", key: "usable-key" });
+		expect(storage.credentials.generation).toBe(generation);
+
+		const response = await fetch(`${handle.url}/v1/readyz`);
+		expect(response.status).toBe(503);
+		expect(await response.json()).toEqual({ ok: false, reason: "no_usable_credentials" });
+	});
+
+	test("ignores malformed OAuth rows when another credential is usable", async () => {
+		if (!store || !storage || !handle) throw new Error("expected broker storage from beforeEach");
+		await storage.credentials.upsert("anthropic", {
+			type: "oauth",
+			access: "malformed-access",
+			refresh: "malformed-refresh",
+			expires: Date.now() + 60_000,
+		});
+		await storage.credentials.upsert("openai", {
+			type: "oauth",
+			access: "usable-access",
+			refresh: "refresh-token",
+			expires: Date.now() + 60_000,
+		});
+		const malformed = store.listAuthCredentials("anthropic")[0];
+		if (!malformed) throw new Error("expected malformed OAuth row");
+
+		const writer = new Database(path.join(tempDir, "agent.db"));
+		try {
+			writer.run("UPDATE auth_credentials SET data = ? WHERE id = ?", [
+				JSON.stringify({ refresh: "malformed-refresh", expires: Date.now() + 60_000 }),
+				malformed.id,
+			]);
+		} finally {
+			writer.close();
+		}
+		await storage.credentials.reload();
 
 		const response = await fetch(`${handle.url}/v1/readyz`);
 		expect(response.status).toBe(200);

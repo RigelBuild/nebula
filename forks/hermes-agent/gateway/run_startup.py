@@ -892,9 +892,9 @@ class GatewayStartupMixin:
         """
         from gateway.shutdown_watchdog import _arm_loop_floor_timer, start_loop_liveness_watchdog
         if os.getenv("HERMES_LOOP_STALL_LOG", "").lower() in {"1", "true", "yes"}:
-            if getattr(self, "_loop_stall_logger_task", None) is None:
-                from gateway.shutdown_watchdog import loop_stall_logger
-                self._loop_stall_logger_task = loop.create_task(loop_stall_logger())
+            if getattr(self, "_loop_stall_logger", None) is None:
+                from gateway.shutdown_watchdog import start_loop_stall_logger
+                self._loop_stall_logger = start_loop_stall_logger(loop)
         config = getattr(self, "config", None)
         if config is not None and not getattr(config, "loop_watchdog", True):
             return
@@ -926,7 +926,7 @@ class GatewayStartupMixin:
         for attr, method, what in (
             ("_loop_liveness_watchdog", "stop", "stop gateway loop liveness watchdog"),
             ("_loop_floor_timer_handle", "cancel", "cancel gateway loop floor timer"),
-            ("_loop_stall_logger_task", "cancel", "cancel gateway loop stall logger"),
+            ("_loop_stall_logger", "stop", "stop gateway loop stall logger"),
             ("_loop_heartbeat_task", "cancel", "cancel gateway loop heartbeat task"),
         ):
             guard = getattr(self, attr, None)

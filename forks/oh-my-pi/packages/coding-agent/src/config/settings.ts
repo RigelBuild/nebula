@@ -286,17 +286,25 @@ function pendingChangeApplies(
 }
 
 /**
- * @throws Error when a leaf of `layer` sits at a path that names no registered setting (typo guard
- * for constructor overrides).
+ * Dotted paths of the leaves of `layer` that name no registered setting, in layer order. A typo guard:
+ * constructor overrides reject them, and `auth-gateway validate` reports them in config overlays.
  */
-function assertKnownSettingPaths(layer: RawSettings, prefix = ""): void {
+export function unknownSettingPaths(layer: RawSettings, prefix = ""): string[] {
+	const unknown: string[] = [];
 	for (const key in layer) {
 		const id = prefix ? `${prefix}.${key}` : key;
 		if (lookupSetting(id)) continue;
 		const value = layer[key];
-		if (!isRecord(value)) throw new Error(`Unknown setting "${id}"`);
-		assertKnownSettingPaths(value, id);
+		if (isRecord(value)) unknown.push(...unknownSettingPaths(value, id));
+		else unknown.push(id);
 	}
+	return unknown;
+}
+
+/** @throws Error when {@link unknownSettingPaths} names a key that is not a registered setting. */
+function assertKnownSettingPaths(layer: RawSettings): void {
+	const [first] = unknownSettingPaths(layer);
+	if (first !== undefined) throw new Error(`Unknown setting "${first}"`);
 }
 
 /** `project` as it merges over the global layer: `null` (cleared) model roles fall back to global. */
@@ -1962,6 +1970,14 @@ export class Settings {
 	getGlobalSettings(): RawSettings {
 		const own = structuredClone(this.#global);
 		return this.#parent ? this.#deepMerge(this.#parent.getGlobalSettings(), own) : own;
+	}
+
+	/**
+	 * Raw `--config` / `PI_CONFIG_FILES` overlay layer, deep-cloned. `auth-gateway validate` reads its keys
+	 * to find keys that name no setting.
+	 */
+	getConfigOverlaySettings(): RawSettings {
+		return structuredClone(this.#configOverlay);
 	}
 
 	/**

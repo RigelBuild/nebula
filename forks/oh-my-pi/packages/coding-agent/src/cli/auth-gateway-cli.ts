@@ -13,6 +13,8 @@
  *     and model roles (`auth-gateway-stdio.ts`).
  *   - `token` / `token --regenerate` — manages the gateway bearer token file.
  *   - `status` — prints the locally-stored gateway token and bind hint.
+ *   - `validate` — checks the serve config (`PI_CONFIG_FILES` overlays, `--clients`,
+ *     `--api-key-limit-model-classes`) without binding a port, calling the broker, or reading credentials.
  */
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
@@ -60,7 +62,7 @@ import chalk from "@oh-my-pi/pi-utils/chalk";
 import { ModelRegistry } from "../config/model-registry";
 import { cfgDisabledProviders, cfgModelProviderOrder } from "../config/model-settings";
 import { resolveProviderModelReference } from "../config/model-resolver";
-import type { Settings } from "../config/settings";
+import { type Settings, unknownSettingPaths } from "../config/settings";
 import {
 	overlayLiveResetCredits,
 	planCodexResetRedemptions,
@@ -94,7 +96,7 @@ export function claudeResetBankingFor(
 	return undefined;
 }
 
-export type AuthGatewayAction = "serve" | "stdio" | "token" | "status" | "check";
+export type AuthGatewayAction = "serve" | "stdio" | "token" | "status" | "check" | "validate";
 
 export interface AuthGatewayCommandArgs {
 	action: AuthGatewayAction;
@@ -130,7 +132,7 @@ export interface AuthGatewayCommandArgs {
 	};
 }
 
-const ACTIONS: readonly AuthGatewayAction[] = ["serve", "stdio", "token", "status", "check"];
+const ACTIONS: readonly AuthGatewayAction[] = ["serve", "stdio", "token", "status", "check", "validate"];
 
 /** Room after the drain for storage close before postmortem forces the exit. */
 const SHUTDOWN_MARGIN_MS = 2_000;
@@ -881,6 +883,27 @@ export async function loadApiKeyLimitModelClasses(
 	assertApiKeyLimitModelClasses(classes);
 	return classes;
 }
+/** A `--clients` file as read: its resolved path, its text (kept for reload), and its parsed entries. */
+interface GatewayClientsFile {
+	clientsPath: string | undefined;
+	clientsText: string | undefined;
+	clients: AuthGatewayClient[] | undefined;
+}
+
+/** Read and parse a `--clients` file. Shared by `serve` and `validate`; a bad file throws, naming the file. */
+async function readGatewayClientsFile(clientsArg: string | undefined): Promise<GatewayClientsFile> {
+	if (clientsArg === undefined) return { clientsPath: undefined, clientsText: undefined, clients: undefined };
+	const clientsPath = path.resolve(clientsArg);
+	try {
+		const clientsText = await Bun.file(clientsPath).text();
+		return { clientsPath, clientsText, clients: parseAuthGatewayClients(clientsText) };
+	} catch (error) {
+		throw new Error(
+			`Cannot load --clients ${clientsPath}: ${error instanceof Error ? error.message : String(error)}`,
+		);
+	}
+}
+
 async function runServe(flags: AuthGatewayCommandArgs["flags"]): Promise<void> {
 	// The gateway is a long-running headless service: route structured logs to
 	// stdout so a process supervisor (k8s) captures them, and skip the rotating
@@ -900,19 +923,7 @@ async function runServe(flags: AuthGatewayCommandArgs["flags"]): Promise<void> {
 	if (!flags.noAuth && !gatewayToken) throw new Error("auth-gateway bearer token must not be empty");
 	const apiKeyLimitModelClasses = await loadApiKeyLimitModelClasses(flags.apiKeyLimitModelClasses);
 	// Read before touching the broker, so a bad file fails the command at once.
-	const clientsPath = flags.clients === undefined ? undefined : path.resolve(flags.clients);
-	let clientsText: string | undefined;
-	let clients: AuthGatewayClient[] | undefined;
-	if (clientsPath !== undefined) {
-		try {
-			clientsText = await Bun.file(clientsPath).text();
-			clients = parseAuthGatewayClients(clientsText);
-		} catch (error) {
-			throw new Error(
-				`Cannot load --clients ${clientsPath}: ${error instanceof Error ? error.message : String(error)}`,
-			);
-		}
-	}
+	const { clientsPath, clientsText, clients } = await readGatewayClientsFile(flags.clients);
 
 	// Build a broker-backed AuthStorage — same pattern as discoverAuthStorage()
 	// in sdk.ts. The gateway never touches local SQLite.
@@ -1216,6 +1227,43 @@ async function runStatus(flags: AuthGatewayCommandArgs["flags"]): Promise<void> 
 	}
 }
 
+/**
+ * Load the gateway's config inputs as `serve` does and return every problem found: the settings (the
+ * loader checks each configured value), overlay keys that name no setting, `--api-key-limit-model-classes`,
+ * and `--clients`. Binds no port, makes no network call, and reads no credentials: no broker config, no
+ * token, and no `applyUnpausedProviders`. An empty list means valid.
+ */
+export async function validateAuthGatewayConfig(flags: AuthGatewayCommandArgs["flags"]): Promise<string[]> {
+	const problems: string[] = [];
+	const collect = async (load: () => Promise<unknown>): Promise<void> => {
+		try {
+			await load();
+		} catch (error) {
+			problems.push(error instanceof Error ? error.message : String(error));
+		}
+	};
+	await collect(async () => {
+		const settings = await resolveEffectiveSettings();
+		for (const id of unknownSettingPaths(settings.getConfigOverlaySettings())) {
+			problems.push(`Unknown setting "${id}"`);
+		}
+		await loadEffectiveAuthAccountPolicyConfig({ settings });
+	});
+	await collect(() => loadApiKeyLimitModelClasses(flags.apiKeyLimitModelClasses));
+	await collect(() => readGatewayClientsFile(flags.clients));
+	return problems;
+}
+
+async function runValidate(flags: AuthGatewayCommandArgs["flags"]): Promise<void> {
+	const problems = await validateAuthGatewayConfig(flags);
+	if (problems.length === 0) {
+		process.stdout.write("auth-gateway config valid\n");
+		return;
+	}
+	for (const problem of problems) process.stderr.write(`invalid: ${problem}\n`);
+	process.exitCode = 1;
+}
+
 export async function runAuthGatewayCommand(cmd: AuthGatewayCommandArgs): Promise<void> {
 	switch (cmd.action) {
 		case "serve":
@@ -1232,6 +1280,9 @@ export async function runAuthGatewayCommand(cmd: AuthGatewayCommandArgs): Promis
 			return;
 		case "check":
 			await runCheck(cmd.flags);
+			return;
+		case "validate":
+			await runValidate(cmd.flags);
 			return;
 		default: {
 			const _exhaustive: never = cmd.action;

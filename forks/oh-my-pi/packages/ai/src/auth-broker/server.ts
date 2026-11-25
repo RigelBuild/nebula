@@ -68,7 +68,10 @@ export interface AuthBrokerServerOptions {
 	storage: AuthStorage;
 	/** Listen address; accepts `host:port` or just `port`. */
 	bind?: string;
-	/** Accept any of these bearer tokens. Empty disables auth only on a loopback bind; elsewhere every route but healthz returns 401. */
+	/**
+	 * Accept any of these bearer tokens. Empty disables auth only on a loopback
+	 * bind; elsewhere every route but `/v1/healthz` and `/v1/readyz` returns 401.
+	 */
 	bearerTokens: string[];
 	/**
 	 * Scrape-scoped read-only tokens accepted ONLY for `GET /metrics`.
@@ -243,6 +246,7 @@ const STATIC_ROUTES: Record<string, true> = {
 	"/v1/usage/stale": true,
 	"/v1/credentials/disabled": true,
 	"/v1/credential": true,
+	"/v1/readyz": true,
 };
 
 /** Only known routes reach logs verbatim; unknown paths may carry caller-supplied secrets. */
@@ -497,6 +501,21 @@ class SnapshotSource {
 
 	get generation(): number {
 		return this.#storage.credentials.generation;
+	}
+
+	/** Check cached credential rows without reloading storage or invoking refresh. */
+	hasUsableCredential(): boolean {
+		const now = Date.now();
+		// Persisted rate-limit blocks do not affect readiness, because blocked rows are still served.
+		return this.#currentRows().credentials.some(({ credential }) => {
+			if (credential.type === "api_key") return typeof credential.key === "string" && credential.key.length > 0;
+			return (
+				typeof credential.access === "string" &&
+				credential.access.length > 0 &&
+				typeof credential.expires === "number" &&
+				credential.expires > now
+			);
+		});
 	}
 
 	/**
@@ -985,6 +1004,11 @@ export function startAuthBroker(opts: AuthBrokerServerOptions): AuthBrokerServer
 				if (req.method === "GET" && pathname === "/v1/healthz") {
 					const body: HealthzResponse = { ok: true, version };
 					return json(200, body);
+				}
+				if (req.method === "GET" && pathname === "/v1/readyz") {
+					return snapshotSource.hasUsableCredential()
+						? json(200, { ok: true })
+						: json(503, { ok: false, reason: "no_usable_credentials" });
 				}
 				if (metricsEnabled && req.method === "GET" && pathname === "/metrics") {
 					if (!isAuthorized(req, metricsTokens, openWhenEmpty)) {

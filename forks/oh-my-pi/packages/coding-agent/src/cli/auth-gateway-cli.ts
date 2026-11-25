@@ -1268,8 +1268,15 @@ export async function validateAuthGatewayConfig(flags: AuthGatewayCommandArgs["f
 		await collect(async () => {
 			const projectSettings = Bun.file(path.join(getProjectAgentDir(settings.getCwd()), "settings.json"));
 			if (!(await projectSettings.exists())) return;
-			const projectLayer: unknown = JSON.parse(await projectSettings.text());
-			if (!isRecord(projectLayer)) return;
+			const projectSettingsContent = await projectSettings.text();
+			if (!projectSettingsContent) return;
+			const projectLayer: unknown = JSON.parse(projectSettingsContent);
+			if (!isRecord(projectLayer)) {
+				if (projectLayer !== null && projectLayer !== undefined) {
+					throw new Error("Settings JSON must contain an object at the document root");
+				}
+				return;
+			}
 			const migrated = settings.migrateRawSettings(projectLayer);
 			for (const id of unknownSettingPaths(migrated)) problems.push(`Unknown setting "${id}"`);
 		});

@@ -246,7 +246,7 @@ export class BrowserNetworkManager {
 		record.response = response;
 		record.status = response.status();
 		record.ok = response.ok();
-		record.responseHeaders = response.headers();
+		record.responseHeaders = publicHeaders(response.headers());
 		const contentLength = parseContentLength(record.responseHeaders);
 		if (contentLength !== undefined) record.sizes.responseBody = contentLength;
 	};
@@ -452,7 +452,7 @@ export class BrowserNetworkManager {
 			method: request.method().toUpperCase(),
 			url: request.url(),
 			resourceType: request.resourceType(),
-			requestHeaders: request.headers(),
+			requestHeaders: publicHeaders(request.headers()),
 			sizes: { requestBody: postData === undefined ? 0 : Buffer.byteLength(postData) },
 			request,
 		};

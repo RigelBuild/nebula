@@ -210,7 +210,8 @@ return { body, seen };`,
 		const capturedSeed = publicRequests.find(request => request.url.endsWith("/seed"));
 		expect(capturedApi).toBeDefined();
 		expect(capturedSeed).toBeDefined();
-		expect(Object.entries(capturedApi!.requestHeaders).find(([name]) => name.toLowerCase() === "cookie")?.[1]).toBe("***");
+		// Puppeteer request.headers() omits browser-added cookies; this capture does not merge CDP extra-info headers.
+		expect(Object.entries(capturedApi!.requestHeaders).find(([name]) => name.toLowerCase() === "cookie")).toBeUndefined();
 		for (const name of ["x-csrf-token", "x-xsrf-token", "x-csrftoken"]) {
 			expect(Object.entries(capturedApi!.requestHeaders).find(([header]) => header.toLowerCase() === name)?.[1]).toBe("***");
 		}
@@ -219,7 +220,7 @@ return { body, seen };`,
 		const apiDetail = valueOf(
 			await invoke({ action: "call", name: "log", chain: [{ method: "request", args: [capturedApi!.id] }] }),
 		) as { requestHeaders: Record<string, string> };
-		expect(Object.entries(apiDetail.requestHeaders).find(([name]) => name.toLowerCase() === "cookie")?.[1]).toBe("***");
+		expect(Object.entries(apiDetail.requestHeaders).find(([name]) => name.toLowerCase() === "cookie")).toBeUndefined();
 		for (const name of ["x-csrf-token", "x-xsrf-token", "x-csrftoken"]) {
 			expect(Object.entries(apiDetail.requestHeaders).find(([header]) => header.toLowerCase() === name)?.[1]).toBe("***");
 		}
@@ -231,7 +232,9 @@ return { body, seen };`,
 			}),
 		);
 		expect(stoppedPath).toBe(harPath);
-		const har = JSON.parse(await Bun.file(harPath).text()) as {
+		const harText = await Bun.file(harPath).text();
+		expect(harText).not.toContain("omp-cookie-secret");
+		const har = JSON.parse(harText) as {
 			log: {
 				entries: Array<{
 					request: { url: string; headers: Array<{ name: string; value: string }>; cookies: unknown[] };
@@ -257,7 +260,7 @@ return { body, seen };`,
 		expect(apiHarEntry).toBeDefined();
 		expect(seedHarEntry!.response.headers.find(header => header.name.toLowerCase() === "set-cookie")?.value).toBe("***");
 		expect(seedHarEntry!.response.headers.find(header => header.name.toLowerCase() === "x-csrf-token")?.value).toBe("***");
-		expect(apiHarEntry!.request.headers.find(header => header.name.toLowerCase() === "cookie")?.value).toBe("***");
+		expect(apiHarEntry!.request.headers.find(header => header.name.toLowerCase() === "cookie")).toBeUndefined();
 		for (const name of ["x-csrf-token", "x-xsrf-token", "x-csrftoken"]) {
 			expect(apiHarEntry!.request.headers.find(header => header.name.toLowerCase() === name)?.value).toBe("***");
 		}

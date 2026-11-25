@@ -112,9 +112,24 @@ def test_liveness_still_rejects_high_latency_below_heartbeat_interval(monkeypatc
     assert adapter._read_websocket_health(client) == (False, "latency_exceeded")
 
 
-def test_liveness_still_rejects_latency_well_above_heartbeat_interval(monkeypatch):
+def test_liveness_accepts_50_second_race_latency_with_short_round_trip(monkeypatch):
     adapter = _make_adapter(monkeypatch, max_ack_age=60.0, max_latency=30.0)
     client = _health_client(latency=50.0)
+
+    assert adapter._read_websocket_health(client) == (True, "healthy")
+
+
+def test_liveness_rejects_race_latency_with_long_round_trip(monkeypatch):
+    adapter = _make_adapter(monkeypatch, max_ack_age=60.0, max_latency=30.0)
+    client = _health_client(latency=72.25)
+
+    assert adapter._read_websocket_health(client) == (False, "latency_exceeded")
+
+
+def test_liveness_without_heartbeat_interval_uses_unadjusted_latency(monkeypatch):
+    adapter = _make_adapter(monkeypatch, max_ack_age=60.0, max_latency=30.0)
+    client = _health_client(latency=41.3)
+    del client.ws._keep_alive.interval
 
     assert adapter._read_websocket_health(client) == (False, "latency_exceeded")
 

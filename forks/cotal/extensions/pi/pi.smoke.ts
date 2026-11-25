@@ -408,6 +408,28 @@ const tick = (): Promise<void> => new Promise((resolve) => setImmediate(resolve)
   driver.requestShutdown();
 }
 
+// A refused in-flight hold still publishes idle and cancels a stale error note.
+{
+  const mesh = new FakeMesh();
+  const driver = new PiDriver(mesh as unknown as MeshAgent, 20);
+  driver.bind(new FakeHost());
+  const ctx = context();
+  driver.onSessionStart(ctx);
+  driver.onAgentStart(ctx);
+  driver.onAgentStart(ctx);
+  driver.onAgentEnd([{ role: "assistant", stopReason: "error", errorStatus: 503 }], ctx);
+  mesh.items.push(item("deferred"));
+  mesh.refuseHolds = true;
+  ctx.idle = true;
+  driver.onAgentEnd([{ role: "assistant", stopReason: "stop" }], ctx);
+  await delay(20);
+  await driver.flushPresence();
+  ok(mesh.items[0]?.id === "deferred" && mesh.statuses.at(-1)?.status === "idle" &&
+    mesh.statuses.at(-1)?.activity !== "error: provider 503",
+    "a refused in-flight hold keeps its item and clears a stale error note");
+  driver.requestShutdown();
+}
+
 {
   const mesh = new FakeMesh();
   const driver = new PiDriver(mesh as unknown as MeshAgent, 20);

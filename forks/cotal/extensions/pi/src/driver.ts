@@ -606,11 +606,8 @@ export class PiDriver {
     this._state = "idle";
     this.heldReason = undefined;
     this.pump();
-    if (!this.host && this._state === "idle") {
-      if (!this.context) return;
-      // `pump` returns before publishing idle when no host is bound.
-      this.publishIdleWhenSettled(this.context);
-    }
+    // `pump` may return without publishing idle; a second call supersedes pump's poller.
+    if (this._state === "idle" && this.context) this.publishIdleWhenSettled(this.context);
   }
 
   /** Fires once after the fixed backoff to re-dispatch the still-unconfirmed batch through the same

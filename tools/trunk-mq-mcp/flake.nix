@@ -18,9 +18,8 @@
         system:
         let
           pkgs = import nixpkgs { inherit system; };
-          # Dependencies are a fixed-output derivation pinned by outputHash, the
-          # same pattern as docs-bundle in the nebula flake. Installs with the
-          # frozen lockfile and no lifecycle scripts, so the output is reproducible.
+          # Dependencies are a fixed-output derivation pinned by outputHash.
+          # Installs with the frozen lockfile and no lifecycle scripts, so the output is reproducible.
           deps = pkgs.stdenvNoCC.mkDerivation {
             pname = "trunk-mq-mcp-deps";
             version = "0.1.0";

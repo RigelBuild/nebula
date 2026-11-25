@@ -70,6 +70,46 @@ def test_loop_liveness_death_leaves_its_stacks_in_the_dump_file(tmp_path, monkey
     assert exit_codes == [75]
 
 
+def test_loop_liveness_dump_includes_main_thread_before_thread_limit(tmp_path, monkeypatch):
+    """More than 100 idle threads must not hide the gateway thread's stack."""
+    from gateway.shutdown_watchdog import get_shutdown_watchdog_dump_path
+
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    release = threading.Event()
+    idle_threads = [
+        threading.Thread(target=release.wait, name=f"idle-test-{i}", daemon=True)
+        for i in range(110)
+    ]
+    for thread in idle_threads:
+        thread.start()
+
+    handle_ref, fired, exit_codes = {}, threading.Event(), []
+
+    def exit_and_stop(code: int) -> None:
+        exit_codes.append(code)
+        handle_ref["handle"].stop()
+        fired.set()
+
+    try:
+        with patch("gateway.shutdown_watchdog._hard_exit", side_effect=exit_and_stop), \
+                patch("gateway.shutdown_watchdog._mark_exited_quietly"):
+            handle_ref["handle"] = start_loop_liveness_watchdog(
+                MagicMock(spec=asyncio.AbstractEventLoop), probe_interval=0.02, probe_timeout=0.02,
+                max_strikes=1)
+            assert handle_ref["handle"] is not None
+            assert fired.wait(timeout=5.0), "watchdog did not reach its restart exit"
+            handle_ref["handle"].join(timeout=1.0)
+
+        dump = get_shutdown_watchdog_dump_path(tmp_path).read_text(encoding="utf-8-sig")
+        main_thread_dump = dump.split("--- faulthandler dump (all threads) ---", 1)[0]
+        assert "test_loop_liveness_dump_includes_main_thread_before_thread_limit" in main_thread_dump
+        assert exit_codes == [75]
+    finally:
+        release.set()
+        for thread in idle_threads:
+            thread.join(timeout=1.0)
+
+
 def test_loop_liveness_watchdog_stop_during_final_miss_disarms_hard_exit():
     loop = MagicMock(spec=asyncio.AbstractEventLoop)
     probe_scheduled = threading.Event()

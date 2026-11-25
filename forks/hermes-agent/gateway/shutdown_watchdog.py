@@ -176,9 +176,10 @@ def start_loop_liveness_watchdog(
             # File + stderr: a console-less launcher (Windows .vbs login item) discards stderr, so a
             # liveness death used to leave no stack anywhere (#120356, #91097).
             _write_watchdog_dump(
-                get_shutdown_watchdog_dump_path(), delay_s=probe_timeout * strikes,
+                get_shutdown_watchdog_dump_path(),
+                delay_s=probe_interval * strikes,
                 snapshot={"strikes": strikes, "probe_interval_s": probe_interval},
-                event="loop_liveness_watchdog_fired")
+                event="loop_liveness_watchdog_fired", main_thread_id=threading.main_thread().ident)
             if stop_event.is_set():
                 return
             _mark_exited_quietly(exit_code, "loop_liveness_watchdog")
@@ -284,14 +285,24 @@ def resolve_shutdown_watchdog_delay(
 
 
 def _write_watchdog_dump(dump_path: Path, *, delay_s: float, snapshot: Optional[dict[str, Any]],
-                         event: str = "shutdown_watchdog_fired") -> None:
-    """Best-effort faulthandler + metadata dump before hard-exit (file, then stderr)."""
+                         event: str = "shutdown_watchdog_fired", main_thread_id: Optional[int] = None) -> None:
+    """Best-effort main-thread stack, then faulthandler's all-thread dump (file, then stderr)."""
     header = {"event": event, "pid": os.getpid(), "delay_s": delay_s,
               "fired_at": datetime.now(UTC).isoformat(), "snapshot": snapshot or {}}
+
+    def _write_main_thread_stack(write: Callable[[str], Any]) -> None:
+        ident = main_thread_id if main_thread_id is not None else threading.main_thread().ident
+        frame = sys._current_frames().get(ident) if ident is not None else None
+        write("--- main thread stack ---\n")
+        write("".join(traceback.format_stack(frame)) if frame is not None else "(main thread stack unavailable)\n")
+        write("--- end main thread stack ---\n")
+
     with contextlib.suppress(OSError):  # unwritable dir: skip only the file copy, stderr still runs
         dump_path.parent.mkdir(parents=True, exist_ok=True)
     with contextlib.suppress(Exception), open(dump_path, "a", encoding="utf-8") as fh:
-        fh.write(json.dumps(header, default=str) + "\n--- faulthandler dump (all threads) ---\n")
+        fh.write(json.dumps(header, default=str) + "\n")
+        _write_main_thread_stack(fh.write)
+        fh.write("--- faulthandler dump (all threads) ---\n")
         fh.flush()
         try:
             faulthandler.dump_traceback(file=fh, all_threads=True)
@@ -301,7 +312,8 @@ def _write_watchdog_dump(dump_path: Path, *, delay_s: float, snapshot: Optional[
         fh.flush()
     with contextlib.suppress(Exception):  # stderr too: journald/launchd get it if disk is wedged
         sys.stderr.write(f"Gateway {event.replace('_', ' ')} after {delay_s:.0f}s "
-                         f"(pid={os.getpid()}); dumping all thread stacks.\n")
+                         f"(pid={os.getpid()}); dumping main and all thread stacks.\n")
+        _write_main_thread_stack(sys.stderr.write)
         sys.stderr.flush()
         faulthandler.dump_traceback(all_threads=True)
 

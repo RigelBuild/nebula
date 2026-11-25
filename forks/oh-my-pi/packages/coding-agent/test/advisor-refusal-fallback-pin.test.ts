@@ -3,6 +3,7 @@ import { Agent } from "@oh-my-pi/pi-agent-core";
 import type { Model } from "@oh-my-pi/pi-ai";
 import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
+import { isClassifierRefusal } from "@oh-my-pi/pi-coding-agent/advisor/runtime";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { ExtensionRuntime, loadExtensionFromFactory } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/loader";
@@ -53,6 +54,20 @@ describe("advisor classifier-refusal fallback", () => {
 		await session?.dispose();
 		session = undefined;
 		modelRegistry.clearSuppressedSelectors();
+	});
+
+	it("recognizes a wrapped 500 refusal without stop details", async () => {
+		const mock = createMockModel({
+			handler: {
+				content: [],
+				stopReason: "error",
+				errorMessage:
+					"500 litellm.APIConnectionError: OpenAIException - Refusal (reasoning_extraction): This request was blocked",
+			},
+		});
+		const result = await mock.stream(advisorPrimary, { messages: [] }, {}).result();
+		result.errorStatus = 500;
+		expect(isClassifierRefusal(result)).toBe(true);
 	});
 
 	async function startSession(primaryFailure: "refusal" | "overloaded", scenario: { fallbackRefuses?: boolean } = {}) {

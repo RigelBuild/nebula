@@ -1891,7 +1891,10 @@ export class TurnRecovery {
 	isClassifierRefusal(message: AssistantMessage): boolean {
 		if (message.stopReason !== "error") return false;
 		const stopType = message.stopDetails?.type;
-		return stopType === "refusal" || stopType === "sensitive";
+		if (stopType === "refusal" || stopType === "sensitive") return true;
+		const id = this.#classifyRetryMessage(message);
+		if (AIError.is(id, AIError.Flag.AccountPolicy)) return false;
+		return AIError.isClassifierRefusalText(message.errorMessage ?? "");
 	}
 
 	#getRetryFallbackResolutionContext(): RetryFallbackResolutionContext {

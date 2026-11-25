@@ -117,6 +117,7 @@ export async function postOpenAIStream<TEvent>(init: OpenAIStreamRequestInit): P
 			shouldRetryResponse: async (response, bodyText) =>
 				getShouldRetryFromHeaders(response.headers) !== false &&
 				!(response.status === 429 && getZeroRateLimitHeader(response.headers) !== undefined) &&
+				!(response.status >= 500 && AIError.isClassifierRefusalText(bodyText)) &&
 				!isConcurrencyAdmissionRejection(response, bodyText) &&
 				(init.shouldRetryResponse === undefined || (await init.shouldRetryResponse(response, bodyText))),
 			// Bun's native fetch enforces a hard ~300s pre-response timeout (issue #2422).

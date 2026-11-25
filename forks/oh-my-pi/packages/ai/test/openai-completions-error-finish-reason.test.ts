@@ -324,6 +324,49 @@ describe("native_finish_reason", () => {
 });
 
 describe("in-band SSE error envelope", () => {
+	it("does not replay a wrapped classifier refusal", async () => {
+		let attempts = 0;
+		const fetchMock: FetchImpl = async () => {
+			attempts++;
+			return new Response(
+				JSON.stringify({
+					error: {
+						message: "OpenAIException - Refusal (reasoning_extraction): This request was blocked",
+						type: "server_error",
+					},
+				}),
+				{ status: 500, headers: { "content-type": "application/json" } },
+			);
+		};
+		const result = await streamOpenAICompletions(completionsModel, baseContext(), {
+			apiKey: "test-key",
+			fetch: fetchMock,
+		}).result();
+		expect(attempts).toBe(1);
+		expect(result.stopReason).toBe("error");
+		expect(result.errorMessage).toContain("Refusal (reasoning_extraction)");
+	}, 10_000);
+
+	it("retries an ordinary 500 at the transport layer", async () => {
+		let attempts = 0;
+		const success = createSseFetch([
+			completionChunk({ choices: [{ index: 0, delta: { content: "Hello" }, finish_reason: "stop" }] }),
+			"[DONE]",
+		]);
+		const fetchMock: FetchImpl = async (input, init) => {
+			attempts++;
+			if (attempts === 1) return new Response("Internal Server Error", { status: 500 });
+			return success(input, init);
+		};
+		const result = await streamOpenAICompletions(completionsModel, baseContext(), {
+			apiKey: "test-key",
+			fetch: fetchMock,
+			maxHttpAttempts: 2,
+		}).result();
+		expect(attempts).toBe(2);
+		expect(result.stopReason).toBe("stop");
+	}, 10_000);
+
 	it("surfaces a queue-full error carried inside a successful HTTP stream", async () => {
 		const fetchMock = createSseFetch([
 			{

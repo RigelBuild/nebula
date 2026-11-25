@@ -97,6 +97,12 @@ func publish(ctx context.Context, o publishOptions) (string, error) {
 		if !ok {
 			return "", fmt.Errorf("%w: source %s is not on %s tip %s", errNotDescendant, source, o.branch, tip)
 		}
+		if existing, err := findManifestCommit(ctx, o.repo, source, tip, data); err != nil {
+			return "", err
+		} else if existing != "" {
+			return existing, nil
+		}
+
 		makeCommit := o.commit
 		if makeCommit == nil {
 			makeCommit = commitManifest
@@ -122,6 +128,52 @@ func publish(ctx context.Context, o publishOptions) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("%w (%d attempts)", errPushRejected, o.attempts)
+}
+
+// findManifestCommit returns a guarded release-manifest commit on tip's history
+// when its contents exactly match this release.
+func findManifestCommit(ctx context.Context, repo, source, tip string, data []byte) (string, error) {
+	commit, err := git(ctx, repo, "log", "-1", "--format=%H", tip, "--", manifestFile)
+	if err != nil || commit == "" {
+		return "", err
+	}
+	manifest, err := git(ctx, repo, "show", commit+":"+manifestFile)
+	if err != nil {
+		return "", err
+	}
+	var expected, existing any
+	if err := json.Unmarshal(data, &expected); err != nil {
+		return "", err
+	}
+	if err := json.Unmarshal([]byte(manifest), &existing); err != nil {
+		return "", err
+	}
+	expectedJSON, err := json.Marshal(expected)
+	if err != nil {
+		return "", err
+	}
+	existingJSON, err := json.Marshal(existing)
+	if err != nil {
+		return "", err
+	}
+	if !bytes.Equal(expectedJSON, existingJSON) {
+		return "", nil
+	}
+	if err := guard(ctx, repo, commit); err != nil {
+		return "", err
+	}
+	parent, err := git(ctx, repo, "rev-parse", commit+"^")
+	if err != nil {
+		return "", err
+	}
+	ok, err := isAncestor(ctx, repo, source, parent)
+	if err != nil {
+		return "", err
+	}
+	if !ok {
+		return "", nil
+	}
+	return commit, nil
 }
 
 // checkNewestRelease returns the existing tag commit for this exact release and

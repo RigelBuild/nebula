@@ -347,6 +347,26 @@ describe("in-band SSE error envelope", () => {
 		expect(result.errorMessage).toContain("Refusal (reasoning_extraction)");
 	}, 10_000);
 
+	it("retries an ordinary 500 at the transport layer", async () => {
+		let attempts = 0;
+		const success = createSseFetch([
+			completionChunk({ choices: [{ index: 0, delta: { content: "Hello" }, finish_reason: "stop" }] }),
+			"[DONE]",
+		]);
+		const fetchMock: FetchImpl = async (input, init) => {
+			attempts++;
+			if (attempts === 1) return new Response("Internal Server Error", { status: 500 });
+			return success(input, init);
+		};
+		const result = await streamOpenAICompletions(completionsModel, baseContext(), {
+			apiKey: "test-key",
+			fetch: fetchMock,
+			maxHttpAttempts: 2,
+		}).result();
+		expect(attempts).toBe(2);
+		expect(result.stopReason).toBe("stop");
+	}, 10_000);
+
 	it("surfaces a queue-full error carried inside a successful HTTP stream", async () => {
 		const fetchMock = createSseFetch([
 			{

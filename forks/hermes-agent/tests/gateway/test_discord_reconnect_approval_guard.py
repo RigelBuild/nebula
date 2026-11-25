@@ -3,7 +3,7 @@
 discord.py keeps a sent view's buttons in its client's view store. ``parse_ready`` clears the
 store only with ``views=False``, and ``parse_resumed`` only dispatches the event, so a card
 delivered before a RESUME still answers presses. The reconnect path must not re-post or settle
-such a card. These tests pin that: neither the first ``on_ready`` nor ``on_resumed`` touches it.
+such a card. The delivered-card test pins that ``on_resumed`` preserves it.
 The scan line and the disconnect timestamp feed the backfill's INFO log.
 """
 
@@ -34,8 +34,6 @@ async def _deliver_card(adapter, monkeypatch, created, session, request_id):
         chat_id="555", command="rm x", session_key=session, request_id=request_id)
     assert result.success is True
     return adapter._exec_approval_views[request_id]
-
-
 
 
 @pytest.mark.asyncio
@@ -88,14 +86,16 @@ async def test_backfill_scan_logs_channels_gap_and_counts(monkeypatch, caplog, t
         yield  # pragma: no cover - makes this an async generator
 
     adapter._iter_missed_message_backfill_candidates = no_candidates
-    adapter._missed_message_backfill_channels = AsyncMock(return_value={123, 456})
+    channel_ids = {str(channel_id) for channel_id in range(123, 150)}
+    adapter._missed_message_backfill_channels = AsyncMock(return_value=channel_ids)
 
     with caplog.at_level("INFO"):
         await adapter._run_missed_message_backfill()
 
     lines = [r.getMessage() for r in caplog.records if "Missed-message backfill complete" in r.getMessage()]
     assert len(lines) == 1
-    assert "channels=2" in lines[0]
+    expected_channels = [str(channel_id) for channel_id in range(123, 143)] + ["…"]
+    assert f"channels={expected_channels}" in lines[0]
     assert "scanned=0 missed=0 dispatched=0" in lines[0]
     gap = float(lines[0].rsplit("gap_seconds=", 1)[1])
     assert 41.0 <= gap <= 60.0

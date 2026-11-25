@@ -146,6 +146,28 @@ async def test_session_thread_backfill_admits_only_allowed_users(adapter, monkey
 
     assert _admitted(adapter) == [allowed]
 
+
+@pytest.mark.asyncio
+async def test_wildcard_backfill_includes_active_dm_sessions(adapter, monkeypatch):
+    adapter.config.extra["missed_message_backfill"] = {
+        "enabled": True, "channels": "*",
+    }
+    dm = FakeChannel(channel_id=321)
+    dm.guild = None
+    message = _mention(401, 42, "catch up this DM", dm)
+    dm._history_messages = [message]
+    adapter._client.get_channel = lambda channel_id: dm if channel_id == 321 else None
+    adapter._client.guilds = [SimpleNamespace(text_channels=[])]
+    adapter._session_store = _SessionStore((321, "dm"))
+    monkeypatch.setattr(adapter, "_discord_recovery_cursor", lambda _channel_id: None)
+
+    channels = await adapter._missed_message_backfill_channels()
+    recovered = [msg async for msg in adapter._iter_missed_message_backfill_candidates(channels)]
+
+    assert channels == {"*", "321"}
+    assert recovered == [message]
+
+
 @pytest.mark.asyncio
 async def test_session_dm_group_and_thread_chats_are_added_to_explicit_channels(adapter):
     adapter.config.extra["missed_message_backfill"] = {

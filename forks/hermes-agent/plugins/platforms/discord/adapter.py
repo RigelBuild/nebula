@@ -2500,11 +2500,14 @@ class DiscordAdapter(DiscordAuthorizationMixin, DiscordMediaMixin, DiscordThread
         return str(raw).strip().lower() in ("true", "1", "yes", "on")
 
     async def _missed_message_backfill_channels(self) -> set[str]:
-        """Union configured channels with chats having recently active sessions."""
+        """Resolve explicit channels and active session chats; an explicit empty list disables scanning."""
         configured = self.config.extra.get("missed_message_backfill")
         raw = configured.get("channels") if isinstance(configured, dict) else None
+        decoded = _decode_json_list_literal(raw)
         channels = self._gate_csv_set(raw)
-        if not channels and not isinstance(_decode_json_list_literal(raw), list):
+        if isinstance(decoded, list) and not channels:
+            return set()
+        if not channels and not isinstance(decoded, list):
             raw = self._gate_env("DISCORD_MISSED_MESSAGE_BACKFILL_CHANNELS")
             channels = self._gate_csv_set(raw) if raw.strip() else (
                 self._get_allowed_channels() | self._discord_free_response_channels()
@@ -2652,9 +2655,11 @@ class DiscordAdapter(DiscordAuthorizationMixin, DiscordMediaMixin, DiscordThread
                 if counts["dispatched"] >= max_dispatches:
                     break
             await self._finish_recovery_scan(scan_id, "success", counts)
+            channel_ids = sorted(channels)
+            logged_channels = channel_ids[:20] + (["…"] if len(channel_ids) > 20 else [])
             logger.info(
-                "[%s] Missed-message backfill complete: channels=%d scanned=%d missed=%d dispatched=%d gap_seconds=%s",
-                self.name, len(channels), counts["scanned"], counts["missed"], counts["dispatched"],
+                "[%s] Missed-message backfill complete: channels=%s scanned=%d missed=%d dispatched=%d gap_seconds=%s",
+                self.name, logged_channels, counts["scanned"], counts["missed"], counts["dispatched"],
                 gap_seconds,
             )
         except asyncio.CancelledError:
@@ -2709,20 +2714,19 @@ class DiscordAdapter(DiscordAuthorizationMixin, DiscordMediaMixin, DiscordThread
         if "*" in channel_ids:
             for guild in getattr(self._client, "guilds", []) or []:
                 candidate_channels.extend(getattr(guild, "text_channels", []) or [])
-        else:
-            for channel_id in sorted(channel_ids):
+        for channel_id in sorted(channel_ids - {"*"}):
+            channel = None
+            try:
+                channel = self._client.get_channel(int(channel_id))
+            except Exception:
                 channel = None
+            if channel is None:
                 try:
-                    channel = self._client.get_channel(int(channel_id))
-                except Exception:
-                    channel = None
-                if channel is None:
-                    try:
-                        channel = await self._client.fetch_channel(int(channel_id))
-                    except Exception as exc:
-                        logger.debug("[%s] Cannot fetch backfill channel %s: %s", self.name, channel_id, exc)
-                        continue
-                candidate_channels.append(channel)
+                    channel = await self._client.fetch_channel(int(channel_id))
+                except Exception as exc:
+                    logger.debug("[%s] Cannot fetch backfill channel %s: %s", self.name, channel_id, exc)
+                    continue
+            candidate_channels.append(channel)
         # Obfuscated placeholders (bot lost VIEW_CHANNEL) fail every history read — drop them
         # from both the wildcard and the explicit-id branch (#90154).
         candidate_channels = [ch for ch in candidate_channels if not is_discord_channel_obfuscated(ch)]

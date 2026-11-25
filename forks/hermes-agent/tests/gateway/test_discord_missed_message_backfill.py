@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from gateway.config import PlatformConfig
+from gateway.config import Platform, PlatformConfig
 from gateway.platforms.event import MessageEvent, MessageType, ProcessingOutcome
 
 
@@ -330,13 +330,22 @@ async def test_missed_message_backfill_config_stays_per_adapter():
 
 @pytest.mark.asyncio
 async def test_explicit_empty_backfill_channel_list_disables_the_scan(monkeypatch):
-    """``channels: []`` is the operator saying "scan nothing" — it must not fall through to the
-    allowed ∪ free-response default (which would scan channels they disabled). The default
-    ``channels: ""`` still falls through."""
+    """An explicit empty list disables all scanning, even for active DM sessions."""
     monkeypatch.setenv("DISCORD_ALLOWED_CHANNELS", "555")
+
+    class SessionStore:
+        def list_sessions(self, active_minutes=None):
+            return [SimpleNamespace(
+                platform=Platform.DISCORD,
+                chat_type="dm",
+                origin=SimpleNamespace(chat_id="777"),
+            )]
+
     explicit = DiscordAdapter(PlatformConfig(
         enabled=True, token="one", extra={"missed_message_backfill": {"enabled": True, "channels": []}}))
+    explicit._session_store = SessionStore()
     assert await explicit._missed_message_backfill_channels() == set()
+
     default = DiscordAdapter(PlatformConfig(
         enabled=True, token="two", extra={"missed_message_backfill": {"enabled": True, "channels": ""}}))
     assert "555" in await default._missed_message_backfill_channels()

@@ -337,7 +337,7 @@ discord:
   history_backfill_limit: 50      # 向后扫描的最大消息数（默认：50）
   missed_message_backfill:        # 重新处理断线期间遗漏的消息（需主动启用）
     enabled: false
-    channels: []                  # 留空时使用 free_response_channels
+    channels: []                  # 显式空列表会关闭扫描；否则也扫描活跃会话聊天
     window_seconds: 21600         # 最多回溯 6 小时
     limit: 100                    # 每次重连的全局扫描上限
     max_dispatches: 10            # 每次重连的恢复分发上限
@@ -526,7 +526,7 @@ discord:
     max_dispatches: 10
 ```
 
-如果 `channels` 留空，Hermes 会使用 `discord.free_response_channels`。只有当机器人确实需要检查所有可访问的服务器文字频道时才设置为 `"*"`。恢复账本按配置文件存储在 `gateway/discord_message_recovery.db`，避免已成功回复的消息在后续重启时再次执行。
+显式频道列表会与有活跃 Discord 会话的聊天一并扫描，包括私信、群组聊天和线程。显式空列表（`[]`）会关闭扫描，也不会扫描活跃会话聊天。设置 `channels: "*"` 可扫描所有可访问的服务器文字频道和所有活跃会话聊天。省略 `channels` 或将其设为空字符串时，Hermes 使用 `discord.allowed_channels` 和 `discord.free_response_channels` 作为默认频道列表，再加入活跃会话聊天。恢复账本按配置文件存储在 `gateway/discord_message_recovery.db`，避免已成功回复的消息在后续重启时再次执行。
 
 #### `group_sessions_per_user`
 

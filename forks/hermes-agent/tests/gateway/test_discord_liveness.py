@@ -147,11 +147,6 @@ def _make_adapter(
     return DiscordAdapter(PlatformConfig(enabled=True, token="test-token", extra=extra))
 
 
-class _BrokenWebSocket:
-    @property
-    def open(self):
-        raise RuntimeError("socket state unavailable")
-
 
 @pytest.mark.parametrize(
     ("key", "attribute", "raw"),

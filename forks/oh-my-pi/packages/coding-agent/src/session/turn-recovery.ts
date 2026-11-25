@@ -3159,8 +3159,7 @@ export class TurnRecovery {
 		const stripDemotedReasoning =
 			classifierRefusal &&
 			!retryBudgetExhausted &&
-			(message.stopDetails?.category === "reasoning_extraction" ||
-				/\bRefusal \(reasoning_extraction\)/.test(message.errorMessage ?? "")) &&
+			message.stopDetails?.category === "reasoning_extraction" &&
 			(message.demotedReasoningBlocks ?? 0) > 0 &&
 			currentModel !== undefined &&
 			resolveCatalogPolicy(currentModel).classifierCotExtraction === true &&

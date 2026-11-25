@@ -5047,17 +5047,6 @@ describe("AgentSession retry fallback", () => {
 			expect(answer.content).toEqual([{ type: "text", text: "Claude answer" }]);
 		});
 
-		it("strips demoted reasoning for a wrapped reasoning extraction refusal", async () => {
-			const wrapped = reasoningRefusal(2);
-			wrapped.stopDetails = undefined;
-			wrapped.errorMessage = "500 OpenAIException - Refusal (reasoning_extraction): blocked";
-			const { requests } = await promptThroughRefusals([wrapped]);
-			expect(requests).toEqual([
-				"anthropic/claude-sonnet-4-5 omit=false",
-				"anthropic/claude-sonnet-4-5 omit=true",
-			]);
-		});
-
 		it("walks the fallback chain without a same-model retry when the refused request carried no reasoning", async () => {
 			const { requests } = await promptThroughRefusals([reasoningRefusal(undefined)]);
 

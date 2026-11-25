@@ -10,8 +10,31 @@ import re
 
 # API-key style headers (single opaque value, no scheme word): non-vendor-prefix
 # values would otherwise leak when a curl command is echoed into tool output.
-SECRET_HEADER_NAME_LIST = ("x-api-key", "x-goog-api-key", "api-key", "apikey", "x-api-token", "x-auth-token", "x-access-token")
+SECRET_HEADER_NAME_LIST = (
+	"x-api-key",
+	"x-goog-api-key",
+	"api-key",
+	"apikey",
+	"x-api-token",
+	"x-auth-token",
+	"x-access-token",
+	"x-csrf-token",
+	"x-xsrf-token",
+	"x-csrftoken",
+)
+_COOKIE_HEADER_NAMES = ("cookie", "set-cookie")
+_SENSITIVE_HEADER_NAMES = rf"(?:{'|'.join((*SECRET_HEADER_NAME_LIST, *_COOKIE_HEADER_NAMES))})"
 _SECRET_HEADER_NAMES = rf"(?:{'|'.join(SECRET_HEADER_NAME_LIST)})"
+
+_HAR_HEADER_ENTRY_RE = re.compile(
+    rf'("name"\s*:\s*")({_SENSITIVE_HEADER_NAMES})("\s*,\s*"value"\s*:\s*")((?:\\[^\r\n]|[^"\\\r\n])*)(")',
+    re.IGNORECASE,
+)
+_HAR_COOKIE_ARRAY_RE = re.compile(
+	r'("cookies"\s*:\s*\[)((?:"(?:\\[^\r\n]|[^"\\])*"|[^\]])*)(\])',
+	re.IGNORECASE | re.DOTALL,
+)
+_HAR_COOKIE_VALUE_RE = re.compile(r'("value"\s*:\s*")((?:\\[^\r\n]|[^"\\\r\n])*)(")')
 _SECRET_HEADER_LINE_RE = re.compile(
     rf"(^[ \t]*(?:[<>][ \t]+)?{_SECRET_HEADER_NAMES}[ \t]*:[ \t]*)([^\r\n]+)",
     re.IGNORECASE | re.MULTILINE,
@@ -67,6 +90,21 @@ _SECRET_HEADER_JSON_RE = re.compile(
 _SECRET_HEADER_JSON_UNTERMINATED_RE = re.compile(
     rf'("{_SECRET_HEADER_NAMES}"\s*:\s*")((?:\\[^\r\n]|[^"\\\r\n])*(?:\\)?)(?=\r?\n|\Z)',
     re.IGNORECASE | re.MULTILINE,
+)
+
+# curl's ``-b`` / ``--cookie`` argument is a cookie payload, not a header. Preserve the
+# option and quoting while masking the value, including attached long-option values.
+_COOKIE_OPTION_DOUBLE_QUOTED_RE = re.compile(
+	r'((?:^|[ \t])(?:-b[ \t]+|--cookie(?:[ \t]+|=))")((?:\\[^"]|[^"\\\r\n])*)"',
+	re.IGNORECASE,
+)
+_COOKIE_OPTION_SINGLE_QUOTED_RE = re.compile(
+	r"((?:^|[ \t])(?:-b[ \t]+|--cookie(?:[ \t]+|=))')((?:\\[^']|[^'\\\r\n])*)'",
+	re.IGNORECASE,
+)
+_COOKIE_OPTION_UNQUOTED_RE = re.compile(
+	r"((?:^|[ \t])(?:-b[ \t]+|--cookie(?:[ \t]+|=)))([^ \t\r\n;&|<>()$`\"']+)",
+	re.IGNORECASE | re.MULTILINE,
 )
 
 # Cookie: / Set-Cookie: headers carry session, auth and CSRF tokens and were
@@ -190,8 +228,16 @@ def redact_header_credentials(text: str) -> str:
         text,
     )
     text = _SECRET_HEADER_INLINE_RE.sub(_redact_inline_secret_header, text)
+    if "-b" in text or "--cookie" in text:
+        text = _COOKIE_OPTION_DOUBLE_QUOTED_RE.sub(lambda m: m.group(1) + "***\"", text)
+        text = _COOKIE_OPTION_SINGLE_QUOTED_RE.sub(lambda m: m.group(1) + "***'", text)
+        text = _COOKIE_OPTION_UNQUOTED_RE.sub(lambda m: m.group(1) + "***", text)
 
-    # Cookie: / Set-Cookie: header values (session/auth/CSRF tokens), whole payload masked.
+    text = _HAR_HEADER_ENTRY_RE.sub(lambda m: m.group(1) + m.group(2) + m.group(3) + "***" + m.group(5), text)
+    text = _HAR_COOKIE_ARRAY_RE.sub(
+        lambda m: m.group(1) + _HAR_COOKIE_VALUE_RE.sub(lambda value: value.group(1) + "***" + value.group(3), m.group(2)) + m.group(3),
+        text,
+    )
     # Not gated on ``code_file``: terminal output from ``curl -i`` is scrubbed with
     # code_file=True, and a raw ``Cookie: name=value`` line is a credential wherever it
     # appears, like the secret headers above. The JSON-fixture exemption lives in the

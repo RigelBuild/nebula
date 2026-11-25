@@ -40,3 +40,40 @@ def test_raw_headers_mask_all_values_without_consuming_shell_or_next_line():
                 assert shlex.split(output) == ["curl", flag, f"{name}: ***", "https://example.com/path"]
     for benign in ("the cookie: is a browser feature", 'Cookie.set("name", value)'):
         assert redact_sensitive_text(benign, force=True) == benign
+
+
+def test_curl_cookie_options_and_csrf_headers_are_masked():
+    for command in (
+        "curl -b 'a=opaque-cookie-secret' https://example.com",
+        "curl --cookie 'a=opaque-cookie-secret' https://example.com",
+        "curl --cookie='a=opaque-cookie-secret' https://example.com",
+        'curl -b "a=opaque-cookie-secret" https://example.com',
+        'curl --cookie="a=opaque-cookie-secret" https://example.com',
+        "curl -b a=opaque-cookie-secret https://example.com",
+        "curl --cookie=a=opaque-cookie-secret https://example.com",
+    ):
+        redacted = redact_sensitive_text(command, force=True, code_file=True)
+        assert "opaque-cookie-secret" not in redacted
+    for name in ("X-CSRF-Token", "X-XSRF-TOKEN", "X-CSRFToken"):
+        text = f'{name}: opaque-csrf-secret\nX-Trace: unchanged'
+        assert redact_sensitive_text(text, force=True) == f'{name}: ***\nX-Trace: unchanged'
+        command = f'curl -H "{name}: opaque-csrf-secret" https://example.com'
+        assert "opaque-csrf-secret" not in redact_sensitive_text(command, force=True)
+
+
+def test_har_cookie_values_and_csrf_headers_are_masked_in_code_output():
+    payload = {
+        "request": {
+            "cookies": [{"name": "session", "value": "opaque-har-cookie-secret"}],
+            "headers": [{"name": "X-CSRF-Token", "value": "opaque-har-csrf-secret"}],
+        },
+        "response": {
+            "cookies": [{"name": "session", "value": "opaque-har-set-cookie-secret"}],
+            "headers": [{"name": "Set-Cookie", "value": "session=opaque-har-cookie-header-secret"}],
+        },
+    }
+    redacted = json.loads(redact_sensitive_text(json.dumps(payload), force=True, code_file=True))
+    assert redacted["request"]["cookies"][0] == {"name": "session", "value": "***"}
+    assert redacted["response"]["cookies"][0] == {"name": "session", "value": "***"}
+    assert redacted["request"]["headers"][0]["value"] == "***"
+    assert redacted["response"]["headers"][0]["value"] == "***"

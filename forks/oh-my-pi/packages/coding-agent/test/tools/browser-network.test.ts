@@ -14,13 +14,30 @@ const server = Bun.serve({
 	port: 0,
 	fetch(request) {
 		const { pathname } = new URL(request.url);
-		if (pathname === "/api") {
-			return Response.json({ source: "fixture" }, { headers: { "access-control-allow-origin": "*" } });
+		if (pathname === "/seed") {
+			return new Response("seed", {
+				headers: {
+					"set-cookie": "session=omp-cookie-secret; Path=/; SameSite=Lax",
+					"x-csrf-token": "omp-response-csrf-secret",
+					"access-control-allow-origin": "*",
+				},
+			});
 		}
 		if (pathname === "/text") {
 			return new Response("response body", {
 				headers: { "content-type": "text/plain", "access-control-allow-origin": "*" },
 			});
+		}
+		if (pathname === "/api") {
+			return Response.json(
+				{ source: "fixture" },
+				{
+					headers: {
+						"access-control-allow-origin": "*",
+						"x-xsrf-token": "omp-response-xsrf-secret",
+					},
+				},
+			);
 		}
 		if (pathname === "/image") {
 			return new Response(Uint8Array.from([137, 80, 78, 71, 13, 10, 26, 10]), {
@@ -180,11 +197,32 @@ return { body, seen };`,
 		await invoke({
 			action: "run",
 			name: "log",
-			code: `await tab.evaluate(async urls => { for (const url of urls) await fetch(url); }, ${JSON.stringify([
+			code: `await tab.evaluate(async urls => { for (const url of urls) await fetch(url, { headers: { "X-CSRF-Token": "omp-request-csrf-secret", "X-XSRF-TOKEN": "omp-request-xsrf-secret", "X-CSRFToken": "omp-request-csrftoken-secret" } }); }, ${JSON.stringify([
+				`${baseUrl}/seed`,
 				`${baseUrl}/text?har=1`,
 				`${baseUrl}/api?har=2`,
 			])});`,
 		});
+		const publicRequests = valueOf(
+			await invoke({ action: "call", name: "log", chain: [{ method: "requests", args: [] }] }),
+		) as Array<{ id: string; url: string; requestHeaders: Record<string, string>; responseHeaders?: Record<string, string> }>;
+		const capturedApi = publicRequests.find(request => request.url.endsWith("/api?har=2"));
+		const capturedSeed = publicRequests.find(request => request.url.endsWith("/seed"));
+		expect(capturedApi).toBeDefined();
+		expect(capturedSeed).toBeDefined();
+		expect(Object.entries(capturedApi!.requestHeaders).find(([name]) => name.toLowerCase() === "cookie")?.[1]).toBe("***");
+		for (const name of ["x-csrf-token", "x-xsrf-token", "x-csrftoken"]) {
+			expect(Object.entries(capturedApi!.requestHeaders).find(([header]) => header.toLowerCase() === name)?.[1]).toBe("***");
+		}
+		expect(Object.entries(capturedSeed!.responseHeaders ?? {}).find(([name]) => name.toLowerCase() === "set-cookie")?.[1]).toBe("***");
+		expect(Object.entries(capturedSeed!.responseHeaders ?? {}).find(([name]) => name.toLowerCase() === "x-csrf-token")?.[1]).toBe("***");
+		const apiDetail = valueOf(
+			await invoke({ action: "call", name: "log", chain: [{ method: "request", args: [capturedApi!.id] }] }),
+		) as { requestHeaders: Record<string, string> };
+		expect(Object.entries(apiDetail.requestHeaders).find(([name]) => name.toLowerCase() === "cookie")?.[1]).toBe("***");
+		for (const name of ["x-csrf-token", "x-xsrf-token", "x-csrftoken"]) {
+			expect(Object.entries(apiDetail.requestHeaders).find(([header]) => header.toLowerCase() === name)?.[1]).toBe("***");
+		}
 		const stoppedPath = valueOf(
 			await invoke({
 				action: "call",
@@ -193,8 +231,41 @@ return { body, seen };`,
 			}),
 		);
 		expect(stoppedPath).toBe(harPath);
-		const har = JSON.parse(await Bun.file(harPath).text()) as { log: { entries: unknown[] } };
-		expect(har.log.entries).toHaveLength(2);
+		const har = JSON.parse(await Bun.file(harPath).text()) as {
+			log: {
+				entries: Array<{
+					request: { url: string; headers: Array<{ name: string; value: string }>; cookies: unknown[] };
+					response: { headers: Array<{ name: string; value: string }>; cookies: unknown[] };
+				}>;
+			};
+		};
+		expect(har.log.entries).toHaveLength(3);
+		const serialized = JSON.stringify(har);
+		for (const secret of [
+			"omp-cookie-secret",
+			"omp-response-csrf-secret",
+			"omp-response-xsrf-secret",
+			"omp-request-csrf-secret",
+			"omp-request-xsrf-secret",
+			"omp-request-csrftoken-secret",
+		]) {
+			expect(serialized).not.toContain(secret);
+		}
+		const seedHarEntry = har.log.entries.find(entry => entry.request.url.endsWith("/seed"));
+		const apiHarEntry = har.log.entries.find(entry => entry.request.url.endsWith("/api?har=2"));
+		expect(seedHarEntry).toBeDefined();
+		expect(apiHarEntry).toBeDefined();
+		expect(seedHarEntry!.response.headers.find(header => header.name.toLowerCase() === "set-cookie")?.value).toBe("***");
+		expect(seedHarEntry!.response.headers.find(header => header.name.toLowerCase() === "x-csrf-token")?.value).toBe("***");
+		expect(apiHarEntry!.request.headers.find(header => header.name.toLowerCase() === "cookie")?.value).toBe("***");
+		for (const name of ["x-csrf-token", "x-xsrf-token", "x-csrftoken"]) {
+			expect(apiHarEntry!.request.headers.find(header => header.name.toLowerCase() === name)?.value).toBe("***");
+		}
+		for (const entry of har.log.entries) {
+			expect(entry.request.cookies).toEqual([]);
+			expect(entry.response.cookies).toEqual([]);
+		}
+
 	});
 
 	test("enforces allowed_domains and logs blocked cross-host fetches", async () => {

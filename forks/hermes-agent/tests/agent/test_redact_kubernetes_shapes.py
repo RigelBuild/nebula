@@ -115,7 +115,6 @@ KEEP_ROWS = {
  "js_literal": f'function f() {{ return {{"name":"b", "value":"{K}"}} }}',
  "js_literal_secretname": f'const opts = [{{"name":"token", "value":"{K}"}}];',
  "har_headers": f'{{"headers":[{{"name":"Content-Type","value":"{K}"}}]}}',
- "har_cookie_tokenish": f'{{"cookies":[{{"name":"csrftoken","value":"{K}"}}]}}',
  "crd_schema_trunc": f'{{"apiVersion":"apiextensions.k8s.io/v1","kind":"CustomResourceDefinition","spec":{{"properties":{{"data":{{"type":"object","description":"{K}"',
  "secret_kind_prose_then_json": f'The Secret kind holds data.\n{{"data":{{"x":"{K}"}}}}',
  "secret_doc_then_cm_doc": f"apiVersion: v1\nkind: Secret\ndata:\n  a: eA==\n---\napiVersion: v1\nkind: ConfigMap\ndata:\n  b: {K}\n",

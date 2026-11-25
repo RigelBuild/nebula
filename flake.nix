@@ -126,7 +126,7 @@
           in
           [
             (requireVersion pkgs.golangci-lint "2.15.0")
-            (requireVersion pkgs.biome "2.6.5")
+            (requireVersion pkgs.biome "2.6.8")
           ];
         # dev-hygiene's workspace tests create real jj repositories as fixtures.
         dev-hygiene = pkgs: [ pkgs.jujutsu ];

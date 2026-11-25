@@ -309,6 +309,8 @@ class _NoRedirectHandler(urlrequest.HTTPRedirectHandler):
         return None
 
 
+# May be built before use_openssl_trust() (hermes gateway run); deliveries run on a
+# worker thread, so this context cannot block the gateway event loop.
 _opener = urlrequest.build_opener(_NoRedirectHandler)
 
 

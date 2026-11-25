@@ -1603,6 +1603,9 @@ def _build_cli_from_args(model, toolsets, provider, reasoning, api_key, base_url
 
 def _run_legacy_gateway():
     """Legacy `cli.py --gateway` entry: arm the startup watchdog (before importing the gateway graph), then run it."""
+    from agent.ssl_verify import use_openssl_trust
+
+    use_openssl_trust()
     import asyncio
     from hermes_cli.resource_limits import apply_malloc_arena_max
     apply_malloc_arena_max()  # before the watchdog thread: glibc latches its arena limit

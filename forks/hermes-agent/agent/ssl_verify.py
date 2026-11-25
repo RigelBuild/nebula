@@ -12,6 +12,9 @@ context inherits it — httpx, requests/urllib3, aiohttp, AND the stdlib
 ``urllib.request`` call sites (the llama.cpp engine download among them)
 that a certifi-only or requests-only approach never reached.
 
+On macOS the gateway uses OpenSSL instead, because truststore verification
+can block its asyncio event loop.
+
 An exported ``SSL_CERT_FILE`` bundle is trusted ON TOP of the platform
 store; only EXPLICIT PER-PROVIDER CONFIG replaces that trust:
 ``ssl_ca_cert`` (a self-signed or internal endpoint's bundle) and
@@ -24,6 +27,7 @@ from __future__ import annotations
 import logging
 import os
 import ssl
+import sys
 import threading
 from pathlib import Path
 from typing import Any, Optional
@@ -31,6 +35,7 @@ from typing import Any, Optional
 logger = logging.getLogger(__name__)
 
 _installed: bool | None = None
+_gateway_openssl = False
 
 
 def install_truststore() -> bool:
@@ -61,6 +66,25 @@ def install_truststore() -> bool:
             exc,
         )
     return _installed
+
+
+def use_openssl_trust() -> None:
+    """Keep macOS gateway TLS handshakes off the synchronous OS verifier.
+
+    Contexts created before this call keep truststore.
+    """
+    global _installed, _gateway_openssl
+    if sys.platform != "darwin" or _gateway_openssl:
+        return
+    if _installed:
+        import truststore
+
+        truststore.extract_from_ssl()
+    _installed = False
+    _gateway_openssl = True
+    with _CA_CONTEXTS_LOCK:
+        _CA_CONTEXTS.clear()
+    logger.info("TLS trust: OpenSSL (gateway; truststore skipped)")
 
 
 def _coerce_insecure(ssl_verify: Any) -> bool:
@@ -110,6 +134,12 @@ def _shared_context(ca_path: str | None, union: bool = False) -> ssl.SSLContext:
                 ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
                 if not _installed:
                     ctx.load_default_certs()
+                    if _gateway_openssl:
+                        paths = ssl.get_default_verify_paths()
+                        if not paths.cafile and not paths.capath:
+                            bundle = certifi_bundle_path()
+                            if bundle:
+                                ctx.load_verify_locations(cafile=bundle)
             if ca_path is not None:
                 ctx.load_verify_locations(cafile=ca_path)
             _CA_CONTEXTS[(ca_path, union)] = ctx

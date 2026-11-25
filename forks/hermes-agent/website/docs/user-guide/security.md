@@ -975,6 +975,7 @@ Hermes initializes the platform verifier through `truststore`. Windows uses
 its certificate store, macOS uses its system trust services, and Linux uses
 the OpenSSL system trust paths. If initialization fails, Hermes logs the
 failure and falls back to OpenSSL defaults.
+On macOS, the gateway uses OpenSSL trust paths instead of the system verifier to avoid blocking its event loop; if OpenSSL has no trust paths, Hermes-managed contexts use certifi.
 
 For a corporate TLS proxy, install its root through your organization's
 operating-system trust procedure. Hermes' provider resolver no longer selects

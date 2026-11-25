@@ -817,6 +817,14 @@ describe("TurnRecovery replay-unsafe output classification", () => {
 		expect(recovery.isRetryableError(empty)).toBe(true);
 	});
 
+	it("does not treat content filters as classifier refusals", () => {
+		const recovery = new TurnRecovery(createHost(model, modelRegistry));
+		const message = makeMessage([], model);
+		message.errorMessage = "Provider finish_reason: content_filter";
+		expect(recovery.isClassifierRefusal(message)).toBe(false);
+		expect(recovery.isRetryableError(message)).toBe(false);
+	});
+
 	it("does not retry a classifier refusal after visible text", () => {
 		const recovery = new TurnRecovery(createHost(model, modelRegistry));
 		const message = makeMessage([{ type: "text", text: "Visible refusal output" }], model);

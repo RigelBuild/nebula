@@ -1894,7 +1894,7 @@ export class TurnRecovery {
 		if (stopType === "refusal" || stopType === "sensitive") return true;
 		const id = this.#classifyRetryMessage(message);
 		if (AIError.is(id, AIError.Flag.AccountPolicy)) return false;
-		return AIError.is(id, AIError.Flag.ContentBlocked);
+		return AIError.isClassifierRefusalText(message.errorMessage ?? "");
 	}
 
 	#getRetryFallbackResolutionContext(): RetryFallbackResolutionContext {

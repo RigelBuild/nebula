@@ -178,8 +178,9 @@
       commandPackagesFor = system:
         let
           pkgs = import nixpkgs { inherit system; };
+          commands = goCommands;
         in
-        builtins.mapAttrs (buildCommand pkgs) goCommands;
+        builtins.mapAttrs (buildCommand pkgs) commands;
 
       manifest =
         if builtins.pathExists ./release-manifest.json then
@@ -222,7 +223,7 @@
                 '';
               };
           in
-          builtins.mapAttrs wrap (lib.filterAttrs (_: p: p ? ${system}) (builtins.removeAttrs manifest [ "source" "tag" "held" "images" ]));
+          builtins.mapAttrs wrap (lib.filterAttrs (name: p: p ? ${system}) (builtins.removeAttrs manifest [ "source" "tag" "held" "images" ]));
 
       # docs-bundle is a TypeScript CLI run by Bun. Dependencies are fetched
       # as a fixed-output derivation pinned by outputHash, then the wrapper

@@ -4553,6 +4553,9 @@ def run_gateway(verbose: int = 0, quiet: bool = False, replace: bool = False, fo
     kill an existing instance first (avoids systemd restart loops); force: skip the supervised guard;
     idle_exit: a client auto-started this unsupervised gateway, so it exits once idle
     (``gateway.unmanaged_idle_exit_seconds``)."""
+    from agent.ssl_verify import use_openssl_trust
+
+    use_openssl_trust()
     _guard_official_docker_root_gateway()
     _attach_to_host_gateway_or_guard(force=force, replace=replace)
     _guard_supervised_gateway_conflict(force=force)
@@ -5399,6 +5402,9 @@ def _restart_all(system: bool, detach: bool = False) -> None:
 
 
 def _restart_all_as_host(owner, system: bool, detach: bool = False, owe_online_notice=lambda: None) -> None:
+    from agent.ssl_verify import use_openssl_trust
+
+    use_openssl_trust()
     service_stopped = _stop_installed_service(system)
     if owner is not None:
         # Stop ONLY the host process: its served set comes back with it, and any per-profile
@@ -5445,6 +5451,9 @@ def _restart_all_as_host(owner, system: bool, detach: bool = False, owe_online_n
 
 def _cmd_restart(args):
     _refuse_from_inside_gateway("restart", "restart loops")
+    from agent.ssl_verify import use_openssl_trust
+
+    use_openssl_trust()
     from hermes_cli.gateway_profile_lifecycle import profile_lifecycle
     if profile_lifecycle("restart", args):
         return

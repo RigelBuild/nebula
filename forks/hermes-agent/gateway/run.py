@@ -5058,6 +5058,9 @@ def _guard_corrupt_user_config() -> None:
 
 def main():
     """CLI entry point for the gateway."""
+    from agent.ssl_verify import use_openssl_trust
+
+    use_openssl_trust()
     # Before any config-dependent startup (watchdog, DB opens, provider resolution).
     _guard_corrupt_user_config()
     from hermes_cli.resource_limits import apply_malloc_arena_max  # runs before any thread (glibc latches)

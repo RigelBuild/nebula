@@ -43,6 +43,23 @@ def cotal_turn(monkeypatch, request):
     yield sent
     approval_mod.unregister_gateway_notify(SESSION)
 
+@pytest.fixture
+def peer_mesh_turn(monkeypatch):
+    monkeypatch.setattr(approval_mod, "_YOLO_MODE_FROZEN", False)
+    monkeypatch.setattr(approval_context, "_get_approval_mode", lambda: "manual")
+    for var in ("HERMES_CRON_SESSION", "HERMES_INTERACTIVE", "HERMES_SINGLE_QUERY_SESSION"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("HERMES_GATEWAY_SESSION", "1")
+    monkeypatch.setenv("HERMES_EXEC_ASK", "1")
+    monkeypatch.setenv("HERMES_SESSION_PLATFORM", "cotal")
+    monkeypatch.setenv("HERMES_SESSION_KEY", SESSION)
+    monkeypatch.setenv("HERMES_PROFILE_NAME", "nemo")
+    monkeypatch.setattr(approval_context, "_get_approval_timeout", lambda: 1)
+    sent = []
+    approval_mod.register_gateway_notify(SESSION, sent.append)
+    yield sent
+    approval_mod.unregister_gateway_notify(SESSION)
+
 
 def test_terminal_approval_is_blocked_without_prompting_the_peer(cotal_turn):
     result = approval_mod.check_all_command_guards("sudo systemctl restart nginx", "local")
@@ -63,6 +80,78 @@ def test_plugin_requested_approval_is_blocked_without_prompting_the_peer(cotal_t
     result = approval_mod.request_tool_approval("terminal", "secret read", display="op read op://x")
     assert result["approved"] is False
     assert cotal_turn == []
+
+
+@pytest.mark.parametrize("tool_name", ["terminal", "read_file", "search_files", "write_file", "patch"])
+def test_nemo_mesh_reviewer_approve_runs_terminal_and_file_tools(peer_mesh_turn, monkeypatch, tool_name):
+
+    calls = _reviewer(monkeypatch, "approve")
+    first = approval_mod.request_tool_approval(
+        tool_name, "routine operation", display="git status", review=True)
+    second = approval_mod.request_tool_approval(
+        tool_name, "routine operation", display="git status", review=True)
+    assert first["approved"] is True and second["approved"] is True
+    assert calls == ["git status", "git status"]
+    assert peer_mesh_turn == []
+
+def test_nemo_mesh_reviewer_escalate_keeps_peer_block(peer_mesh_turn, monkeypatch):
+    calls = _reviewer(monkeypatch, "escalate", "check this operation")
+    result = approval_mod.request_tool_approval(
+        "terminal", "routine operation", display="git status", review=True)
+    assert result["approved"] is False
+    assert "peer cannot approve" in result["message"]
+    assert "**Reviewer:** unsure, check it carefully: check this operation" in result["message"]
+    assert calls == ["git status"]
+    assert peer_mesh_turn == []
+
+
+def test_nemo_mesh_review_false_secret_hit_never_calls_reviewer(peer_mesh_turn, monkeypatch):
+    monkeypatch.setattr(approval_mod, "_smart_verdict",
+                        lambda *a, **k: pytest.fail("review=False must not call the reviewer"))
+    result = approval_mod.request_tool_approval(
+        "terminal", "secret read", display="op read op://x", review=False)
+    assert result["approved"] is False
+    assert "peer cannot approve" in result["message"]
+    assert peer_mesh_turn == []
+
+
+def test_non_nemo_mesh_reviewer_approve_keeps_peer_block(peer_mesh_turn, monkeypatch):
+    monkeypatch.setenv("HERMES_PROFILE_NAME", "other")
+    monkeypatch.setattr(approval_mod, "_smart_verdict",
+                        lambda *a, **k: pytest.fail("non-Nemo mesh turns must not call the reviewer"))
+    result = approval_mod.request_tool_approval(
+        "terminal", "routine operation", display="git status", review=True)
+    assert result["approved"] is False
+    assert "peer cannot approve" in result["message"]
+    assert peer_mesh_turn == []
+
+
+def test_nemo_mesh_plugin_origin_reviewer_approve_runs(peer_mesh_turn, monkeypatch):
+    monkeypatch.setattr(approval_mod.approval_context, "is_plugin_origin_turn", lambda: True)
+    calls = _reviewer(monkeypatch, "approve")
+    result = approval_mod.request_tool_approval(
+        "terminal", "routine operation", display="git status", review=True)
+    assert result["approved"] is True
+    assert calls == ["git status"]
+    assert peer_mesh_turn == []
+
+
+def _reviewer(monkeypatch, verdict, note=""):
+    from tools import approval_smart
+
+    calls = []
+
+    def smart(command, description, pattern_key, pattern_keys, session_key):
+        calls.append(command)
+        approval_smart._last_note.text = note
+        return verdict
+
+    monkeypatch.setattr(approval_mod, "_smart_verdict", smart)
+    return calls
+
+
+
+
 
 
 def test_browser_vault_consent_declines_without_prompting_the_peer(cotal_turn):

@@ -1220,13 +1220,23 @@ def _review_first_verdict(display_target: str, description: str, pattern_key: st
     return verdict, note
 
 
+def _current_profile_name() -> str | None:
+    """The served Hermes profile name, respecting multiplexed turn scope."""
+    try:
+        from hermes_cli.profiles import current_profile_name
+
+        return current_profile_name()
+    except Exception:
+        return None
+
+
 def _run_approval_gate(
     *, pattern_key: str, description: str, display_target: str, approval_callback=None,
     subject: str = "", noun: str = "flagged actions",
     advice: str = "Find an alternative approach that avoids this action.",
     cron_deny_message: str = "", single_query_deny_message: str = "", unattended_deny_message: str = "",
     autoapprove_log_prefix: str, fail_closed_when_no_human: bool = False, no_human_block_message: str = "",
-    review_first: bool = False,
+    review_first: bool = False, tool_name: str = "",
     pattern_keys: list[str] | None = None,
     session_ttl_seconds: float | None = None, allow_permanent: bool = True,
 ) -> dict:
@@ -1250,6 +1260,28 @@ def _run_approval_gate(
         return _approved()
     if not plugin_origin and not review_first and is_approved(session_key, pattern_key):
         return _approved()
+    peer_mesh_review = (
+        review_first
+        and _is_peer_mesh_approval_context()
+        and not _is_cron_approval_context()
+        and not _is_single_query_approval_context()
+        and tool_name in {"terminal", "read_file", "search_files", "write_file", "patch"}
+        and _current_profile_name() == "nemo"
+    )
+    if peer_mesh_review:
+        verdict, note = _review_first_verdict(display_target, description, pattern_key, session_key)
+        if verdict == "approve":
+            return _approved()
+        if verdict == "deny":
+            _record_denial(session_key)
+        reviewer_line = _review_line(verdict, note)
+        description = f"{description}\n{reviewer_line}"
+        peer_context = next((ctx for ctx in _unattended_contexts() if ctx.name == "unattended"), None)
+        message = peer_context.block_message(
+            f"approval required ({description.splitlines()[0]})", noun="flagged actions",
+            advice="Find an alternative approach that avoids this action.") if peer_context else (
+                f"BLOCKED: approval required ({description.splitlines()[0]})")
+        return _blocked(f"{message}\n{reviewer_line}", pattern_key=pattern_key, description=description)
     approval_callback, is_cli, is_gateway, is_ask = _presence(approval_callback)
     if not is_cli and not is_gateway and not is_ask:
         log_args = (autoapprove_log_prefix, pattern_key, description)
@@ -1513,7 +1545,7 @@ def request_tool_approval(tool_name: str, reason: str, *, rule_key: str = "", ap
                         (_render_tool_call(tool_name, args) if args is not None
                          else f"<{tool_name}> (plugin approval rule)") + _vault_approval_context(tool_name, args)),
         approval_callback=approval_callback,
-        review_first=review, session_ttl_seconds=session_ttl_seconds, allow_permanent=allow_permanent,
+        review_first=review, tool_name=tool_name, session_ttl_seconds=session_ttl_seconds,
         subject=subject, advice="Find an alternative approach.",
         autoapprove_log_prefix=f"plugin-escalated tool call '{tool_name}' in non-interactive non-gateway context",
         fail_closed_when_no_human=True,

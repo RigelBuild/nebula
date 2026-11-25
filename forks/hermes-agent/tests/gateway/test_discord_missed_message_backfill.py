@@ -218,7 +218,7 @@ async def test_run_backfill_dispatches_unaddressed_messages(adapter, monkeypatch
     monkeypatch.setattr(adapter, "_iter_missed_message_backfill_candidates", fake_candidates)
     monkeypatch.setattr(adapter, "_should_backfill_discord_message", AsyncMock(return_value=True))
     monkeypatch.setattr(adapter, "_missed_message_backfill_max_dispatches", lambda: 10)
-    monkeypatch.setattr(adapter, "_missed_message_backfill_channels", lambda: {"123"})
+    monkeypatch.setattr(adapter, "_missed_message_backfill_channels", AsyncMock(return_value={"123"}))
     monkeypatch.setattr("asyncio.sleep", AsyncMock())
 
     await adapter._run_missed_message_backfill()
@@ -519,7 +519,7 @@ async def test_redispatch_of_one_message_is_bounded(adapter, monkeypatch):
         yield message
 
     monkeypatch.setattr(adapter, "_iter_missed_message_backfill_candidates", fake_candidates)
-    monkeypatch.setattr(adapter, "_missed_message_backfill_channels", lambda: {"123"})
+    monkeypatch.setattr(adapter, "_missed_message_backfill_channels", AsyncMock(return_value={"123"}))
     monkeypatch.setattr(adapter, "_missed_message_backfill_max_attempts", lambda: 2)
 
     # Dispatch leaves the row 'processing' (turn still running): back-to-back scans re-offer it.

@@ -668,7 +668,7 @@ jobs:
             exit 1
           fi
           git push origin "$COMMIT:refs/tags/$TAG"
-      # Resume works only through "Re-run failed jobs"; a full re-run plans a new tag.
+      # Resume works only through "Re-run failed jobs"; a full re-run fails in plan because the half-done tag has no Release.
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}

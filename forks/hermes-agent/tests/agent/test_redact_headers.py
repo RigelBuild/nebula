@@ -2,6 +2,7 @@
 
 import json
 import shlex
+import time
 
 from agent.redact import redact_sensitive_text
 
@@ -51,6 +52,8 @@ def test_curl_cookie_options_and_csrf_headers_are_masked():
         'curl --cookie="a=opaque-cookie-secret" https://example.com',
         "curl -b a=opaque-cookie-secret https://example.com",
         "curl --cookie=a=opaque-cookie-secret https://example.com",
+        "curl -bsession=opaque-cookie-secret https://example.com",
+        'curl -b "a\\"opaque-cookie-secret" https://example.com',
     ):
         redacted = redact_sensitive_text(command, force=True, code_file=True)
         assert "opaque-cookie-secret" not in redacted
@@ -77,3 +80,23 @@ def test_har_cookie_values_and_csrf_headers_are_masked_in_code_output():
     assert redacted["response"]["cookies"][0] == {"name": "session", "value": "***"}
     assert redacted["request"]["headers"][0]["value"] == "***"
     assert redacted["response"]["headers"][0]["value"] == "***"
+
+
+def test_cookie_options_do_not_mask_other_commands_or_cookie_jars():
+    for command in (
+        "git checkout -b feature/x", "grep -B 3", "tar -b 20", "cut -b 1-5",
+        "[ -b /dev/sda ]", "curl -b cookies.txt", "curl https://x; git checkout -b feature/x",
+    ):
+        assert redact_sensitive_text(command, force=True, code_file=True) == command
+
+
+def test_har_cookie_arrays_handle_nesting_and_truncation_in_linear_time():
+    text = '{"cookies":[{"value":"secret-one","tags":[1]},{"value":"secret-two"}],"items":[{"value":"neutral"}]}'
+    result = redact_sensitive_text(text, force=True, code_file=True)
+    assert "secret-one" not in result and "secret-two" not in result
+    assert '"value":"neutral"' in result
+    truncated = '"cookies":[' + '"a"' * 5000 + '{"value":"secret"}'
+    start = time.monotonic()
+    result = redact_sensitive_text(truncated, force=True, code_file=True)
+    assert time.monotonic() - start < 1
+    assert '"value":"***"' in result

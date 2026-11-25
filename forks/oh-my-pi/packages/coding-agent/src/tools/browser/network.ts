@@ -22,7 +22,7 @@ const SENSITIVE_NETWORK_HEADERS: Record<string, true> = {
 	"x-csrftoken": true,
 };
 
-function publicHeaders(headers: Record<string, string>): Record<string, string> {
+export function publicHeaders(headers: Record<string, string>): Record<string, string> {
 	const result: Record<string, string> = {};
 	for (const name in headers) {
 		result[name] = Object.hasOwn(SENSITIVE_NETWORK_HEADERS, name.toLowerCase()) ? "***" : headers[name]!;
@@ -831,11 +831,8 @@ export function headerValue(headers: Record<string, string> | undefined, name: s
 
 function headersToHar(headers: Record<string, string>): Array<{ name: string; value: string }> {
 	const result: Array<{ name: string; value: string }> = [];
-	for (const name in headers) {
-		result.push({
-			name,
-			value: Object.hasOwn(SENSITIVE_NETWORK_HEADERS, name.toLowerCase()) ? "***" : headers[name]!,
-		});
+	for (const [name, value] of Object.entries(publicHeaders(headers))) {
+		result.push({ name, value });
 	}
 	return result;
 }

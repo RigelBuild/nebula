@@ -7,11 +7,15 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { createBrowserPrelude } from "@oh-my-pi/pi-coding-agent/tools/browser";
-import { buildHarEntry } from "@oh-my-pi/pi-coding-agent/tools/browser/network";
+import { buildHarEntry, publicHeaders } from "@oh-my-pi/pi-coding-agent/tools/browser/network";
 import { getTab, releaseTab, type WebKitTabSession } from "@oh-my-pi/pi-coding-agent/tools/browser/tab-supervisor";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools/index";
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 import { createFakeHost, type FakeHost } from "./webkit-fake-host";
+
+it("masks cookie headers in public records", () => {
+	expect(publicHeaders({ Cookie: "a=b" })).toEqual({ Cookie: "***" });
+});
 
 // Ambient browser env of the developer's shell (and of an omp running the suite) must not pick the backend.
 const ENV_KEYS = [

@@ -363,31 +363,36 @@ def test_heartbeat_write_does_not_block_the_loop_it_monitors():
     )
 
 
-def test_loop_stall_logger_captures_blocked_loop_once(caplog):
-    from gateway.shutdown_watchdog import start_loop_stall_logger
-    from tests.waiting import async_wait_until
+def test_loop_stall_logger_captures_blocked_loop_once(monkeypatch, caplog):
+    from types import SimpleNamespace
 
-    async def scenario():
-        guard = start_loop_stall_logger(asyncio.get_running_loop())
-        try:
-            def blocking_call():
-                time.sleep(2.8)
-            blocking_call()
-            await async_wait_until(
-                lambda: any('event loop recovered' in record.message for record in caplog.records),
-                timeout=5,
-                what='the loop stall recovery warning',
-            )
-        finally:
-            guard.stop()
+    from gateway import shutdown_watchdog
 
-    asyncio.run(scenario())
+    logger = object.__new__(shutdown_watchdog._LoopStallLogger)
+    logger._last_beat = 10.0
+    logger._thread_id = threading.get_ident()
+
+    class StopSequence:
+        def __init__(self):
+            self.calls = 0
+
+        def wait(self, _timeout):
+            self.calls += 1
+            if self.calls == 4:
+                logger._last_beat = 11.5
+            return self.calls == 5
+
+    logger._stop = StopSequence()
+    times = iter((12.1, 13.5, 13.5, 13.5))
+    monkeypatch.setattr(shutdown_watchdog, 'time', SimpleNamespace(monotonic=lambda: next(times)))
+    logger._watch()
+
     stalls = [record for record in caplog.records if 'event loop stalled' in record.message]
     recoveries = [record for record in caplog.records if 'event loop recovered' in record.message]
     assert len(stalls) == 1
-    assert 'blocking_call' in stalls[0].message
+    assert 'test_loop_stall_logger_captures_blocked_loop_once' in stalls[0].message
     assert len(recoveries) == 1
-    assert recoveries[0].args[0] >= 2.5
+    assert recoveries[0].args == (3.5,)
 
 
 def test_loop_stall_logger_is_opt_in(monkeypatch):

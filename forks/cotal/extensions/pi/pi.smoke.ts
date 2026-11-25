@@ -370,6 +370,66 @@ const tick = (): Promise<void> => new Promise((resolve) => setImmediate(resolve)
   driver.requestShutdown();
 }
 
+// An error poller stops when the next run starts before normal completion.
+{
+  const mesh = new FakeMesh();
+  const driver = new PiDriver(mesh as unknown as MeshAgent, 20);
+  driver.bind(new FakeHost());
+  const ctx = context();
+  driver.onSessionStart(ctx);
+  driver.onAgentStart(ctx);
+  driver.onAgentEnd([{ role: "assistant", stopReason: "error", errorStatus: 503 }], ctx);
+  driver.onAgentStart(ctx);
+  ctx.idle = true;
+  driver.onAgentEnd([{ role: "assistant", stopReason: "stop" }], ctx);
+  await delay(20);
+  await driver.flushPresence();
+  ok(mesh.statuses.at(-1)?.status === "idle" && mesh.statuses.at(-1)?.activity !== "error: provider 503",
+    "an error end cannot leave its note after the next run ends normally");
+  driver.requestShutdown();
+}
+
+// A later idle publication cancels a late error poller in the same run.
+{
+  const mesh = new FakeMesh();
+  const driver = new PiDriver(mesh as unknown as MeshAgent, 20);
+  driver.bind(new FakeHost());
+  const ctx = context();
+  driver.onSessionStart(ctx);
+  driver.onAgentStart(ctx);
+  driver.onAgentStart(ctx);
+  driver.onAgentEnd([{ role: "assistant", stopReason: "error", errorStatus: 503 }], ctx);
+  ctx.idle = true;
+  driver.onAgentEnd([{ role: "assistant", stopReason: "stop" }], ctx);
+  await delay(20);
+  await driver.flushPresence();
+  ok(mesh.statuses.at(-1)?.status === "idle" && mesh.statuses.at(-1)?.activity !== "error: provider 503",
+    "a newer idle publication cancels the pending error note");
+  driver.requestShutdown();
+}
+
+// A refused in-flight hold still publishes idle and cancels a stale error note.
+{
+  const mesh = new FakeMesh();
+  const driver = new PiDriver(mesh as unknown as MeshAgent, 20);
+  driver.bind(new FakeHost());
+  const ctx = context();
+  driver.onSessionStart(ctx);
+  driver.onAgentStart(ctx);
+  driver.onAgentStart(ctx);
+  driver.onAgentEnd([{ role: "assistant", stopReason: "error", errorStatus: 503 }], ctx);
+  mesh.items.push(item("deferred"));
+  mesh.refuseHolds = true;
+  ctx.idle = true;
+  driver.onAgentEnd([{ role: "assistant", stopReason: "stop" }], ctx);
+  await delay(20);
+  await driver.flushPresence();
+  ok(mesh.items[0]?.id === "deferred" && mesh.statuses.at(-1)?.status === "idle" &&
+    mesh.statuses.at(-1)?.activity !== "error: provider 503",
+    "a refused in-flight hold keeps its item and clears a stale error note");
+  driver.requestShutdown();
+}
+
 {
   const mesh = new FakeMesh();
   const driver = new PiDriver(mesh as unknown as MeshAgent, 20);
@@ -444,7 +504,6 @@ const tick = (): Promise<void> => new Promise((resolve) => setImmediate(resolve)
     "an aborted signal labels an error end as aborted");
   driver.requestShutdown();
 }
-
 
 {
   const mesh = new FakeMesh();

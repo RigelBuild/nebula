@@ -121,6 +121,7 @@ export class PiDriver {
   private knownAtErrorEnd = new Set<string>();
   private startHoldBatchId?: string;
   private runSeq = 0;
+  private idlePublishSeq = 0;
   // Counts holds. A lost-steer watch stands down once a later hold replaces the one it was armed for.
   private holdSeq = 0;
 
@@ -289,7 +290,7 @@ export class PiDriver {
       .catch(() => {});
   }
 
-  onAgentEnd(messages: readonly unknown[], context: PiContextLike): void {
+  onAgentEnd(messages: readonly unknown[], _context: PiContextLike): void {
     if (this._state === "shuttingDown") return;
     const lastAssistant = [...messages]
       .reverse()
@@ -325,7 +326,8 @@ export class PiDriver {
         this.inboundDuringTurn = undefined;
         this.continuationAttempts = 0;
         this._state = "idle";
-        this.publishIdleWhenSettled(this.context ?? context, turnEndActivity);
+        if (!this.context) return;
+        this.publishIdleWhenSettled(this.context, turnEndActivity);
         return;
       }
       this.pendingContinuation = true;
@@ -364,7 +366,7 @@ export class PiDriver {
     this.knownAtErrorEnd.clear();
     this.retryableErrorHold = false;
     this.inboundDuringTurn = undefined;
-    this.finalizeEnd(context);
+    this.finalizeEnd();
   }
 
   onBeforeCompact(reason: string, willRetry: boolean): void {
@@ -585,7 +587,7 @@ export class PiDriver {
     if (batch.turnIds) this.mesh.commitSurfacedTurns(batch.turnIds);
   }
 
-  private finalizeEnd(context: PiContextLike): void {
+  private finalizeEnd(): void {
     if (this._state === "shuttingDown") return;
     if (this.overflowRetry) return;
     const confirmed = this.batches.filter((batch) => batch.confirmed);
@@ -604,7 +606,8 @@ export class PiDriver {
     this._state = "idle";
     this.heldReason = undefined;
     this.pump();
-    if (this._state === "idle") this.publishIdleWhenSettled(this.context ?? context);
+    // `pump` may return without publishing idle; a second call supersedes pump's poller.
+    if (this._state === "idle" && this.context) this.publishIdleWhenSettled(this.context);
   }
 
   /** Fires once after the fixed backoff to re-dispatch the still-unconfirmed batch through the same
@@ -682,8 +685,9 @@ export class PiDriver {
 
   private publishIdleWhenSettled(context: PiContextLike, activity?: string): void {
     const runSeq = this.runSeq;
+    const idlePublishSeq = ++this.idlePublishSeq;
     const check = (): void => {
-      if (this._state !== "idle" || this.runSeq !== runSeq) return;
+      if (this._state !== "idle" || this.runSeq !== runSeq || this.idlePublishSeq !== idlePublishSeq) return;
       if (this.context !== context) return;
       if (!context.isIdle()) {
         setTimeout(check, 10).unref?.();

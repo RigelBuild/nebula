@@ -78,22 +78,25 @@ async def admit_message(authority, event):
     # A drain already running can claim, run and settle the row before this caller resumes; one
     # that settled it already sent (or owes) the reply itself and resolves no waiter registered now.
     from hermes_state_runtime import get_session_admission
-    row = get_session_admission(authority.db, admission_id=receipt.admission_id)
+    row = await asyncio.to_thread(get_session_admission, authority.db, admission_id=receipt.admission_id)
     status = 'terminal' if row is None else row['status']  # None: deleted with its chat, nothing owed
     note_busy_admitted(event, receipt.admission_id, status, None if row is None else row.get('outcome'))
-    if status in ('terminal', 'unknown'):
-        authority.native_waiters.discard(receipt.admission_id)
-        if authority.waiters.get(receipt.admission_id) is waiter:
-            del authority.waiters[receipt.admission_id]
-        if adopters.get(receipt.admission_id) is event:
-            del adopters[receipt.admission_id]
-        return None if status == 'terminal' else pause_notice(authority, receipt.ref, 'unknown_execution')
-    if accepted is not None and not accepted.done():
-        accepted.set_result(None)
     try:
+        # Settlement may resolve this waiter while the status read is running off-loop.
+        if waiter.done():
+            return await asyncio.shield(waiter)
+        if status in ('terminal', 'unknown'):
+            authority.native_waiters.discard(receipt.admission_id)
+            if authority.waiters.get(receipt.admission_id) is waiter:
+                del authority.waiters[receipt.admission_id]
+            if adopters.get(receipt.admission_id) is event:
+                del adopters[receipt.admission_id]
+            return None if status == 'terminal' else pause_notice(authority, receipt.ref, 'unknown_execution')
+        if accepted is not None and not accepted.done():
+            accepted.set_result(None)
         return await asyncio.shield(waiter)
     except RuntimeStoreError as exc:
-        row = get_session_admission(authority.db, admission_id=receipt.admission_id)
+        row = await asyncio.to_thread(get_session_admission, authority.db, admission_id=receipt.admission_id)
         if row is not None and row['status'] == 'terminal':
             # The drain refused this head (``_refuse_head``): cancelled, not saved behind a pause.
             return (f'⚠️ Hermes did not answer this message ({exc.reason}): the conversation it was '

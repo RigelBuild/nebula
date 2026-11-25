@@ -713,7 +713,7 @@ class GatewayInboundMixin(GatewayInboundHooksMixin, GatewayInboundTranscriptionM
                 # Claimed meanwhile (stale_generation): it runs as main's post-claim race does.
                 with suppress(RuntimeStoreError):
                     await authority.cancel_queued(actor, ref, row['admission_id'])
-        handle = authority._handle(ref)
+        handle = await asyncio.to_thread(authority._handle, ref)
         if handle.execution_state == 'running':
             # Settled meanwhile (stale_generation): there is no claimed turn left to stop.
             with suppress(RuntimeStoreError):

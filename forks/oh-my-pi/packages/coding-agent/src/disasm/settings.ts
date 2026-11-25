@@ -81,6 +81,7 @@ export const cfgDisasmMemoryMax = register({
 	type: "string",
 	default: "6G",
 	validate: raw => {
+		if (raw === undefined || raw === null) return;
 		if (typeof raw !== "string") throw new Error("disassembler.memoryMax must be a systemd memory value");
 		if (raw === "" || raw === "infinity") return;
 		const match = /^(\d+(?:\.\d+)?)([KMGTPE%]?)$/.exec(raw);

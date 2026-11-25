@@ -81,16 +81,19 @@ async def admit_message(authority, event):
     row = await asyncio.to_thread(get_session_admission, authority.db, admission_id=receipt.admission_id)
     status = 'terminal' if row is None else row['status']  # None: deleted with its chat, nothing owed
     note_busy_admitted(event, receipt.admission_id, status, None if row is None else row.get('outcome'))
-    if status in ('terminal', 'unknown'):
-        authority.native_waiters.discard(receipt.admission_id)
-        if authority.waiters.get(receipt.admission_id) is waiter:
-            del authority.waiters[receipt.admission_id]
-        if adopters.get(receipt.admission_id) is event:
-            del adopters[receipt.admission_id]
-        return None if status == 'terminal' else pause_notice(authority, receipt.ref, 'unknown_execution')
-    if accepted is not None and not accepted.done():
-        accepted.set_result(None)
     try:
+        # Settlement may resolve this waiter while the status read is running off-loop.
+        if waiter.done():
+            return await asyncio.shield(waiter)
+        if status in ('terminal', 'unknown'):
+            authority.native_waiters.discard(receipt.admission_id)
+            if authority.waiters.get(receipt.admission_id) is waiter:
+                del authority.waiters[receipt.admission_id]
+            if adopters.get(receipt.admission_id) is event:
+                del adopters[receipt.admission_id]
+            return None if status == 'terminal' else pause_notice(authority, receipt.ref, 'unknown_execution')
+        if accepted is not None and not accepted.done():
+            accepted.set_result(None)
         return await asyncio.shield(waiter)
     except RuntimeStoreError as exc:
         row = await asyncio.to_thread(get_session_admission, authority.db, admission_id=receipt.admission_id)

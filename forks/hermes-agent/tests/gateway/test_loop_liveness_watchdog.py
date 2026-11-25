@@ -367,7 +367,7 @@ def test_loop_stall_logger_warns_only_over_threshold(caplog):
     from gateway.shutdown_watchdog import loop_stall_logger
 
     async def scenario():
-        clock = iter([0.0, 2.9, 3.0, 6.1])
+        clock = iter([0.0, 2.9, 3.0, 6.1, 7.0])
         loop = asyncio.get_running_loop()
         with patch.object(loop, 'time', side_effect=lambda: next(clock)), \
              patch('gateway.shutdown_watchdog.asyncio.sleep', side_effect=[None, None, asyncio.CancelledError]):

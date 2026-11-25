@@ -243,6 +243,7 @@ const STATIC_ROUTES: Record<string, true> = {
 	"/v1/usage/stale": true,
 	"/v1/credentials/disabled": true,
 	"/v1/credential": true,
+	"/v1/readyz": true,
 };
 
 /** Only known routes reach logs verbatim; unknown paths may carry caller-supplied secrets. */
@@ -497,6 +498,15 @@ class SnapshotSource {
 
 	get generation(): number {
 		return this.#storage.credentials.generation;
+	}
+
+	/** Check cached credential rows without reloading storage or invoking refresh. */
+	hasUsableCredential(): boolean {
+		const now = Date.now();
+		return this.#currentRows().credentials.some(({ credential }) => {
+			if (credential.type === "api_key") return credential.key.length > 0;
+			return credential.access.length > 0 && Number.isFinite(credential.expires) && credential.expires > now;
+		});
 	}
 
 	/**
@@ -985,6 +995,11 @@ export function startAuthBroker(opts: AuthBrokerServerOptions): AuthBrokerServer
 				if (req.method === "GET" && pathname === "/v1/healthz") {
 					const body: HealthzResponse = { ok: true, version };
 					return json(200, body);
+				}
+				if (req.method === "GET" && pathname === "/v1/readyz") {
+					return snapshotSource.hasUsableCredential()
+						? json(200, { ok: true })
+						: json(503, { ok: false, reason: "no_usable_credentials" });
 				}
 				if (metricsEnabled && req.method === "GET" && pathname === "/metrics") {
 					if (!isAuthorized(req, metricsTokens, openWhenEmpty)) {

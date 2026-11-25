@@ -240,7 +240,8 @@ const EMPTY_RESPONSE_PATTERN =
  *  other "malformed response" errors (e.g. an image API's) stay terminal. */
 const MALFORMED_RESPONSE_FINISH_PATTERN = /\bfinish reason:\s*MALFORMED_RESPONSE\b/i;
 const CONTENT_FILTER_PATTERN = /\b(?:incomplete:\s*)?content_filter\b/i;
-const WRAPPED_REFUSAL_PATTERN = /(?:^|OpenAIException - |APIError: |: )Refusal \([a-z_]+\)/;
+/** LiteLLM provider exceptions and bare classifier refusal diagnostics. */
+const WRAPPED_REFUSAL_PATTERN = /(?:^|[\s:"-])Refusal(?: \([a-z_ ]+\)(?=[:"\s,}]|$)|(?=[:",}]|\s*$))/;
 
 export function isClassifierRefusalText(text: string): boolean {
 	return WRAPPED_REFUSAL_PATTERN.test(text);

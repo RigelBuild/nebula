@@ -223,6 +223,29 @@ describe("error-id classification", () => {
 		expect(AIError.isProviderRetryableError(inBandError)).toBe(false);
 	});
 
+	it.each([
+		"500 Refusal (cyber): blocked",
+		"500 litellm.InternalServerError: AnthropicException - Refusal (cyber): blocked",
+		"500 litellm.APIConnectionError: OpenAIException - Refusal (no details provided)",
+		"500 litellm.APIConnectionError: OpenAIException - Refusal",
+		"Refusal",
+	])("classifies refusal diagnostics as non-retriable: %s", errorMessage => {
+		const id = AIError.classifyMessage(message({ errorStatus: 500, errorMessage }));
+		expect(AIError.is(id, AIError.Flag.ContentBlocked)).toBe(true);
+		expect(AIError.retriable(id)).toBe(false);
+	});
+
+	it.each([
+		"500 network error: refusal to connect",
+		"500 connection refused",
+		"500 Refusal to connect to upstream",
+		"500 Refusals from upstream",
+	])("does not classify ordinary network errors as refusals: %s", errorMessage => {
+		const id = AIError.classifyMessage(message({ errorStatus: 500, errorMessage }));
+		expect(AIError.is(id, AIError.Flag.ContentBlocked)).toBe(false);
+		expect(AIError.retriable(id)).toBe(true);
+	});
+
 	it("keeps an ordinary 500 retryable", () => {
 		const errorMessage = "500 Internal Server Error";
 		const id = AIError.classifyMessage(message({ errorStatus: 500, errorMessage }));

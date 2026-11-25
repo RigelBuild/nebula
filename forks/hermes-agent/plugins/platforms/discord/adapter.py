@@ -2034,7 +2034,7 @@ class DiscordAdapter(DiscordAuthorizationMixin, DiscordMediaMixin, DiscordThread
             return False, "latency_non_finite"
         # TODO(RIG-12819, owner: harness): remove when discord.py ships f9c66a6a38 (heartbeat latency race).
         # discord.py 2.7.1 can expose the previous heartbeat's latency when its ACK beats _last_send.
-        if latency > self._max_latency_seconds and latency < getattr(keep_alive, "interval", 0) - 1:
+        if latency < getattr(keep_alive, "interval", math.inf) - 1 and latency > self._max_latency_seconds:
             return False, "latency_exceeded"
         # Dispatch-side dimension (#109521 incident 2): transport-green + event-starved is the
         # connected-but-deaf fingerprint. Gated HERE only — never in _start_liveness_probe — so an

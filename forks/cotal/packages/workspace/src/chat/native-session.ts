@@ -116,23 +116,26 @@ export function grantRefusal(grant: readonly string[], channel: string, use: "re
   return { outcome: "refused", code: "PERMISSION_DENIED", message };
 }
 
+function vouchable(p: Presence): boolean {
+  return p.card.kind === "agent" && p.card.meta?.sessionKind !== "chat" && p.lifecycleUid !== undefined;
+}
+
 function managerAnsweredFor(census: PsReply | undefined, seat: Presence): boolean {
   return census?.ok === true && census.silent.length === 0 && census.failed.length === 0 &&
-    seat.lifecycleUid !== undefined && census.answered.some((manager) =>
-      manager.rows.some((row) => row.id === seat.card.id && row.lifecycleUid === seat.lifecycleUid));
+    vouchable(seat) &&
+    census.answered.some((manager) => manager.rows.some((row) => row.id === seat.card.id && row.lifecycleUid === seat.lifecycleUid));
 }
 
 function needsManagerCensus(to: DmTarget, roster: readonly Presence[], rosterState: PresenceView["state"], engine: ParticipantEngine, selfPrincipal: string): boolean {
-  if (typeof to !== "string" || rosterState !== "current") return false;
-  const peer = roster.find((p) => p.card.id !== selfPrincipal && p.status !== "offline" && p.card.name.trim().toLowerCase() === to.trim().toLowerCase());
-  return peer !== undefined && engine.sendersNamed(to).some((sender) => {
-    const entry = roster.find((p) => p.card.id === sender.id);
-    return entry?.status === "offline";
-  });
+  if (typeof to !== "string" || parsePrincipalKey(to) || rosterState !== "current") return false;
+  const want = to.trim().toLowerCase();
+  const peers = roster.filter((p) => p.card.id !== selfPrincipal && p.status !== "offline" && p.card.name.toLowerCase() === want);
+  return peers.length === 1 && peers[0] !== undefined && vouchable(peers[0]) && engine.sendersNamed(to).some((sender) =>
+    !roster.some((p) => p.card.id === sender.id && p.status !== "offline"));
 }
 
 /** Resolve a DM target before effects. Exact principals bypass names; names include roster peers and heard senders.
- * Absence is a verdict only on a current roster. An offline heard sender is ignored beside a present peer only when a complete manager census reports that exact managed incarnation. */
+ * Absence is a verdict only on a current roster. Absent or offline heard senders are skipped only beside one present agent confirmed by a complete manager census. */
 export function resolveDmTarget(
   to: DmTarget,
   roster: readonly Presence[],
@@ -157,12 +160,11 @@ export function resolveDmTarget(
   }
   const named = new Map<string, { id: string; name: string }>();
   if (peer) named.set(peer.card.id, { id: peer.card.id, name: peer.card.name });
-  const presentPeer = peer !== undefined && peer.status !== "offline";
+  const presentPeer = rosterState === "current" && peer !== undefined && peer.status !== "offline" && managerAnsweredFor(census, peer);
   for (const sender of engine.sendersNamed(to)) {
     if (named.has(sender.id)) continue;
-    const rosterEntry = rosterState === "current" ? roster.find((p) => p.card.id === sender.id) : undefined;
-    const isOfflineManagedSeat = rosterState === "current" && presentPeer && rosterEntry?.status === "offline" && managerAnsweredFor(census, rosterEntry);
-    if (isOfflineManagedSeat) continue;
+    const senderPresent = roster.some((p) => p.card.id === sender.id && p.status !== "offline");
+    if (presentPeer && !senderPresent) continue;
     named.set(sender.id, sender);
   }
   if (named.size > 1) {
@@ -269,7 +271,7 @@ export class NativeChatSession implements AdmittedChatSession {
     return { principal: this.inputs.identity.principal, name: this.inputs.identity.label, answerOne: this.inputs.words.answerOne };
   }
 
-  /** Read the manager census only when a current roster and offline heard agent make it relevant. */
+  /** Read the manager census only when a current roster and an absent or offline heard sender make it relevant. */
   private async managerCensusFor(to: DmTarget, roster: readonly Presence[], rosterState: PresenceView["state"]): Promise<PsReply | undefined> {
     if (!needsManagerCensus(to, roster, rosterState, this.engine, this.inputs.identity.principal) || !this.inputs.managerCensus) return undefined;
     try {

@@ -201,6 +201,7 @@ if (mode === "plain" || mode === "stdio") {
       on: () => {}, off: () => {}, stop: async () => {},
       getChannelConfig: () => undefined,
       getRoster: () => [], presenceView: () => ({ state: "current" }),
+      readPresence: async () => [],
       joinedChannels: () => ["general"],
       chatRetention: async () => {
         if (unreadable) throw new Error("broker unavailable");
@@ -260,6 +261,60 @@ if (mode === "plain" || mode === "stdio") {
     check("a --stdio dm whose to parses as a principal is sent to that principal, absent and unheard",
       viaStdio?.outcome === "stored" && stdioRecipient?.id === "u_z.alice" && sent.join() === "u_z.alice,u_z.alice", { line, viaStdio, sent });
     check("the peer whose display name spells the principal received nothing", !sent.includes("u_d.mallory"), sent);
+  }
+
+  {
+    const uid = "01hyyyyyyyyyyyyyyyyyyyyyyy";
+    const present = { card: { id: "u_c.alice", name: "alice", kind: "agent" }, status: "idle", ts: 0, lifecycleUid: uid };
+    const offline = { card: { id: "u_a.alice", name: "alice", kind: "agent" }, status: "offline", ts: 0 };
+    const chatPeer = { ...present, card: { ...present.card, meta: { sessionKind: "chat" } } };
+    const row = { id: present.card.id, name: "alice", agent: "agent", mode: "run", status: "running", uptimeMs: 1, mesh: "online", lifecycleUid: uid };
+    let roster: (typeof present | typeof offline | typeof chatPeer)[] = [present], state = "current", calls = 0, throws = false;
+    const sent: string[] = [];
+    const emitter = Object.assign(new EventEmitter(), {
+      getRoster: () => roster, presenceView: () => ({ state }),
+      unicastAttributed: async (to: string) => { sent.push(to); return { msg: { id: "d1" }, ack: { seq: 1, duplicate: false } }; },
+    });
+    const endpoint = emitter as unknown as CotalEndpoint;
+    const session = new NativeChatSession({ endpoint, identity, words, retire: async () => ({ retirement: "retired", connectionClosed: "confirmed", message: "" }),
+      managerCensus: async () => { calls++; if (throws) throw new Error("census failed"); return { ok: true, rows: [row], silent: [], failed: [], answered: [{ instanceId: "manager-1", rows: [row] }] }; } });
+    const noHeard = await session.dm("alice", "hi");
+    check("no heard sender needs no census", noHeard.outcome === "stored" && calls === 0, { noHeard, calls });
+    emitter.emit("message", { id: "m1", ts: 0, space: identity.space, from: { id: offline.card.id, name: "alice" }, channel: "general", parts: [{ kind: "text", text: "hi" }] }, { ack() {}, nak() {}, durable: false }, { historical: false, kind: "channel" });
+    const resolved = await session.dm(" Alice ", "hi");
+    check("absent heard sender triggers one census and reaches the present seat", resolved.outcome === "stored" && calls === 1 && sent.at(-1) === present.card.id, { resolved, calls, sent });
+    roster = [present, offline];
+    const offlineResolved = await session.dm("alice", "hi");
+    check("offline roster sender also triggers one census", offlineResolved.outcome === "stored" && calls === 2 && sent.at(-1) === present.card.id, { offlineResolved, calls, sent });
+    const exact = await session.dm(offline.card.id, "hi");
+    check("exact principal bypasses census", exact.outcome === "stored" && calls === 2 && sent.at(-1) === offline.card.id, { exact, calls });
+    const exactObject = await session.dm({ principal: offline.card.id }, "hi");
+    check("object principal bypasses census", exactObject.outcome === "stored" && calls === 2 && sent.at(-1) === offline.card.id, { exactObject, calls });
+    roster = [present, { ...offline, status: "idle", card: { ...offline.card, name: "renamed" } }];
+    const stillPresent = await session.dm("alice", "hi");
+    check("a still-present heard sender bypasses census and preserves ambiguity", stillPresent.outcome === "refused" && stillPresent.code === "TARGET_AMBIGUOUS" && calls === 2, { stillPresent, calls });
+    roster = [{ ...present, card: { ...present.card, kind: "endpoint" } }, offline];
+    const human = await session.dm("alice", "hi");
+    check("a present human cannot be vouched for and bypasses census", human.outcome === "refused" && human.code === "TARGET_AMBIGUOUS" && calls === 2, { human, calls });
+    roster = [chatPeer, offline];
+    const chat = await session.dm("alice", "hi");
+    check("a present chat session cannot be vouched for and bypasses census", chat.outcome === "refused" && chat.code === "TARGET_AMBIGUOUS" && calls === 2, { chat, calls });
+    roster = [{ ...offline, card: present.card, status: "idle" }, offline];
+    const noUid = await session.dm("alice", "hi");
+    check("a present agent without a lifecycle UID bypasses census", noUid.outcome === "refused" && noUid.code === "TARGET_AMBIGUOUS" && calls === 2, { noUid, calls });
+    roster = [present, offline];
+    state = "stale";
+    const stale = await session.dm("alice", "hi");
+    check("stale roster bypasses census and refuses", stale.outcome === "refused" && calls === 2, { stale, calls });
+    state = "current"; roster = [offline];
+    await session.dm("alice", "hi");
+    check("no present peer bypasses census", calls === 2, calls);
+    roster = [present, { ...present, card: { ...present.card, id: "u_d.alice" } }, offline];
+    const multiple = await session.dm("alice", "hi");
+    check("multiple present peers bypass census and refuse", multiple.outcome === "refused" && calls === 2, { multiple, calls });
+    roster = [present, offline]; throws = true;
+    const failed = await session.dm("alice", "hi");
+    check("thrown census preserves ambiguity", failed.outcome === "refused" && failed.code === "TARGET_AMBIGUOUS" && calls === 3, { failed, calls });
   }
 
   {

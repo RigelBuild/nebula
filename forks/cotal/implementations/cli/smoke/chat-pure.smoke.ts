@@ -362,7 +362,7 @@ const task = msg({ id: "t1", kind: "anycast", service: "reviewer", from: { id: "
   check("/who names a working peer's progress as unknown", who.length === 1 && who[0] === "carol · agent · working · progress unknown · building", who);
 }
 {
-  const managedRow = { id: "u_a.alice", name: "alice", agent: "agent", mode: "run", status: "exited", uptimeMs: 1, mesh: "offline", lifecycleUid: "01hzzzzzzzzzzzzzzzzzzzzzzz" } satisfies ManagedRow;
+  const managedRow = { id: "u_c.alice", name: "alice", agent: "agent", mode: "run", status: "running", uptimeMs: 1, mesh: "online", lifecycleUid: "01hyyyyyyyyyyyyyyyyyyyyyyy" } satisfies ManagedRow;
   const managerAnswered = { ok: true, rows: [managedRow], silent: [], failed: [], answered: [{ instanceId: "manager-1", rows: [managedRow] }] } satisfies PsReply;
   const roster = [presence("u_c.alice", "alice"), presence("o.bob", "bob")];
   const engine = heard(["u_a.alice", "alice"]);
@@ -380,22 +380,33 @@ const task = msg({ id: "t1", kind: "anycast", service: "reviewer", from: { id: "
   check("a typed target that is this session's principal refuses as usage, as the exact target does", "outcome" in typedSelf && typedSelf.code === "USAGE_INVALID", typedSelf);
   const bob = resolveDmTarget("bob", roster, "current", engine, me);
   check("a name one principal carries still resolves", !("outcome" in bob) && bob.id === "o.bob", bob);
-  const went = resolveDmTarget("alice", [presence("u_c.alice", "alice"), presence("u_a.alice", "alice", "offline")], "current", engine, me);
   const presentSeat = { ...presence("u_c.alice", "alice"), lifecycleUid: "01hyyyyyyyyyyyyyyyyyyyyyyy" };
   const deadSeat = { ...presence("u_a.alice", "alice", "offline"), lifecycleUid: "01hzzzzzzzzzzzzzzzzzzzzzzz" };
   const managed = resolveDmTarget("alice", [presentSeat, deadSeat], "current", heard(["u_a.alice", "alice"]), me, managerAnswered);
   check("an offline heard managed seat does not make a present peer's name ambiguous",
     !("outcome" in managed) && managed.id === "u_c.alice", managed);
+  const renamedSender = resolveDmTarget("alice", [presentSeat, presence("u_a.alice", "renamed")], "current", engine, me, managerAnswered);
+  check("a heard sender still present under another roster name preserves ambiguity even when the peer is confirmed",
+    "outcome" in renamedSender && renamedSender.code === "TARGET_AMBIGUOUS" && renamedSender.message.includes("u_c.alice") && renamedSender.message.includes("u_a.alice"), renamedSender);
   const offlineHuman = { ...presence("u_a.alice", "alice", "offline"), lifecycleUid: "01hbbbbbbbbbbbbbbbbbbbbbbb", card: { ...presence("u_a.alice", "alice").card, kind: "endpoint" as const, meta: { sessionKind: "chat" } } };
-  const humanSender = resolveDmTarget("alice", [presence("u_c.alice", "alice"), offlineHuman], "current", heard(["u_a.alice", "alice"]), me, managerAnswered);
-  check("an offline heard human sender still makes a present peer's name ambiguous",
-    "outcome" in humanSender && humanSender.code === "TARGET_AMBIGUOUS", humanSender);
-  const staticSender = resolveDmTarget("alice", [presence("u_c.alice", "alice"), presence("u_a.alice", "alice", "offline")], "current", heard(["u_a.alice", "alice"]), me, managerAnswered);
-  check("an offline static agent without a lifecycle uid still makes a present peer's name ambiguous",
-    "outcome" in staticSender && staticSender.code === "TARGET_AMBIGUOUS", staticSender);
-  const unrostered = resolveDmTarget("alice", [presence("u_c.alice", "alice")], "current", heard(["u_a.alice", "alice"]), me, managerAnswered);
-  check("an offline heard sender without a roster row still makes a present peer's name ambiguous",
-    "outcome" in unrostered && unrostered.code === "TARGET_AMBIGUOUS", unrostered);
+  const humanSender = resolveDmTarget("alice", [presentSeat, offlineHuman], "current", heard(["u_a.alice", "alice"]), me, managerAnswered);
+  check("an offline heard human sender is skipped when the present seat is confirmed",
+    !("outcome" in humanSender) && humanSender.id === "u_c.alice", humanSender);
+  const missingPresent = resolveDmTarget("alice", [presentSeat, deadSeat], "current", heard(["u_a.alice", "alice"]), me, { ...managerAnswered, answered: [] });
+  check("a census without the present seat preserves ambiguity", "outcome" in missingPresent && missingPresent.code === "TARGET_AMBIGUOUS", missingPresent);
+  const mismatch = resolveDmTarget("alice", [presentSeat, deadSeat], "current", heard(["u_a.alice", "alice"]), me, { ...managerAnswered, answered: [{ instanceId: "manager-1", rows: [{ ...managedRow, lifecycleUid: deadSeat.lifecycleUid }] }] });
+  check("a mismatched present incarnation preserves ambiguity", "outcome" in mismatch && mismatch.code === "TARGET_AMBIGUOUS", mismatch);
+  const humanPresent = resolveDmTarget("alice", [{ ...presentSeat, card: { ...presentSeat.card, kind: "endpoint" } }, deadSeat], "current", heard(["u_a.alice", "alice"]), me, managerAnswered);
+  check("a human present peer cannot be vouched for by a manager row", "outcome" in humanPresent && humanPresent.code === "TARGET_AMBIGUOUS", humanPresent);
+  const chatPresent = resolveDmTarget("alice", [{ ...presentSeat, card: { ...presentSeat.card, meta: { sessionKind: "chat" } } }, deadSeat], "current", heard(["u_a.alice", "alice"]), me, managerAnswered);
+  check("a chat session cannot be vouched for by a manager row", "outcome" in chatPresent && chatPresent.code === "TARGET_AMBIGUOUS", chatPresent);
+  const unrostered = resolveDmTarget("alice", [presentSeat], "current", heard(["u_a.alice", "alice"]), me, managerAnswered);
+  check("a heard sender absent from both roster and census is skipped when the present seat is confirmed",
+    !("outcome" in unrostered) && unrostered.id === "u_c.alice", unrostered);
+  const absentPartial = resolveDmTarget("alice", [presentSeat], "current", engine, me, { ...managerAnswered, silent: ["manager-2"] });
+  check("a partial census preserves ambiguity for an absent sender", "outcome" in absentPartial && absentPartial.code === "TARGET_AMBIGUOUS", absentPartial);
+  const absentMismatch = resolveDmTarget("alice", [presentSeat], "current", engine, me, { ...managerAnswered, answered: [{ instanceId: "manager-1", rows: [{ ...managedRow, lifecycleUid: deadSeat.lifecycleUid }] }] });
+  check("a mismatched census preserves ambiguity for an absent sender", "outcome" in absentMismatch && absentMismatch.code === "TARGET_AMBIGUOUS", absentMismatch);
 
   const reply = resolveDmTarget({ principal: "u_a.alice" }, roster, "current", engine, me);
   check("an exact principal is sent as is and keeps the name this session heard", !("outcome" in reply) && reply.id === "u_a.alice" && reply.name === "alice", reply);
@@ -427,13 +438,17 @@ const task = msg({ id: "t1", kind: "anycast", service: "reviewer", from: { id: "
   check("unread census preserves ambiguity", "outcome" in unread && unread.code === "TARGET_AMBIGUOUS", unread);
   const partial = resolveDmTarget("alice", [presentSeat, deadSeat], "current", heard(["u_a.alice", "alice"]), me, { ok: true, rows: [managedRow], silent: ["manager-2"], failed: [], answered: [{ instanceId: "manager-1", rows: [managedRow] }] });
   check("partial census preserves ambiguity", "outcome" in partial && partial.code === "TARGET_AMBIGUOUS", partial);
+  const failed = resolveDmTarget("alice", [presentSeat, deadSeat], "current", heard(["u_a.alice", "alice"]), me, { ...managerAnswered, failed: [{ instanceId: "manager-2", error: "failed" }] });
+  check("failed manager preserves ambiguity", "outcome" in failed && failed.code === "TARGET_AMBIGUOUS", failed);
+  const multiple = resolveDmTarget("alice", [presentSeat, { ...presentSeat, card: { ...presentSeat.card, id: "u_d.alice" } }, deadSeat], "current", heard(["u_a.alice", "alice"]), me, managerAnswered);
+  check("multiple present peers preserve ambiguity", "outcome" in multiple && multiple.code === "TARGET_AMBIGUOUS", multiple);
   const staleRoster = resolveDmTarget("alice", [presentSeat, deadSeat], "stale", heard(["u_a.alice", "alice"]), me, managerAnswered);
   check("stale roster preserves ambiguity despite manager answer", "outcome" in staleRoster && staleRoster.code === "TARGET_AMBIGUOUS", staleRoster);
   const offlinePeer = resolveDmTarget("alice", [presence("u_c.alice", "alice", "offline"), deadSeat], "current", heard(["u_a.alice", "alice"]), me, managerAnswered);
   check("offline peer preserves ambiguity despite manager answer", "outcome" in offlinePeer && offlinePeer.code === "TARGET_AMBIGUOUS", offlinePeer);
   const joinedHuman = { ...presence("u_h.human", "alice", "offline"), lifecycleUid: "01haaaaaaaaaaaaaaaaaaaaaaa", card: { ...presence("u_h.human", "alice").card, kind: "endpoint" as const } };
   const humanJoin = resolveDmTarget("alice", [presentSeat, joinedHuman], "current", heard(["u_h.human", "alice"]), me, managerAnswered);
-  check("offline joined human remains ambiguous", "outcome" in humanJoin && humanJoin.code === "TARGET_AMBIGUOUS", humanJoin);
+  check("offline joined human is skipped when the present seat is confirmed", !("outcome" in humanJoin) && humanJoin.id === "u_c.alice", humanJoin);
 
 
 }

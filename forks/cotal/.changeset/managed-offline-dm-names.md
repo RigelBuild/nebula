@@ -2,4 +2,4 @@
 "@cotal-ai/workspace": patch
 ---
 
-A peer that has heard an offline seat and has a present peer with the same name can resolve that name to the present peer when the manager census confirms it is managed. If managers deny the census or do not all answer, the peer keeps the name ambiguous.
+In a chat session, a peer that has heard an absent or offline sender, including a human, can resolve that name to a single present agent with the same name when a complete manager census confirms the present agent's principal and lifecycle UID. If managers deny the census or do not all answer, the peer keeps the name ambiguous.

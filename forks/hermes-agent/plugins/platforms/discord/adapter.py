@@ -1479,12 +1479,12 @@ class DiscordAdapter(DiscordAuthorizationMixin, DiscordMediaMixin, DiscordThread
                 adapter_self._post_connect_task = asyncio.create_task(
                     adapter_self._run_post_connect_initialization()
                 )
-                if adapter_self._missed_message_backfill_enabled():
-                    adapter_self._ensure_missed_message_backfill_task()
-                repost = asyncio.create_task(adapter_self._repost_undelivered_exec_approval_cards())
-                adapter_self._background_tasks.add(repost)
-                repost.add_done_callback(adapter_self._background_tasks.discard)
-                repost.add_done_callback(_consume_background_task_result)
+                adapter_self._start_reconnect_recovery()
+
+            @self._client.event
+            async def on_resumed():
+                # RESUME replays no event from the gap, so it needs the same catch-up as a fresh connect.
+                adapter_self._start_reconnect_recovery()
 
             @self._client.event
             async def on_socket_event_type(event_type: str):
@@ -2505,8 +2505,21 @@ class DiscordAdapter(DiscordAuthorizationMixin, DiscordMediaMixin, DiscordThread
         raw = self._gate_env("DISCORD_MISSED_MESSAGE_BACKFILL_CHANNELS")
         if not raw.strip():
             allowed = self._get_allowed_channels()
-            return allowed | self._discord_free_response_channels()
+            return allowed | self._discord_free_response_channels() | self._active_discord_session_thread_ids()
         return self._gate_csv_set(raw)
+
+    def _active_discord_session_thread_ids(self) -> set[str]:
+        """Thread chat ids with a session inside the backfill window. A thread is scanned even when its
+        parent channel is not configured, because the parent-channel walk never reaches it."""
+        store = getattr(self, "_session_store", None)
+        if store is None:
+            return set()
+        window_minutes = max(1, int(self._missed_message_backfill_window_seconds() // 60))
+        return {
+            str(entry.origin.chat_id)
+            for entry in store.list_sessions(active_minutes=window_minutes)
+            if entry.platform == Platform.DISCORD and entry.chat_type == "thread" and entry.origin is not None
+        }
 
     def _missed_message_backfill_number(self, key: str, env_key: str, default, cast, lo, hi=None):
         """Numeric ``missed_message_backfill.<key>`` (dict extra wins over env), clamped to [lo, hi]."""
@@ -2552,6 +2565,16 @@ class DiscordAdapter(DiscordAuthorizationMixin, DiscordMediaMixin, DiscordThread
             tasks.append(task)
         return task
 
+    def _start_reconnect_recovery(self) -> None:
+        """Catch up on what a (re)connect missed: the missed-message backfill and the approval-card repost.
+        Runs on ready and on resume, because RESUME replays no event from the gap."""
+        if self._missed_message_backfill_enabled():
+            self._ensure_missed_message_backfill_task()
+        repost = asyncio.create_task(self._repost_undelivered_exec_approval_cards())
+        self._background_tasks.add(repost)
+        repost.add_done_callback(self._background_tasks.discard)
+        repost.add_done_callback(_consume_background_task_result)
+
     async def _finish_recovery_scan(self, scan_id: str, status: str, counts: dict, error: Optional[str] = None) -> None:
         await asyncio.to_thread(self._record_recovery_scan_complete, scan_id, status=status, error=error, **counts)
 
@@ -2582,7 +2605,7 @@ class DiscordAdapter(DiscordAuthorizationMixin, DiscordMediaMixin, DiscordThread
                 counts["scanned"] += 1
                 message_id = str(getattr(message, "id", ""))
                 self._record_discord_message_seen(message, status="discovered")
-                # Live events may race this REST scan: check without claiming; ingress owns the dedup write.
+                # Live events may race this REST scan: check without claiming; the dispatch below claims on admission.
                 if self._dedup.contains(message_id):
                     continue
                 if not await self._should_backfill_discord_message(message):
@@ -2643,7 +2666,7 @@ class DiscordAdapter(DiscordAuthorizationMixin, DiscordMediaMixin, DiscordThread
                 and not self._self_is_explicitly_mentioned(message)
             ):
                 return False
-        admitted, role_authorized = self._discord_message_admission(message, claim=False)
+        admitted, role_authorized = self._discord_message_admission(message, claim=True)
         if not admitted:
             return False
         if self._consume_text_approval(message):

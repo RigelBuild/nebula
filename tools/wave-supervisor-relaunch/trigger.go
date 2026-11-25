@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"io/fs"
+	"math"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/RigelBuild/nebula/tools/go-lib/relaunch"
 )
@@ -188,6 +190,36 @@ func startTimeOf(base string, fileSystem relaunch.FileSystem) (string, error) {
 		return "", err
 	}
 	return startTime(string(stat)), nil
+}
+
+// processStartTime returns zero if either proc record cannot provide a start time.
+func processStartTime(base string, fileSystem relaunch.FileSystem) time.Time {
+	const clockTicksPerSecond = 100
+	ticksText, err := startTimeOf(base, fileSystem)
+	if err != nil {
+		return time.Time{}
+	}
+	ticks, err := strconv.ParseUint(ticksText, 10, 64)
+	if err != nil {
+		return time.Time{}
+	}
+	stat, err := fileSystem.ReadFile(filepath.Join(filepath.Dir(base), "stat"))
+	if err != nil {
+		return time.Time{}
+	}
+	for line := range strings.SplitSeq(string(stat), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 2 || fields[0] != "btime" {
+			continue
+		}
+		boot, err := strconv.ParseInt(fields[1], 10, 64)
+		if err != nil || boot < 0 || ticks/clockTicksPerSecond > uint64(math.MaxInt64-boot) {
+			return time.Time{}
+		}
+		seconds := int64(ticks / clockTicksPerSecond) //nolint:gosec // The bound above ensures this conversion fits.
+		return time.Unix(boot+seconds, int64(ticks%clockTicksPerSecond)*int64(10*time.Millisecond))
+	}
+	return time.Time{}
 }
 
 func isZellijServer(base, runtimeDir string, fileSystem relaunch.FileSystem) (bool, error) {

@@ -197,8 +197,8 @@ func testRunRestartRequestsAndWedgeRecoveryWedgedOrphanEnumeratesProcOnceAnd(t *
 	if !valid || len(state.Spawns) != 1 {
 		t.Fatalf("charged state = %#v, valid=%t", state, valid)
 	}
-	if procEnumerations != 1 {
-		t.Fatalf("proc enumerations = %d, want 1", procEnumerations)
+	if procEnumerations != 4 {
+		t.Fatalf("proc enumerations = %d, want 4", procEnumerations)
 	}
 }
 
@@ -430,4 +430,57 @@ func testRunOrphanAndSpawnFlowManagerSeatStopsPrecedeTheSlice(t *testing.T) {
 	if seatStop < 0 || sliceStop < 0 || seatStop >= sliceStop {
 		t.Fatalf("stop order=%v", h.calls)
 	}
+}
+
+// TestOrphanSubagentGate exercises the whole-wave stop through runSupervisor using fake process
+// and session files.
+func TestOrphanSubagentGate(t *testing.T) {
+	t.Run("a dead seat counts zero and recovery proceeds", func(t *testing.T) {
+		h := newRunHarness()
+		h.endpoints = testOrphanEndpoints
+		h.ps = `{"name":"accounts","mesh":"idle","meshView":"current"}`
+		h.deps.StopSeats = func(ctx context.Context, names []string) error {
+			return stopManagedSeats(ctx, names, h.deps.Config.CotalSpace, func(_ context.Context, argv []string, _ string) (cotalreach.CommandResult, error) {
+				h.calls = append(h.calls, strings.Join(argv, " "))
+				return cotalreach.CommandResult{}, nil
+			}, liveCheckFor(h.deps.Paths.Proc, h.deps.FS, h.deps.Paths.Sessions, h.deps.Config.WaveSlice))
+		}
+		if got := runSupervisor(t.Context(), h.deps); got.Outcome != "relaunched" || !h.hasCall("stop-slice") || !h.hasCall("cotal stop --name accounts --space main") {
+			t.Fatalf("run=%#v calls=%v", got, h.calls)
+		}
+	})
+	t.Run("a live subagent skips and stops nothing", func(t *testing.T) {
+		h := newRunHarness()
+		h.endpoints = testOrphanEndpoints
+		h.installWaveScope()
+		h.fs.files["/sessions/-home-example-agents/session_census-supervisor/Sub.jsonl"] = []byte(`{"type":"model_usage"}` + "\n")
+		got := runSupervisor(t.Context(), h.deps)
+		if got.Outcome != outcomeSkipped || got.Reason != "skipped:subagents" || h.hasCall("stop-slice") || h.countPrefix("cotal stop") != 0 {
+			t.Fatalf("run=%#v calls=%v", got, h.calls)
+		}
+		if state, _ := relaunch.ReadState(h.deps.Paths.State, h.fs); len(state.Spawns) != 0 {
+			t.Fatalf("spawns after refusal = %q, want none", state.Spawns)
+		}
+	})
+	t.Run("one unreadable seat stops no seat and no slice", func(t *testing.T) {
+		h := newRunHarness()
+		h.endpoints = testOrphanEndpoints
+		h.installWaveScope()
+		h.fs.files["/proc/112/cgroup"] = []byte("0::/wave-agents.slice/scope2")
+		h.fs.files["/proc/112/cmdline"] = []byte("omp\x00")
+		h.fs.files["/proc/112/environ"] = []byte("COTAL_AGENT_FILE=/agents/accounts.md\x00")
+		h.fs.readHook = func(path string) ([]byte, error, bool) {
+			if path == "/proc/112/environ" {
+				return nil, errors.New("permission denied"), true
+			}
+			return nil, nil, false
+		}
+		got := runSupervisor(t.Context(), h.deps)
+		if got.Outcome != outcomeFailed || got.Reason != "census-incomplete" || h.hasCall("stop-slice") || h.countPrefix("cotal stop") != 0 {
+			t.Fatalf("run=%#v calls=%v", got, h.calls)
+		}
+		if state, _ := relaunch.ReadState(h.deps.Paths.State, h.fs); len(state.Spawns) != 0 {
+			t.Fatalf("spawns = %q, want none", state.Spawns)
+		}
+	})
 }

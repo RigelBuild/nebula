@@ -9,6 +9,10 @@ import (
 
 func waveStopDeps(deps runDeps) stopWaveDeps {
 	return stopWaveDeps{
+		CheckSubagents: func(checkCtx context.Context) error {
+			return waveLiveSubagents(checkCtx, deps.Paths.Proc, deps.FS, deps.Paths.Sessions, deps.Config.WaveSlice)
+		},
+		CheckDeadline: time.Duration(seatStopOuterDeadlineMS) * time.Millisecond,
 		StopSeats: func(stopCtx context.Context) error {
 			ps, err := deps.PS(stopCtx)
 			if err != nil {
@@ -70,6 +74,11 @@ func prepareOrphan(ctx context.Context, deps runDeps, state relaunch.RelaunchSta
 	if holdActive(deps) {
 		return finish(Outcome{Outcome: outcomeSkipped, Reason: reasonHold, ElapsedMS: elapsedMS(deps, startedAt)})
 	}
+	// A refusal here does not spend a spawn slot; a later stopWave check may do so.
+	if err := checkWaveSubagents(ctx, waveStopDeps(deps)); err != nil {
+		waveStopDeps(deps).noteSubagentRefusal(err)
+		return finish(Outcome{Outcome: outcomeSkipped, Reason: "skipped:subagents", State: stateOrphaned, ElapsedMS: elapsedMS(deps, startedAt)})
+	}
 	if wedged {
 		state.Spawns = appendSpawn(recent, isoNow(deps))
 		if err := relaunch.WriteState(deps.Paths.State, state, deps.FS); err != nil {
@@ -120,6 +129,9 @@ func stopOrphan(ctx context.Context, deps runDeps, manifest *WaveManifest, censu
 		return new(failed("census-failed", startedAt, deps, stateOrphaned, ""))
 	}
 	stopResult := stopWave(ctx, waveStopDeps(deps))
+	if stopResult == "skipped:subagents" {
+		return &Outcome{Outcome: outcomeSkipped, Reason: stopResult, State: stateOrphaned, ElapsedMS: elapsedMS(deps, startedAt)}
+	}
 	if stopResult != "stopped" {
 		return new(failed(stopResult, startedAt, deps, stateOrphaned, ""))
 	}

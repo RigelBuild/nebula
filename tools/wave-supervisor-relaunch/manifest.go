@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -32,6 +33,8 @@ const seatStopDeadlineMS = 60_000
 const seatStopOuterDeadlineMS = seatStopDeadlineMS + 5_000
 
 type stopWaveDeps struct {
+	CheckSubagents    func(context.Context) error
+	CheckDeadline     time.Duration
 	StopSeats         func(context.Context) error
 	StopSeatsDeadline time.Duration
 	WithTimeout       func(context.Context, time.Duration) (context.Context, context.CancelFunc)
@@ -56,11 +59,12 @@ func readText(fileSystem relaunch.FileSystem, path string) ([]byte, bool) {
 // cgroup directory carries the unit name, so the match is "/<slice>/" or a path ending "/<slice>".
 func inWaveSlice(fileSystem relaunch.FileSystem, procRoot, pid, slice string) bool {
 	data, ok := readText(fileSystem, filepath.Join(procRoot, pid, "cgroup"))
-	if !ok {
-		return false
-	}
+	return ok && cgroupInWaveSlice(string(data), slice)
+}
+
+func cgroupInWaveSlice(cgroup, slice string) bool {
 	segment := "/" + slice + "/"
-	for line := range strings.SplitSeq(string(data), "\n") {
+	for line := range strings.SplitSeq(cgroup, "\n") {
 		if strings.Contains(line, segment) || strings.HasSuffix(line, "/"+slice) {
 			return true
 		}
@@ -276,8 +280,17 @@ func writeAtomicJSON(path string, value any, fileSystem relaunch.FileSystem) err
 	return nil
 }
 
+// stopWave refuses to stop the wave when a subagent check fails before seat or slice shutdown.
 func stopWave(ctx context.Context, deps stopWaveDeps) string {
+	if err := checkWaveSubagents(ctx, deps); err != nil {
+		deps.noteSubagentRefusal(err)
+		return "skipped:subagents"
+	}
 	stopWaveSeats(ctx, deps)
+	if err := checkWaveSubagents(ctx, deps); err != nil {
+		deps.noteSubagentRefusal(err)
+		return "skipped:subagents"
+	}
 	stopped, err := deps.StopSlice(ctx)
 	if err != nil || !stopped {
 		return "wave-stop"
@@ -305,17 +318,35 @@ func stopWave(ctx context.Context, deps stopWaveDeps) string {
 			return "stopped"
 		}
 		if err != nil {
-			// An unreadable presence query cannot prove the wave is gone; continue polling.
 			deps.notePresenceFailure(err)
 		}
 		elapsed := now().Sub(started)
 		if elapsed >= deadline {
 			return "presence-stuck"
 		}
-		delay := min(poll, deadline-elapsed)
-		if err := sleep(ctx, delay); err != nil {
+		if err := sleep(ctx, min(poll, deadline-elapsed)); err != nil {
 			return "presence-stuck"
 		}
+	}
+}
+
+func checkWaveSubagents(ctx context.Context, deps stopWaveDeps) error {
+	if deps.CheckSubagents == nil {
+		return errors.New("no subagent check wired")
+	}
+	deadline := deps.CheckDeadline
+	if deadline == 0 {
+		deadline = time.Duration(seatStopOuterDeadlineMS) * time.Millisecond
+	}
+	checkCtx, cancel := context.WithTimeout(ctx, deadline)
+	defer cancel()
+	finished := make(chan error, 1)
+	go func() { finished <- deps.CheckSubagents(checkCtx) }()
+	select {
+	case err := <-finished:
+		return err
+	case <-checkCtx.Done():
+		return fmt.Errorf("subagent check: %w", checkCtx.Err())
 	}
 }
 
@@ -332,6 +363,7 @@ func stopWaveSeats(ctx context.Context, deps stopWaveDeps) {
 		withTimeout = context.WithTimeout
 	}
 	seatCtx, cancel := withTimeout(ctx, deadline)
+	defer cancel()
 	finished := make(chan error, 1)
 	go func() { finished <- deps.StopSeats(seatCtx) }()
 	select {
@@ -343,7 +375,6 @@ func stopWaveSeats(ctx context.Context, deps stopWaveDeps) {
 	case <-seatCtx.Done():
 		deps.noteSeatStopFailure(seatCtx.Err())
 	}
-	cancel()
 }
 
 func sleepContext(ctx context.Context, delay time.Duration) error {
@@ -370,6 +401,14 @@ func (deps stopWaveDeps) notePresenceFailure(err error) {
 		deps.OnWarning("wave presence check failed", err)
 	} else {
 		slog.Warn("wave presence check failed", "error", err)
+	}
+}
+
+func (deps stopWaveDeps) noteSubagentRefusal(err error) {
+	if deps.OnWarning != nil {
+		deps.OnWarning("whole-wave stop refused: subagent check", err)
+	} else {
+		slog.Warn("whole-wave stop refused: subagent check", "error", err)
 	}
 }
 

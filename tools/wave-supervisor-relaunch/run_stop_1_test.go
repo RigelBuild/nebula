@@ -83,7 +83,8 @@ func TestStopManagedSeatsBestEffortFailure(t *testing.T) {
 		runner := func(context.Context, []string, string) (cotalreach.CommandResult, error) {
 			return cotalreach.CommandResult{ExitCode: 1, Stderr: "failed"}, nil
 		}
-		if err := stopManagedSeats(context.Background(), []string{"accounts"}, "main", runner); err == nil {
+		live := func(context.Context, string) (int, error) { return 0, nil }
+		if err := stopManagedSeats(context.Background(), []string{"accounts"}, "main", runner, live); err == nil {
 			t.Fatal("expected stop failure")
 		}
 	})
@@ -116,9 +117,10 @@ func testStopManagedSeatsBoundedFakeProcessesCase1(t *testing.T) {
 		mu.Unlock()
 		return cotalreach.CommandResult{}, nil
 	}
+	live := func(context.Context, string) (int, error) { return 0, nil }
 	done := make(chan error, 1)
 	go func() {
-		done <- stopManagedSeats(context.Background(), []string{"a", "b", "c", "d", "e", "f", "g", "h", "i", "j"}, "main", runner)
+		done <- stopManagedSeats(context.Background(), []string{"a", "b", "c", "d", "e", "f", "g", "h", "i", "j"}, "main", runner, live)
 	}()
 	<-allStarted
 	mu.Lock()
@@ -141,8 +143,9 @@ func testStopManagedSeatsBoundedFakeProcessesCase2(t *testing.T) {
 		<-ctx.Done()
 		return cotalreach.CommandResult{}, ctx.Err()
 	}
+	live := func(context.Context, string) (int, error) { return 0, nil }
 	done := make(chan error, 1)
-	go func() { done <- stopManagedSeats(ctx, []string{"a", "b", "c"}, "main", runner) }()
+	go func() { done <- stopManagedSeats(ctx, []string{"a", "b", "c"}, "main", runner, live) }()
 	for range 3 {
 		<-started
 	}
@@ -172,9 +175,10 @@ func testStopManagedSeatsBoundedFakeProcessesCase3(t *testing.T) {
 		active.Add(-1)
 		return cotalreach.CommandResult{}, ctx.Err()
 	}
+	live := func(context.Context, string) (int, error) { return 0, nil }
 	done := make(chan error, 1)
 	go func() {
-		done <- stopManagedSeatsWithDeadline(testCtx, []string{"a", "b", "c", "d", "e", "f", "g", "h", "i", "j"}, "main", runner, 50*time.Millisecond, func(context.Context, time.Duration) (context.Context, context.CancelFunc) {
+		done <- stopManagedSeatsWithDeadline(testCtx, []string{"a", "b", "c", "d", "e", "f", "g", "h", "i", "j"}, "main", runner, live, 50*time.Millisecond, func(context.Context, time.Duration) (context.Context, context.CancelFunc) {
 			return deadlineCtx, cancelDeadline
 		})
 	}()

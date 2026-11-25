@@ -4,9 +4,12 @@ import (
 	"context"
 	"errors"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -249,25 +252,50 @@ func (f *memoryFS) ReadDir(path string) ([]fs.DirEntry, error) {
 	if f.readDirErr != nil {
 		return nil, f.readDirErr
 	}
+	if _, ok := f.files[path]; ok {
+		return nil, &fs.PathError{Op: "readdirent", Path: path, Err: syscall.ENOTDIR}
+	}
 	prefix := filepath.Clean(path) + string(filepath.Separator)
-	names := make(map[string]bool)
-	for file := range f.files {
+	dirs := make(map[string]bool)
+	for _, file := range append(slices.Collect(maps.Keys(f.files)), slices.Collect(maps.Keys(f.links))...) {
 		if rest, ok := strings.CutPrefix(file, prefix); ok {
-			name, _, _ := strings.Cut(rest, string(filepath.Separator))
-			names[name] = true
+			name, _, nested := strings.Cut(rest, string(filepath.Separator))
+			dirs[name] = dirs[name] || nested
 		}
 	}
-	for link := range f.links {
-		if rest, ok := strings.CutPrefix(link, prefix); ok {
-			name, _, _ := strings.Cut(rest, string(filepath.Separator))
-			names[name] = true
-		}
-	}
-	entries := make([]fs.DirEntry, 0, len(names))
-	for name := range names {
-		entries = append(entries, memoryDirEntry{name: name})
+	entries := make([]fs.DirEntry, 0, len(dirs))
+	for name, dir := range dirs {
+		entries = append(entries, memoryDirEntry{name: name, dir: dir})
 	}
 	return entries, nil
+}
+
+// ReadPrefix returns a bounded prefix without recording a whole-file read.
+func (f *memoryFS) ReadPrefix(path string, maxBytes int) ([]byte, error) {
+	if f.readHook != nil {
+		if data, err, handled := f.readHook(path); handled {
+			return data, err
+		}
+	}
+	data, ok := f.files[path]
+	if !ok {
+		return nil, fs.ErrNotExist
+	}
+	return data[:min(len(data), maxBytes)], nil
+}
+
+// ReadTail serves a bounded tail read, so a caller that reads only the last record never hits ReadFile.
+func (f *memoryFS) ReadTail(path string, maxBytes int) ([]byte, error) {
+	if f.readHook != nil {
+		if data, err, handled := f.readHook(path); handled {
+			return data, err
+		}
+	}
+	data, ok := f.files[path]
+	if !ok {
+		return nil, fs.ErrNotExist
+	}
+	return data[max(0, len(data)-maxBytes):], nil
 }
 
 func (f *memoryFS) Stat(path string) (fs.FileInfo, error) {
@@ -316,15 +344,25 @@ func (f *memoryFS) Remove(path string) error {
 	return nil
 }
 
-type memoryDirEntry struct{ name string }
+type memoryDirEntry struct {
+	name string
+	dir  bool
+}
 
 func (e memoryDirEntry) Name() string { return e.name }
 
-func (e memoryDirEntry) IsDir() bool { return false }
+func (e memoryDirEntry) IsDir() bool { return e.dir }
 
-func (e memoryDirEntry) Type() fs.FileMode { return 0 }
+func (e memoryDirEntry) Type() fs.FileMode {
+	if e.dir {
+		return fs.ModeDir
+	}
+	return 0
+}
 
-func (e memoryDirEntry) Info() (fs.FileInfo, error) { return memoryFileInfo{name: e.name}, nil }
+func (e memoryDirEntry) Info() (fs.FileInfo, error) {
+	return memoryFileInfo{name: e.name, dir: e.dir}, nil
+}
 
 type memoryFileInfo struct {
 	name string
@@ -333,21 +371,16 @@ type memoryFileInfo struct {
 }
 
 func (i memoryFileInfo) Name() string { return i.name }
-
-func (i memoryFileInfo) Size() int64 { return 0 }
-
+func (i memoryFileInfo) Size() int64  { return 0 }
 func (i memoryFileInfo) Mode() fs.FileMode {
 	if i.dir {
 		return fs.ModeDir | 0o755
 	}
 	return 0o644
 }
-
 func (i memoryFileInfo) ModTime() time.Time { return i.mod }
-
-func (i memoryFileInfo) IsDir() bool { return i.dir }
-
-func (i memoryFileInfo) Sys() any { return nil }
+func (i memoryFileInfo) IsDir() bool        { return i.dir }
+func (i memoryFileInfo) Sys() any           { return nil }
 
 func procStat(start string) string {
 	fields := make([]string, 20)

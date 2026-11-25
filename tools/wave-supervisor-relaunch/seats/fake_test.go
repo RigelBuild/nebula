@@ -35,12 +35,14 @@ func (mapFS) Remove(string) error                         { return errReadOnly }
 
 // seat describes one active seat in the fake world.
 type seat struct {
-	name       string
-	gib        int64
-	idle       bool // roster idle, verified, current view
-	noProc     bool
-	rosterAs   string // overrides the roster mesh value when set
-	background bool   // roster shows background work running
+	name         string
+	gib          int64
+	idle         bool // roster idle, verified, current view
+	noProc       bool
+	rosterAs     string // overrides the roster mesh value when set
+	background   bool   // roster shows background work running
+	subagents    int    // running subagent session files the seat owns
+	noBackground bool   // roster row carries no background field, as today's omp does
 }
 
 // world is a fake wave: roster, /proc, cgroup memory, holders and manager status. Every command
@@ -62,8 +64,10 @@ type world struct {
 	holderErrAfter  error // holder read error once the seat is stopped
 	psOverride      func(call int) string
 	psCalls         int
-	busyAfter       string // a seat whose roster turns working after the first ps read
-	backgroundAfter string // a seat whose roster shows background running after the first ps read
+	busyAfter       string         // a seat whose roster turns working after the first ps read
+	backgroundAfter string         // a seat whose roster shows background running after the first ps read
+	subagentAfter   map[string]int // running subagents that appear after the first ps read
+	subagentErr     error          // the subagent read fails
 	probeCost       time.Duration
 }
 
@@ -99,8 +103,11 @@ func (w *world) roster() string {
 			mesh = "working"
 		}
 		background := ""
-		if s.background || (w.backgroundAfter == s.name && w.psCalls > 1) {
+		switch {
+		case s.background || (w.backgroundAfter == s.name && w.psCalls > 1):
 			background = `,"background":"running"`
+		case s.idle && !s.noBackground:
+			background = `,"background":"idle"`
 		}
 		rows = append(rows, fmt.Sprintf(`{"name":%q,"mesh":%q,"meshView":"current","presenceIdentityVerified":true%s}`, s.name, mesh, background))
 	}
@@ -119,6 +126,20 @@ func (w *world) deps() Deps {
 				names[s.name] = struct{}{}
 			}
 			return names, nil
+		},
+		LiveSubagents: func(_ context.Context, name string) (int, error) {
+			if w.subagentErr != nil {
+				return 0, w.subagentErr
+			}
+			if n := w.subagentAfter[name]; n > 0 && w.psCalls > 1 {
+				return n, nil
+			}
+			for _, s := range w.seats {
+				if s.name == name {
+					return s.subagents, nil
+				}
+			}
+			return 0, nil
 		},
 		PS: func(context.Context) (string, error) {
 			w.psCalls++

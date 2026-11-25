@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -223,6 +224,119 @@ func TestPicksByMtimeNotFilenameAndSkipsBurnedSessionIDs(t *testing.T) {
 	pick, err := NewestSession("/sessions", "supervisor", "/home/example/agents", map[string]struct{}{"newer": {}}, SessionDeps{FileSystem: fsys})
 	if err != nil || pick == nil || pick.ID != "older" {
 		t.Fatalf("NewestSession() = %#v, %v; want older session", pick, err)
+	}
+}
+
+func TestReadTailFrom(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "tail.jsonl")
+	if err := os.WriteFile(path, []byte("first\nsecond\nthird\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	got, err := readTailFrom(file, len("third\n"))
+	if err != nil || string(got) != "third\n" {
+		t.Fatalf("readTailFrom() = %q, %v; want %q", got, err, "third\n")
+	}
+	got, err = readTailFrom(file, len("first\nsecond\nthird\n"))
+	if err != nil || string(got) != "first\nsecond\nthird\n" {
+		t.Fatalf("readTailFrom() = %q, %v; want complete file", got, err)
+	}
+}
+
+const (
+	testSessionRoot = "/home/example/.omp/agent/sessions"
+	testHome        = "/home/example"
+	testSeatCWD     = "/home/example/agents/workspaces/seat"
+)
+
+// seatAndParentSessionDirs derives the seat cwd's session directory and its parent cwd's
+// directory, where a continued seat session is recorded.
+func seatAndParentSessionDirs() (seatDir, parentDir string) {
+	return SessionDirFor(testSeatCWD, testHome, testSessionRoot),
+		SessionDirFor(filepath.Dir(testSeatCWD), testHome, testSessionRoot)
+}
+
+func TestNewestSessionAttributesContinuedSessionRecordedAtParentCWD(t *testing.T) {
+	seatDir, parentDir := seatAndParentSessionDirs()
+	fsys := newTestFS()
+	fsys.files[filepath.Join(seatDir, "old.jsonl")] = []byte(`{"type":"session","id":"stale","title":"seat","cwd":"/home/example/agents/workspaces/seat"}`)
+	fsys.files[filepath.Join(parentDir, "live.jsonl")] = []byte(`{"type":"session","id":"live","title":"seat","cwd":"/home/example/agents/workspaces"}`)
+	fsys.times[filepath.Join(seatDir, "old.jsonl")] = time.UnixMilli(1)
+	fsys.times[filepath.Join(parentDir, "live.jsonl")] = time.UnixMilli(2)
+	pick, err := NewestSeatSession(testSeatCWD, testHome, testSessionRoot, "seat", nil, SessionDeps{FileSystem: fsys})
+	if err != nil || pick == nil || pick.ID != "live" {
+		t.Fatalf("NewestSeatSession() = %#v, %v; want live continued session", pick, err)
+	}
+}
+
+func TestNewestSessionIgnoresParentCWDSessionWithOtherTitle(t *testing.T) {
+	seatDir, parentDir := seatAndParentSessionDirs()
+	fsys := newTestFS()
+	fsys.files[filepath.Join(seatDir, "old.jsonl")] = []byte(`{"type":"session","id":"stale","title":"seat","cwd":"/home/example/agents/workspaces/seat"}`)
+	fsys.files[filepath.Join(parentDir, "other.jsonl")] = []byte(`{"type":"session","id":"other","title":"foreman","cwd":"/home/example/agents/workspaces"}`)
+	fsys.times[filepath.Join(seatDir, "old.jsonl")] = time.UnixMilli(1)
+	fsys.times[filepath.Join(parentDir, "other.jsonl")] = time.UnixMilli(2)
+	pick, err := NewestSeatSession(testSeatCWD, testHome, testSessionRoot, "seat", nil, SessionDeps{FileSystem: fsys})
+	if err != nil || pick == nil || pick.ID != "stale" {
+		t.Fatalf("NewestSeatSession() = %#v, %v; want stale seat session, not the other-title parent session", pick, err)
+	}
+}
+
+func TestNewestSessionIgnoresOlderParentCWDSession(t *testing.T) {
+	seatDir, parentDir := seatAndParentSessionDirs()
+	fsys := newTestFS()
+	fsys.files[filepath.Join(seatDir, "old.jsonl")] = []byte(`{"type":"session","id":"stale","title":"seat","cwd":"/home/example/agents/workspaces/seat"}`)
+	fsys.files[filepath.Join(parentDir, "parent.jsonl")] = []byte(`{"type":"session","id":"parent","title":"seat","cwd":"/home/example/agents/workspaces"}`)
+	fsys.times[filepath.Join(seatDir, "old.jsonl")] = time.UnixMilli(2)
+	fsys.times[filepath.Join(parentDir, "parent.jsonl")] = time.UnixMilli(1)
+	pick, err := NewestSeatSession(testSeatCWD, testHome, testSessionRoot, "seat", nil, SessionDeps{FileSystem: fsys})
+	if err != nil || pick == nil || pick.ID != "stale" {
+		t.Fatalf("NewestSeatSession() = %#v, %v; want seat session, not the older parent session", pick, err)
+	}
+}
+
+func TestNewestSessionSeatCWDSessionWinsMtimeTie(t *testing.T) {
+	seatDir, parentDir := seatAndParentSessionDirs()
+	fsys := newTestFS()
+	fsys.files[filepath.Join(seatDir, "old.jsonl")] = []byte(`{"type":"session","id":"stale","title":"seat","cwd":"/home/example/agents/workspaces/seat"}`)
+	fsys.files[filepath.Join(parentDir, "parent.jsonl")] = []byte(`{"type":"session","id":"parent","title":"seat","cwd":"/home/example/agents/workspaces"}`)
+	fsys.times[filepath.Join(seatDir, "old.jsonl")] = time.UnixMilli(5)
+	fsys.times[filepath.Join(parentDir, "parent.jsonl")] = time.UnixMilli(5)
+	pick, err := NewestSeatSession(testSeatCWD, testHome, testSessionRoot, "seat", nil, SessionDeps{FileSystem: fsys})
+	if err != nil || pick == nil || pick.ID != "stale" {
+		t.Fatalf("NewestSeatSession() = %#v, %v; want seat-cwd session on an mtime tie", pick, err)
+	}
+}
+
+func TestNewestSeatSessionMatchesTitleExactlyUnderSharedParent(t *testing.T) {
+	// Two seats share the parent folder and their titles differ only by a suffix, so each
+	// seat must attach only its own continued session, never a prefix or substring match.
+	const parentCWD = "/home/example/agents/workspaces"
+	parentDir := SessionDirFor(parentCWD, testHome, testSessionRoot)
+	seatDir := SessionDirFor(testSeatCWD, testHome, testSessionRoot)
+	fsys := newTestFS()
+	fsys.files[filepath.Join(seatDir, "seat.jsonl")] = []byte(`{"type":"session","id":"seat-id","title":"seat","cwd":"/home/example/agents/workspaces/seat"}`)
+	fsys.times[filepath.Join(seatDir, "seat.jsonl")] = time.UnixMilli(1)
+	reviewCWD := parentCWD + "/seat-review"
+	reviewSeatDir := SessionDirFor(reviewCWD, testHome, testSessionRoot)
+	fsys.files[filepath.Join(reviewSeatDir, "review-seat.jsonl")] = []byte(`{"type":"session","id":"review-seat-id","title":"seat-review","cwd":"/home/example/agents/workspaces/seat-review"}`)
+	fsys.times[filepath.Join(reviewSeatDir, "review-seat.jsonl")] = time.UnixMilli(1)
+	fsys.files[filepath.Join(parentDir, "parent-seat.jsonl")] = []byte(`{"type":"session","id":"parent-seat-id","title":"seat","cwd":"/home/example/agents/workspaces"}`)
+	fsys.files[filepath.Join(parentDir, "parent-review.jsonl")] = []byte(`{"type":"session","id":"parent-review-id","title":"seat-review","cwd":"/home/example/agents/workspaces"}`)
+	fsys.times[filepath.Join(parentDir, "parent-seat.jsonl")] = time.UnixMilli(2)
+	fsys.times[filepath.Join(parentDir, "parent-review.jsonl")] = time.UnixMilli(3)
+	deps := SessionDeps{FileSystem: fsys}
+	seat, err := NewestSeatSession(testSeatCWD, testHome, testSessionRoot, "seat", nil, deps)
+	if err != nil || seat == nil || seat.ID != "parent-seat-id" {
+		t.Fatalf("seat = %#v, %v; want its own parent-seat-id session", seat, err)
+	}
+	review, err := NewestSeatSession(reviewCWD, testHome, testSessionRoot, "seat-review", nil, deps)
+	if err != nil || review == nil || review.ID != "parent-review-id" {
+		t.Fatalf("seat-review = %#v, %v; want its own parent-review-id session", review, err)
 	}
 }
 

@@ -237,10 +237,12 @@ func seatStepHarness(t *testing.T, stopExit int) (*runHarness, *[]string, *[]str
 		if stopped {
 			return testPSEnvelope(testLivePS), nil
 		}
-		return testPSEnvelope(testLivePS + `,{"name":"accounts","mesh":"idle","meshView":"current","presenceIdentityVerified":true}`), nil
+		return testPSEnvelope(testLivePS + `,{"name":"accounts","mesh":"idle","meshView":"current","presenceIdentityVerified":true,"background":"idle"}`), nil
 	}
-	h.write("/proc/222/cmdline", "omp\x00")
+	h.write("/proc/222/cmdline", "omp\x00--session-id\x00accounts-id\x00")
 	h.write("/proc/222/environ", "COTAL_AGENT_FILE=/agents/accounts.md\x00")
+	h.fs.links["/proc/222/fd/1"] = "/sessions/seat/session_accounts-id.jsonl"
+	h.write("/sessions/seat/session_accounts-id.jsonl", `{"type":"session","id":"accounts-id"}`)
 	h.write("/proc/222/cgroup", "0::/user.slice/wave-agents.slice/run-accounts.scope\n")
 	return h, &argvs, &lines
 }

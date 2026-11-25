@@ -45,15 +45,17 @@ class PreLlmSkipMixin:
             return False
         # Wall clock: the deadline is persisted on the session row so a gateway rebuild resumes the window.
         now = time.time()
-        if self._fallback_probe_at and now >= self._fallback_probe_at:
-            self._set_fallback_probe_at(0.0)
+        if not self._fallback_probe_at or now >= self._fallback_probe_at:
+            # Unarmed (a streak saved before deadlines were recorded) or expired: probe once. Arm the next
+            # window now, so a probe that never reaches a boundary waits a window instead of probing every turn.
+            self._set_fallback_probe_at(now + self._ANTI_THRASH_RECOVERY_SECONDS)
             if not self.quiet_mode:
                 logger.info(
                     "Compression: probing the summary model again after %d fallback summaries in a row",
                     self._fallback_compression_streak,
                 )
             return False
-        if not self._fallback_probe_at or self._fallback_probe_at - now > self._ANTI_THRASH_RECOVERY_SECONDS:
+        if self._fallback_probe_at - now > self._ANTI_THRASH_RECOVERY_SECONDS:
             self._set_fallback_probe_at(now + self._ANTI_THRASH_RECOVERY_SECONDS)
         self._last_feasibility_skip = True
         telemetry["failure_class"] = "summary_model_benched"

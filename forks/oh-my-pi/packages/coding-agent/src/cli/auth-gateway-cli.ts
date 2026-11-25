@@ -13,7 +13,10 @@
  *     and model roles (`auth-gateway-stdio.ts`).
  *   - `token` / `token --regenerate` — manages the gateway bearer token file.
  *   - `status` — prints the locally-stored gateway token and bind hint.
+ *   - `validate` — checks global/project/overlay settings plus broker pool, `--clients`,
+ *     and `--api-key-limit-model-classes` without binding a port, calling the broker, or reading credentials.
  */
+import { YAML } from "bun";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import {
@@ -54,13 +57,14 @@ import { authPolicyFor } from "@oh-my-pi/pi-catalog/compat/auth";
 import { buildModelProviderPriorityRank } from "@oh-my-pi/pi-catalog/identity";
 import { type GeneratedProvider, getBundledModels, getEffectiveTokenCost } from "@oh-my-pi/pi-catalog/models";
 import { modelKind } from "@oh-my-pi/pi-catalog/types";
-import { getConfigRootDir, logger, postmortem, VERSION } from "@oh-my-pi/pi-utils";
+import { getConfigRootDir, getProjectAgentDir, isRecord, logger, postmortem, VERSION } from "@oh-my-pi/pi-utils";
 import { setTransports as setLoggerTransports } from "@oh-my-pi/pi-utils/logger";
 import chalk from "@oh-my-pi/pi-utils/chalk";
 import { ModelRegistry } from "../config/model-registry";
 import { cfgDisabledProviders, cfgModelProviderOrder } from "../config/model-settings";
 import { resolveProviderModelReference } from "../config/model-resolver";
-import type { Settings } from "../config/settings";
+import { type Settings, unknownSettingPaths } from "../config/settings";
+import { all as allSettings } from "../config/registry";
 import {
 	overlayLiveResetCredits,
 	planCodexResetRedemptions,
@@ -94,7 +98,7 @@ export function claudeResetBankingFor(
 	return undefined;
 }
 
-export type AuthGatewayAction = "serve" | "stdio" | "token" | "status" | "check";
+export type AuthGatewayAction = "serve" | "stdio" | "token" | "status" | "check" | "validate";
 
 export interface AuthGatewayCommandArgs {
 	action: AuthGatewayAction;
@@ -130,7 +134,7 @@ export interface AuthGatewayCommandArgs {
 	};
 }
 
-const ACTIONS: readonly AuthGatewayAction[] = ["serve", "stdio", "token", "status", "check"];
+const ACTIONS: readonly AuthGatewayAction[] = ["serve", "stdio", "token", "status", "check", "validate"];
 
 /** Room after the drain for storage close before postmortem forces the exit. */
 const SHUTDOWN_MARGIN_MS = 2_000;
@@ -881,6 +885,27 @@ export async function loadApiKeyLimitModelClasses(
 	assertApiKeyLimitModelClasses(classes);
 	return classes;
 }
+/** A `--clients` file as read: its resolved path, its text (kept for reload), and its parsed entries. */
+interface GatewayClientsFile {
+	clientsPath: string | undefined;
+	clientsText: string | undefined;
+	clients: AuthGatewayClient[] | undefined;
+}
+
+/** Read and parse a `--clients` file. Shared by `serve` and `validate`; a bad file throws, naming the file. */
+async function readGatewayClientsFile(clientsArg: string | undefined): Promise<GatewayClientsFile> {
+	if (clientsArg === undefined) return { clientsPath: undefined, clientsText: undefined, clients: undefined };
+	const clientsPath = path.resolve(clientsArg);
+	try {
+		const clientsText = await Bun.file(clientsPath).text();
+		return { clientsPath, clientsText, clients: parseAuthGatewayClients(clientsText) };
+	} catch (error) {
+		throw new Error(
+			`Cannot load --clients ${clientsPath}: ${error instanceof Error ? error.message : String(error)}`,
+		);
+	}
+}
+
 async function runServe(flags: AuthGatewayCommandArgs["flags"]): Promise<void> {
 	// The gateway is a long-running headless service: route structured logs to
 	// stdout so a process supervisor (k8s) captures them, and skip the rotating
@@ -900,19 +925,7 @@ async function runServe(flags: AuthGatewayCommandArgs["flags"]): Promise<void> {
 	if (!flags.noAuth && !gatewayToken) throw new Error("auth-gateway bearer token must not be empty");
 	const apiKeyLimitModelClasses = await loadApiKeyLimitModelClasses(flags.apiKeyLimitModelClasses);
 	// Read before touching the broker, so a bad file fails the command at once.
-	const clientsPath = flags.clients === undefined ? undefined : path.resolve(flags.clients);
-	let clientsText: string | undefined;
-	let clients: AuthGatewayClient[] | undefined;
-	if (clientsPath !== undefined) {
-		try {
-			clientsText = await Bun.file(clientsPath).text();
-			clients = parseAuthGatewayClients(clientsText);
-		} catch (error) {
-			throw new Error(
-				`Cannot load --clients ${clientsPath}: ${error instanceof Error ? error.message : String(error)}`,
-			);
-		}
-	}
+	const { clientsPath, clientsText, clients } = await readGatewayClientsFile(flags.clients);
 
 	// Build a broker-backed AuthStorage — same pattern as discoverAuthStorage()
 	// in sdk.ts. The gateway never touches local SQLite.
@@ -1216,6 +1229,82 @@ async function runStatus(flags: AuthGatewayCommandArgs["flags"]): Promise<void> 
 	}
 }
 
+/**
+ * Load the gateway's config inputs as `serve` does and return every problem found: invalid configured settings,
+ * unknown keys in global, project, and overlay settings, the broker account pool file, `--api-key-limit-model-classes`,
+ * and `--clients`. Binds no port or network connection and reads no credentials. An empty list means valid.
+ */
+export async function validateAuthGatewayConfig(flags: AuthGatewayCommandArgs["flags"]): Promise<string[]> {
+	const problems: string[] = [];
+	const collect = async (load: () => unknown | Promise<unknown>): Promise<void> => {
+		try {
+			await load();
+		} catch (error) {
+			problems.push(error instanceof Error ? error.message : String(error));
+		}
+	};
+	let loadedSettings: Settings | undefined;
+	await collect(async () => {
+		loadedSettings = await resolveEffectiveSettings();
+	});
+	const settings = loadedSettings;
+	if (settings) {
+		for (const layer of [settings.getGlobalSettings(), settings.getConfigOverlaySettings()]) {
+			for (const id of unknownSettingPaths(layer)) problems.push(`Unknown setting "${id}"`);
+		}
+		await collect(async () => {
+			const projectAgentDir = getProjectAgentDir(settings.getCwd());
+			const projectConfig = Bun.file(path.join(projectAgentDir, "config.yml"));
+			if (await projectConfig.exists()) {
+				const projectLayer: unknown = YAML.parse(await projectConfig.text());
+				if (isRecord(projectLayer)) {
+					const migrated = settings.migrateRawSettings(projectLayer);
+					for (const id of unknownSettingPaths(migrated)) problems.push(`Unknown setting "${id}"`);
+				} else if (projectLayer !== null && projectLayer !== undefined) {
+					throw new Error("Settings YAML must contain a mapping at the document root");
+				}
+			}
+		});
+		await collect(async () => {
+			const projectSettings = Bun.file(path.join(getProjectAgentDir(settings.getCwd()), "settings.json"));
+			if (!(await projectSettings.exists())) return;
+			const projectLayer: unknown = JSON.parse(await projectSettings.text());
+			if (!isRecord(projectLayer)) return;
+			const migrated = settings.migrateRawSettings(projectLayer);
+			for (const id of unknownSettingPaths(migrated)) problems.push(`Unknown setting "${id}"`);
+		});
+		for (const setting of allSettings()) {
+			if (!settings.isConfigured(setting)) continue;
+			await collect(() => {
+				const raw = settings.rawValue(setting);
+				try {
+					if (!setting.accepts(raw)) throw new Error(`Invalid value for ${setting.id}`);
+					const normalized = setting.definition.normalize ? setting.definition.normalize(raw) : raw;
+					setting.assertWritable(normalized);
+				} catch (error) {
+					if (setting.isCredential) throw new Error(`Invalid value for ${setting.id}`);
+					throw error;
+				}
+			});
+		}
+		await collect(() => loadEffectiveAuthAccountPolicyConfig({ settings }));
+	}
+	await collect(() => loadApiKeyLimitModelClasses(flags.apiKeyLimitModelClasses));
+	await collect(() => readGatewayClientsFile(flags.clients));
+	await collect(() => loadAuthBrokerAccountPool());
+	return problems;
+}
+
+async function runValidate(flags: AuthGatewayCommandArgs["flags"]): Promise<void> {
+	const problems = await validateAuthGatewayConfig(flags);
+	if (problems.length === 0) {
+		process.stdout.write("auth-gateway config valid\n");
+		return;
+	}
+	for (const problem of problems) process.stderr.write(`invalid: ${problem}\n`);
+	process.exitCode = 1;
+}
+
 export async function runAuthGatewayCommand(cmd: AuthGatewayCommandArgs): Promise<void> {
 	switch (cmd.action) {
 		case "serve":
@@ -1232,6 +1321,9 @@ export async function runAuthGatewayCommand(cmd: AuthGatewayCommandArgs): Promis
 			return;
 		case "check":
 			await runCheck(cmd.flags);
+			return;
+		case "validate":
+			await runValidate(cmd.flags);
 			return;
 		default: {
 			const _exhaustive: never = cmd.action;

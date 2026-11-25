@@ -35,11 +35,11 @@ export default class AuthGateway extends Command {
 		}),
 		"api-key-limit-model-classes": Flags.string({
 			description:
-				"Path to JSON mapping exact Anthropic model ids to rate-limit rows for API-key limit reports (serve); env OMP_AUTH_GATEWAY_API_KEY_LIMIT_MODEL_CLASSES, flag wins",
+				"Path to JSON mapping exact Anthropic model ids to rate-limit rows for API-key limit reports; env OMP_AUTH_GATEWAY_API_KEY_LIMIT_MODEL_CLASSES, flag wins",
 		}),
 		clients: Flags.string({
 			description:
-				"JSON file of scoped client tokens (serve), each limited to its own models and broker accounts; re-read while serving",
+				"JSON file of scoped client tokens, each limited to its own models and broker accounts; re-read while serving",
 		}),
 		strict: Flags.boolean({
 			description:
@@ -60,6 +60,7 @@ export default class AuthGateway extends Command {
 		"# Probe each broker credential to see which one is producing 401s\n  omp auth-gateway check",
 		"# Same, machine-readable for scripts\n  omp auth-gateway check --json",
 		"# Strict check — also exercises each credential with a real chat-completion ping\n  omp auth-gateway check --strict",
+		"# Validate the gateway config and files without starting it\n  omp auth-gateway validate",
 	];
 
 	async run(): Promise<void> {

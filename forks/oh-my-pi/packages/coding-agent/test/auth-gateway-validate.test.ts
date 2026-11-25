@@ -167,6 +167,19 @@ describe("omp auth-gateway validate", () => {
 		expect(stderrSpy.mock.calls.map(([message]) => message).join("")).toContain("disassemblr.memoryMax");
 	});
 
+	it("rejects a non-object root in the project's omp settings.json", async () => {
+		await Bun.write(overlay, "");
+		await fs.mkdir(path.join(dir, "project", ".omp"));
+		await Bun.write(path.join(dir, "project", ".omp", "settings.json"), "[1]");
+
+		await runAuthGatewayCommand({ action: "validate", flags: {} });
+
+		expect(process.exitCode).toBe(1);
+		expect(stderrSpy.mock.calls.map(([message]) => message).join("")).toContain(
+			"Settings JSON must contain an object at the document root",
+		);
+	});
+
 	it("ignores unknown keys in other tools' project settings", async () => {
 		await Bun.write(overlay, "");
 		await fs.mkdir(path.join(dir, "project", ".claude"));

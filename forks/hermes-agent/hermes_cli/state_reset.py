@@ -27,8 +27,10 @@ def _backup_dir(home: Path) -> Path:
     return candidate
 
 
-def _move_database(home: Path, backup: Path) -> None:
-    backup.mkdir(mode=0o700, exist_ok=False)
+def _move_database(home: Path, backup: Path, *, allow_existing_empty: bool = False) -> bool:
+    backup.mkdir(mode=0o700, exist_ok=allow_existing_empty)
+    if allow_existing_empty and any(backup.iterdir()):
+        raise FileExistsError(f"backup directory is not empty: {backup}")
     moved: list[tuple[Path, Path]] = []
     try:
         for name in _DATABASE_FILES:
@@ -48,6 +50,7 @@ def _move_database(home: Path, backup: Path) -> None:
                 ) from rollback_error
         backup.rmdir()
         raise
+    return bool(moved)
 
 
 def _gateway_is_running(resolve_liveness, home: Path) -> bool:
@@ -104,7 +107,7 @@ def reset_state() -> int:
     done = home / "reset.done"
     pending = home / "reset.pending"
     if done.exists():
-        print("State reset already completed.")
+        print(f"State reset already completed ({done}). Delete this marker to reset again.")
         return 0
     try:
         result = gateway._cmd_stop(Namespace(system=False, all=False, interrupt=False))
@@ -143,15 +146,17 @@ def reset_state() -> int:
             if pending.exists():
                 backup = _validated_backup(home, pending)
             else:
+                if not _has_database(home):
+                    raise RuntimeError(f"no state database files were found in the Hermes home: {home}")
                 backup = _backup_dir(home)
                 pending.write_text(backup.name, encoding="utf-8")
-
             if backup.exists():
-                has_backup_database = (backup / "state.db").exists()
+                has_backup_database = _has_database(backup)
+                has_home_database = _has_database(home)
                 has_orphaned_sidecars = any(
                     (home / name).exists() for name in ("state.db-wal", "state.db-shm")
                 )
-                if has_backup_database and not (home / "state.db").exists() and has_orphaned_sidecars:
+                if (backup / "state.db").exists() and not (home / "state.db").exists() and has_orphaned_sidecars:
                     remaining = ", ".join(
                         str(home / name)
                         for name in ("state.db-wal", "state.db-shm")
@@ -162,8 +167,27 @@ def reset_state() -> int:
                         f"while SQLite sidecars remain in the Hermes home ({remaining}); "
                         "preserve both locations and resolve the split state before retrying"
                     )
+                if has_backup_database:
+                    if has_home_database:
+                        raise RuntimeError(
+                            f"incomplete state reset: backup {backup} and Hermes home {home} "
+                            "both contain database files; preserve both locations and resolve the split state"
+                        )
+                elif has_home_database:
+                    if not _move_database(home, backup, allow_existing_empty=True):
+                        raise RuntimeError(f"no state database files were moved into {backup}")
+                else:
+                    raise RuntimeError(f"incomplete state reset: backup directory is empty: {backup}")
             elif _has_database(home):
-                _move_database(home, backup)
+                if not pending.exists():
+                    pending.write_text(backup.name, encoding="utf-8")
+                if not _move_database(home, backup):
+                    raise RuntimeError(f"no state database files were moved into {backup}")
+            else:
+                raise RuntimeError(f"no state database files were found in the Hermes home: {home}")
+
+            if not _has_database(backup):
+                raise RuntimeError(f"no state database files were moved into {backup}")
     except OwnershipConflict as exc:
         print(f"State reset stopped: gateway became active before its database could be moved ({exc}).")
         return 1

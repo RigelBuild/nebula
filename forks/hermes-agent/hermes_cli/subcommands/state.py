@@ -11,7 +11,7 @@ def build_state_parser(subparsers, *, cmd_state_reset: Callable) -> None:
     reset = actions.add_parser(
         "reset",
         help="Move the current session database aside and restart the gateway (one-shot per home)",
-        description="Reset gateway state once per Hermes home; subsequent invocations do not reset again.",
+        description="Reset gateway state once per Hermes home; delete reset.done before resetting again.",
     )
     reset.set_defaults(func=cmd_state_reset)
 

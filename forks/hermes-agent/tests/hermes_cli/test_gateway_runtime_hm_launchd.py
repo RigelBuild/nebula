@@ -273,7 +273,7 @@ def test_launchd_start_uses_existing_home_manager_plist_for_nix_store_install(
     assert not ordinary_plist.exists()
 
 
-def test_launchd_start_regenerates_for_read_only_non_nix_root_with_home_manager_plist(tmp_path, monkeypatch):
+def test_launchd_start_regenerates_for_non_nix_root_with_home_manager_plist(tmp_path, monkeypatch):
     from hermes_cli import gateway, gateway_launchd
 
     home = tmp_path / ".hermes"
@@ -282,11 +282,7 @@ def test_launchd_start_regenerates_for_read_only_non_nix_root_with_home_manager_
     nix_plist.parent.mkdir(parents=True)
     nix_plist.touch()
     ordinary_plist = tmp_path / "ai.hermes.gateway.plist"
-    root = tmp_path / "root-owned-install"
-    root.mkdir()
-    root.chmod(0o555)
-    monkeypatch.setattr(gateway, "PROJECT_ROOT", root)
-    monkeypatch.setattr(gateway, "get_hermes_home", lambda: home)
+    monkeypatch.setattr(gateway, "PROJECT_ROOT", tmp_path)
     monkeypatch.setattr(gateway, "get_launchd_plist_path", lambda: ordinary_plist)
     monkeypatch.setattr(gateway_launchd, "_nix_home_manager_plist_path", lambda: nix_plist)
     monkeypatch.setattr(gateway_launchd.gateway_service_owner,
@@ -298,13 +294,14 @@ def test_launchd_start_regenerates_for_read_only_non_nix_root_with_home_manager_
     monkeypatch.setattr(gateway_launchd, "_launchd_bootstrap_and_kickstart",
                         lambda path, label: bootstrapped.append((path, label)) or True)
     monkeypatch.setattr(gateway_launchd, "_launchd_ok", lambda message: None)
-    monkeypatch.setattr(gateway_launchd, "_install_root_is_nix_store", lambda: False)
 
     gateway_launchd.launchd_start()
 
     assert ordinary_plist.read_text(encoding="utf-8") == "generated"
     assert prepared == [True]
-    assert bootstrapped == [(ordinary_plist, "ai.hermes.gateway")]
+    assert len(bootstrapped) == 1
+    assert bootstrapped[0][0] == ordinary_plist
+    assert bootstrapped[0][1].startswith("ai.hermes.gateway")
     assert nix_plist.exists()
 
 

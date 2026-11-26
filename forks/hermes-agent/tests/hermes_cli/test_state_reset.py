@@ -210,6 +210,96 @@ def test_move_database_reports_rollback_failure_and_preserves_split_state(tmp_pa
     assert files["state.db-wal"].exists() and files["state.db-shm"].exists()
 
 
+def test_state_reset_recovers_empty_backup_after_rollback_cleanup_failure(tmp_path, monkeypatch, capsys):
+    home = _state_home(tmp_path, monkeypatch)
+    files = _database_files(home)
+    _instant_poll(monkeypatch)
+    running = False
+
+    def stop(_args):
+        nonlocal running
+        running = False
+
+    def start(_args):
+        nonlocal running
+        running = True
+
+    monkeypatch.setattr(
+        "gateway.status.resolve_gateway_liveness",
+        lambda **kwargs: SimpleNamespace(running=running, pid=456 if running else None, probe_error=False),
+    )
+    replace = state_reset.os.replace
+    fail_once = True
+
+    def fail_sidecar_once(source, target):
+        nonlocal fail_once
+        if fail_once and Path(source).name == "state.db-wal" and Path(target).name == "state.db-wal":
+            fail_once = False
+            raise OSError("sidecar move failed")
+        replace(source, target)
+
+    original_rmdir = Path.rmdir
+    fail_cleanup_once = True
+
+    def fail_backup_cleanup(path):
+        nonlocal fail_cleanup_once
+        if fail_cleanup_once and path.name.startswith("state.db.pre-reset-") and path.parent == home:
+            fail_cleanup_once = False
+            raise OSError("backup cleanup failed")
+        original_rmdir(path)
+
+    monkeypatch.setattr(gateway, "_cmd_stop", stop)
+    monkeypatch.setattr(gateway, "_cmd_start", start)
+    monkeypatch.setattr(state_reset.os, "replace", fail_sidecar_once)
+    monkeypatch.setattr(Path, "rmdir", fail_backup_cleanup)
+
+    assert reset_state() == 1
+    assert all(path.exists() for path in files.values())
+    assert not (home / "reset.done").exists()
+    backup = home / (home / "reset.pending").read_text(encoding="utf-8")
+    assert backup.is_dir() and not any(backup.iterdir())
+    monkeypatch.setattr(Path, "rmdir", original_rmdir)
+    monkeypatch.setattr(state_reset.os, "replace", replace)
+    monkeypatch.setattr(gateway, "_cmd_stop", stop)
+    monkeypatch.setattr(gateway, "_cmd_start", start)
+
+    assert reset_state() == 0
+    assert all((backup / name).exists() for name in files)
+    assert not any(path.exists() for path in files.values())
+    assert (home / "reset.done").exists()
+    assert "State reset complete" in capsys.readouterr().out
+
+
+def test_state_reset_recovers_death_after_backup_creation_before_first_move(tmp_path, monkeypatch):
+    home = _state_home(tmp_path, monkeypatch)
+    files = _database_files(home)
+    backup = home / "state.db.pre-reset-interrupted"
+    backup.mkdir()
+    (home / "reset.pending").write_text(backup.name, encoding="utf-8")
+    _instant_poll(monkeypatch)
+    running = False
+
+    def stop(_args):
+        nonlocal running
+        running = False
+
+    def start(_args):
+        nonlocal running
+        running = True
+
+    monkeypatch.setattr(gateway, "_cmd_stop", stop)
+    monkeypatch.setattr(gateway, "_cmd_start", start)
+    monkeypatch.setattr(
+        "gateway.status.resolve_gateway_liveness",
+        lambda **kwargs: SimpleNamespace(running=running, pid=456 if running else None, probe_error=False),
+    )
+
+    assert reset_state() == 0
+    assert all((backup / name).read_text(encoding="utf-8") == name for name in files)
+    assert not any(path.exists() for path in files.values())
+    assert (home / "reset.done").exists()
+
+
 def test_state_reset_refuses_split_state_after_rollback_failure(tmp_path, monkeypatch, capsys):
     home = _state_home(tmp_path, monkeypatch)
     files = _database_files(home)
@@ -281,7 +371,7 @@ def test_state_reset_refuses_invalid_pending_name(tmp_path, monkeypatch, capsys,
     assert not (home / "reset.done").exists()
 
 
-def test_state_reset_retries_after_restart_failure(tmp_path, monkeypatch):
+def test_state_reset_retries_after_restart_failure(tmp_path, monkeypatch, capsys):
     home = _state_home(tmp_path, monkeypatch)
     _database_files(home)
     _instant_poll(monkeypatch)
@@ -310,6 +400,9 @@ def test_state_reset_retries_after_restart_failure(tmp_path, monkeypatch):
     assert (home / "reset.done").exists()
     assert list(home.glob("state.db.pre-reset-*")) == backups
     assert reset_state() == 0
+    output = capsys.readouterr().out
+    assert str(home / "reset.done") in output
+    assert "Delete this marker to reset again" in output
 
 
 def test_state_reset_refuses_nonzero_stop_return(tmp_path, monkeypatch):

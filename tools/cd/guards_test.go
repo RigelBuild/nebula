@@ -8,6 +8,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -393,6 +394,8 @@ func TestPublishReturnsExistingManifestCommitWithoutTag(t *testing.T) {
 	f := newPublishFixture(t)
 	tag := "nebula-20261117-8"
 	o := f.options(tag)
+	var stderr strings.Builder
+	o.stderr = &stderr
 	data, err := o.manifest.build()
 	if err != nil {
 		t.Fatal(err)
@@ -416,8 +419,89 @@ func TestPublishReturnsExistingManifestCommitWithoutTag(t *testing.T) {
 	if got != commit {
 		t.Fatalf("publish() = %s, want existing manifest commit %s", got, commit)
 	}
+	if got := stderr.String(); got != "resuming from existing manifest commit "+commit+"\n" {
+		t.Fatalf("stderr = %q, want resume message for %s", got, commit)
+	}
 	if after := testGit(t, f.remote, "rev-parse", "main"); after != before {
 		t.Fatalf("remote main moved from %s to %s", before, after)
+	}
+}
+
+func TestPublishResumeDiagnosticWriteError(t *testing.T) {
+	o := publishOptions{stderr: failingWriter{}}
+	got, err := o.resumed("commit-sha")
+	if got != "" || err == nil || !strings.Contains(err.Error(), "write resume diagnostic") {
+		t.Fatalf("resumed() = %q, %v; want contextual write error", got, err)
+	}
+}
+
+type failingWriter struct{}
+
+func (failingWriter) Write([]byte) (int, error) {
+	return 0, io.ErrClosedPipe
+}
+
+func TestFindManifestCommitRefusesNonAncestorSource(t *testing.T) {
+	f := newPublishFixture(t)
+	testGit(t, f.work, "checkout", "-q", "-b", "unrelated")
+	writeFile(t, f.work, "tools/alpha/source.go", "package main\n")
+	source := commitAll(t, f.work, "unrelated source")
+	f.plan = writePlan(t, Plan{Source: source, Build: []string{"alpha"}, Binaries: []Binary{{Package: "alpha", Version: "1.2.0"}}})
+	o := f.options("nebula-20261117-9")
+	data, err := o.manifest.build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	commit, err := commitManifest(context.Background(), f.work, f.source, data, o.manifest.tag)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := findManifestCommit(context.Background(), f.work, source, commit, data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "" {
+		t.Fatalf("findManifestCommit() = %s, want no reusable commit", got)
+	}
+}
+
+func TestFindManifestCommitSkipsDifferentManifest(t *testing.T) {
+	f := newPublishFixture(t)
+	o := f.options("nebula-20261117-10")
+	data, err := o.manifest.build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	other := f.options("nebula-20261117-11")
+	otherData, err := other.manifest.build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	commit, err := commitManifest(context.Background(), f.work, f.source, otherData, other.manifest.tag)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := findManifestCommit(context.Background(), f.work, f.source, commit, data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "" {
+		t.Fatalf("findManifestCommit() = %s, want no reusable commit", got)
+	}
+}
+
+func TestFindManifestCommitPropagatesGuardError(t *testing.T) {
+	f := newPublishFixture(t)
+	o := f.options("nebula-20261117-12")
+	data, err := o.manifest.build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, f.work, manifestFile, string(data))
+	writeFile(t, f.work, "README.md", "unexpected change\n")
+	commit := commitAll(t, f.work, "manifest and unrelated file")
+	if _, err := findManifestCommit(context.Background(), f.work, f.source, commit, data); !errors.Is(err, errGuard) {
+		t.Fatalf("err = %v, want errGuard", err)
 	}
 }
 

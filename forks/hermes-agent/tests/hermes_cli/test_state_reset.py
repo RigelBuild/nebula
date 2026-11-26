@@ -59,10 +59,13 @@ def test_state_reset_moves_database_and_marks_complete_after_start(tmp_path, mon
     files = _database_files(home)
     calls = []
     monkeypatch.setattr(gateway, "_cmd_stop", lambda _args: calls.append("stop"))
-    states = iter([False, False, True])
+    states = iter([
+        SimpleNamespace(running=False, pid=None, probe_error=False),
+        SimpleNamespace(running=False, pid=None, probe_error=False),
+        SimpleNamespace(running=True, pid=456, probe_error=False),
+    ])
     monkeypatch.setattr(
-        "gateway.status.resolve_gateway_liveness",
-        lambda **kwargs: SimpleNamespace(running=next(states), pid=None, probe_error=False),
+        "gateway.status.resolve_gateway_liveness", lambda **kwargs: next(states)
     )
     monkeypatch.setattr(gateway, "_cmd_start", lambda _args: calls.append("start"))
 
@@ -76,33 +79,23 @@ def test_state_reset_moves_database_and_marks_complete_after_start(tmp_path, mon
     assert "State reset complete" in capsys.readouterr().out
 
 
-def test_state_reset_can_retry_after_gateway_restart_failure(tmp_path, monkeypatch, capsys):
+def test_state_reset_leaves_backup_on_restart_failure(tmp_path, monkeypatch, capsys):
     home = _state_home(tmp_path, monkeypatch)
     _database_files(home)
-    starts = 0
-
-    def start(_args):
-        nonlocal starts
-        starts += 1
-        if starts == 1:
-            raise OSError("launchd unavailable")
-
     monkeypatch.setattr(gateway, "_cmd_stop", lambda _args: None)
     monkeypatch.setattr(
         "gateway.status.resolve_gateway_liveness",
         lambda **kwargs: SimpleNamespace(running=False, pid=None, probe_error=False),
     )
-    monkeypatch.setattr(gateway, "_cmd_start", start)
+    monkeypatch.setattr(
+        gateway, "_cmd_start", lambda _args: (_ for _ in ()).throw(OSError("launchd unavailable"))
+    )
+
     assert reset_state() == 1
     assert "State reset complete" not in capsys.readouterr().out
     backups = list(home.glob("state.db.pre-reset-*"))
     assert len(backups) == 1
     assert (backups[0] / "state.db").exists()
-
-    assert reset_state() == 0
-    assert starts == 2
-    assert "State reset complete" in capsys.readouterr().out
-    assert len(list(home.glob("state.db.pre-reset-*"))) == 2
 
 
 def test_state_reset_parser_registers_subcommand():

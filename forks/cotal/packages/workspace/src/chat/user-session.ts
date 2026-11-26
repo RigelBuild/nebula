@@ -8,6 +8,7 @@ import {
   type AuthProvider,
   type ChatSessionOpened,
 } from "@cotal-ai/core";
+import type { PsReply } from "../control/actions.js";
 import { userAuthStateDir } from "../auth-paths.js";
 import type { MeshTarget } from "../mesh-target.js";
 import { CommandFailure, type RefusalCode } from "../output.js";
@@ -77,6 +78,7 @@ export async function openUserChatSession(target: MeshTarget, options: {
   readonly post: readonly string[];
   readonly ttlSec: number;
   readonly words: ChatWords;
+  readonly managerCensus?: () => Promise<PsReply>;
 }): Promise<NativeChatSession> {
   const space = target.space;
   if (target.mode !== "user" || target.userAuth === undefined)
@@ -184,7 +186,7 @@ export async function openUserChatSession(target: MeshTarget, options: {
     allowSubscribe: [...options.read], allowPublish: [...options.post], expiresAt: expiresAtMs,
   };
   // Register the participant listeners before the endpoint starts; the session owns them until close.
-  const session = new NativeChatSession({ endpoint, identity, retire, words: options.words });
+  const session = new NativeChatSession({ endpoint, identity, retire, words: options.words, managerCensus: options.managerCensus });
   try {
     await endpoint.start();
     await session.startUserRoster();

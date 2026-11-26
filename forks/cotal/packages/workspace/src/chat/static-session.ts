@@ -19,6 +19,7 @@ import {
   CotalEndpoint, DEV_OWNER, EP_UNANSWERED, SealRecipient, assertLifecycleToken, assertValidChannel, idFromCreds, isCurvePublicKey, principalKey, resolveReadAcl,
   type SpaceAuth,
 } from "@cotal-ai/core";
+import type { PsReply } from "../control/actions.js";
 import { isConnectRefusal, mintControlInstrument, preflightOrThrow } from "../connect.js";
 import { askManager, managerFailure, refuseWithoutLiveManager, type ControlClient, type ManagerOp, type ManagerReply } from "../control/manager.js";
 import type { MeshTarget } from "../mesh-target.js";
@@ -143,6 +144,7 @@ export async function openStaticChatSession(target: MeshTarget, options: {
   readonly instanceId?: string;
   readonly words: ChatWords;
   readonly control: ControlClient;
+  readonly managerCensus?: () => Promise<PsReply>;
 }): Promise<NativeChatSession> {
   if (target.mode !== "auth" || !target.auth)
     throw new CommandFailure("refused", "UNSUPPORTED", "the static chat adapter requires a recorded static-auth target with its trust material; no other admission was attempted", { target: { space: target.space } });
@@ -223,7 +225,7 @@ export async function openStaticChatSession(target: MeshTarget, options: {
     channels: [...subscribe],
   });
   // The participant listeners are installed here, before the endpoint starts.
-  const session = new NativeChatSession({ endpoint, identity, retire, words: options.words });
+  const session = new NativeChatSession({ endpoint, identity, retire, words: options.words, managerCensus: options.managerCensus });
   if (slot.expiresAt <= Date.now()) {
     const close = await session.close();
     throw new CommandFailure("failed", "OPERATION_FAILED", "the admitted session had already expired when its reply arrived, so it was closed without connecting", {

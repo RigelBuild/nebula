@@ -150,3 +150,30 @@ def test_loaded_streak_stays_benched_inside_persisted_window(tmp_path):
         _finish_boundary(compressor)
     assert db.get_compression_fallback_streak("s1") == 2
     assert db.get_session_model_config_value("s1", "_fallback_probe_at") == 1300.0
+
+
+def test_aborted_probe_arms_deadline_and_prevents_same_window_retry(tmp_path):
+    """A terminal failure aborts before boundary accounting, but the probe still consumes its window."""
+    db = SessionDB(db_path=tmp_path / "state.db")
+    db.create_session("s1", "cli")
+    db.set_compression_fallback_streak("s1", 2)
+    compressor = _compressor()
+    compressor.bind_session_state(db, "s1")
+    now = 1000.0
+    window = compressor._ANTI_THRASH_RECOVERY_SECONDS
+    messages = _messages()
+
+    with patch("agent.context_compressor.time.time", return_value=now), \
+            patch("agent.context_compressor.call_llm", side_effect=ConnectionError("Connection error.")), \
+            patch.object(compressor, "_generate_summary", wraps=compressor._generate_summary) as mock_gen:
+        result = compressor.compress(messages, force=False)
+        assert compressor._last_compress_aborted is True
+        assert result == messages
+        mock_gen.assert_called_once()
+
+        # Bypass only the unrelated failure cooldown so this second attempt tests the persisted bench.
+        compressor._clear_compression_failure_cooldown()
+        compressor.compress(messages, force=False)
+        mock_gen.assert_called_once()
+
+    assert db.get_session_model_config_value("s1", "_fallback_probe_at") == now + window

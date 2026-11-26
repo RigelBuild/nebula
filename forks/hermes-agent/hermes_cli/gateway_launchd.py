@@ -755,6 +755,16 @@ def _nix_home_manager_plist_path() -> Path:
 
 
 
+def _install_root_is_nix_store() -> bool:
+    """Whether this gateway executable is installed in the immutable Nix store."""
+    root = Path(_gw().PROJECT_ROOT).resolve()
+    try:
+        root.relative_to(Path("/nix/store"))
+    except ValueError:
+        return False
+    return True
+
+
 def _start_nix_home_manager_service(plist_path: Path) -> None:
     """Start the verified Home Manager job without generating files in the Nix store."""
     from hermes_cli.gateway_runtime_service import (
@@ -779,7 +789,7 @@ def launchd_start():
     gateway_service_owner.refuse_foreign_launchd_plist("start")
 
     nix_plist = _nix_home_manager_plist_path()
-    if nix_plist.exists():
+    if nix_plist.exists() and _install_root_is_nix_store():
         _start_nix_home_manager_service(nix_plist)
         return
     plist_path = _gw().get_launchd_plist_path()

@@ -81,7 +81,7 @@ export function socketFd(sock: Socket): number {
 }
 
 export function peerCredentials(sock: Socket): PeerCredentials {
-  return loadNativeHelper<PeercredNative>().peercred(socketFd(sock));
+  return loadLinuxNative().peercred(socketFd(sock));
 }
 
 /** Exclusive non-blocking `flock(2)`; the kernel releases it when the last descriptor closes. */

@@ -126,6 +126,7 @@ function managerAnsweredFor(census: PsReply | undefined, seat: Presence): boolea
   return census?.ok === true && census.silent.length === 0 && census.failed.length === 0 &&
     vouchable(seat) &&
     census.answered.some((manager) => manager.rows.some((row) => {
+      if (typeof row.id !== "string") return false;
       const principal = parsePrincipalKey(row.id) ? row.id : /^[A-Za-z0-9_]+$/.test(row.id) ? principalKey(DEV_OWNER, row.id).key : undefined;
       return principal === seat.card.id && row.lifecycleUid === seat.lifecycleUid;
     }));

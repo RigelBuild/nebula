@@ -453,6 +453,10 @@ const task = msg({ id: "t1", kind: "anycast", service: "reviewer", from: { id: "
   check("partial census preserves ambiguity", "outcome" in partial && partial.code === "TARGET_AMBIGUOUS", partial);
   const malformed = resolveDmTarget("alice", [presentSeat, deadSeat], "current", heard(["u_a.alice", "alice"]), me, { ok: true, rows: [{ ...managedRow, id: "bad-id" }], silent: [], failed: [], answered: [{ instanceId: "manager-1", rows: [{ ...managedRow, id: "bad-id" }] }] });
   check("an invalid manager ID cannot crash DM name resolution", "outcome" in malformed && malformed.code === "TARGET_AMBIGUOUS", malformed);
+  const numericRow = Object.defineProperty({ ...managedRow }, "id", { value: 123 });
+  const numericCensus = { ok: true, rows: [numericRow], silent: [], failed: [], answered: [{ instanceId: "manager-1", rows: [numericRow] }] } satisfies PsReply;
+  const numeric = resolveDmTarget("alice", [presentSeat, deadSeat], "current", heard(["u_a.alice", "alice"]), me, numericCensus);
+  check("a numeric manager ID cannot crash DM name resolution", "outcome" in numeric && numeric.code === "TARGET_AMBIGUOUS", numeric);
   const unavailable = resolveDmTarget("alice", [presentSeat, deadSeat], "current", heard(["u_a.alice", "alice"]), me, undefined, true);
   check("unavailable census explains why the name remains ambiguous", "outcome" in unavailable && unavailable.code === "TARGET_AMBIGUOUS" && unavailable.message.includes("manager could not confirm"), unavailable);
   const failed = resolveDmTarget("alice", [presentSeat, deadSeat], "current", heard(["u_a.alice", "alice"]), me, { ...managerAnswered, failed: [{ instanceId: "manager-2", error: "failed" }] });

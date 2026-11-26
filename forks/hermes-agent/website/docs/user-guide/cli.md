@@ -609,6 +609,13 @@ CLI sessions are stored in Hermes's SQLite state database under `~/.hermes/state
 
 Some messaging adapters also keep per-platform transcript files alongside the database, but the CLI itself resumes from the SQLite session store.
 
+### Resetting the State Database
+
+`hermes state reset` stops the gateway, moves `state.db` and its SQLite WAL/SHM sidecars into a
+timestamped `state.db.pre-reset-*` directory under the Hermes home, then starts the gateway again.
+The command refuses to move the files unless the stop succeeds and the gateway process is gone.
+If restart fails, the backup remains available and a later run can retry the reset.
+
 ### Context Compression
 
 Long conversations are automatically summarized when approaching context limits:

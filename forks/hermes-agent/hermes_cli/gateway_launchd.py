@@ -787,26 +787,14 @@ def _start_nix_home_manager_service(plist_path: Path) -> None:
 
 def launchd_start():
     gateway_service_owner.refuse_foreign_launchd_plist("start")
+
     nix_plist = _nix_home_manager_plist_path()
-    if nix_plist.exists():
+    read_only = _install_root_is_read_only()
+    if nix_plist.exists() or read_only:
         _start_nix_home_manager_service(nix_plist)
         return
     plist_path = _gw().get_launchd_plist_path()
     label = _gw().get_launchd_label()
-    if _install_root_is_read_only():
-        if plist_path.exists():
-            try:
-                _launchctl_kickstart_current(label)
-            except subprocess.CalledProcessError as exc:
-                if not _launchd_error_indicates_unloaded(exc):
-                    raise
-                if not _launchd_bootstrap_and_kickstart(plist_path, label):
-                    return
-            _launchd_ok("✓ Service started")
-            return
-        _gw().print_error(f"Cannot regenerate launchd service from this read-only install; check plist {nix_plist}")
-        sys.exit(1)
-
 
     # Self-heal if the plist is missing entirely (e.g., manual cleanup, failed upgrade)
     if not plist_path.exists():

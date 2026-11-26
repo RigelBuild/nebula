@@ -60,6 +60,84 @@ class TestAgentCacheMemoryLifecycle:
         agent._memory_manager = manager
         return agent, provider
 
+    def test_fallback_eviction_releases_writer_after_running_slot_clears(self, monkeypatch):
+        from gateway.turn_context import TurnContext
+
+        events = []
+        runner = _make_runner()
+        key = "fallback-writer-test"
+        agent, provider = self._agent_with_writer_provider(key, events)
+        agent._provider_fallback_active = True
+        runner._agent_cache[key] = (agent, "sig")
+        runner._session_state(key).turn.agent = agent
+        monkeypatch.setattr(runner, "_persist_active_agents", lambda: None)
+        monkeypatch.setattr(runner, "_spawn_release_thread", lambda target, args, *a, **kw: target(*args))
+        ctx = TurnContext(source=None, session_key=key)
+        ctx.agent_holder[0] = agent
+        ctx.result_holder[0] = {"final_response": "ok"}
+
+        try:
+            runner._run_agent_evict_on_fallback(ctx)
+            assert key not in runner._agent_cache
+            assert provider.writer.is_alive()
+            assert events == []
+            runner._release_running_agent_state(key)
+            runner._release_running_agent_state(key)
+            assert events == ["shutdown"]
+            assert not provider.writer.is_alive()
+        finally:
+            if provider.writer.is_alive():
+                provider.shutdown()
+
+    @pytest.mark.asyncio
+    async def test_login_sweep_releases_running_welcome_writer_after_slot_clears(self, monkeypatch):
+        from hermes_cli.anon_auth import GUEST_MODEL
+
+        events = []
+        runner = _make_runner()
+        key = "welcome-writer-test"
+        agent, provider = self._agent_with_writer_provider(key, events)
+        agent.provider = "nous"
+        agent.model = GUEST_MODEL
+        runner._agent_cache[key] = (agent, "sig")
+        runner._session_state(key).turn.agent = agent
+        monkeypatch.setattr(runner, "_persist_active_agents", lambda: None)
+        monkeypatch.setattr(runner, "_spawn_release_thread", lambda target, args, *a, **kw: target(*args))
+        try:
+            assert await runner._sweep_sessions_off_welcome() == 0
+            assert key not in runner._agent_cache
+            assert provider.writer.is_alive()
+            assert events == []
+            runner._release_running_agent_state(key)
+            runner._release_running_agent_state(key)
+            assert events == ["shutdown"]
+            assert not provider.writer.is_alive()
+        finally:
+            if provider.writer.is_alive():
+                provider.shutdown()
+
+    def test_restore_override_releases_running_writer_after_slot_clears(self, monkeypatch):
+        events = []
+        runner = _make_runner()
+        key = "restore-writer-test"
+        agent, provider = self._agent_with_writer_provider(key, events)
+        runner._agent_cache[key] = (agent, "sig")
+        runner._session_state(key).turn.agent = agent
+        monkeypatch.setattr(runner, "_persist_active_agents", lambda: None)
+        monkeypatch.setattr(runner, "_spawn_release_thread", lambda target, args, *a, **kw: target(*args))
+        try:
+            runner._restore_session_model_override(key, {"had_override": False})
+            assert key not in runner._agent_cache
+            assert provider.writer.is_alive()
+            assert events == []
+            runner._release_running_agent_state(key)
+            runner._release_running_agent_state(key)
+            assert events == ["shutdown"]
+            assert not provider.writer.is_alive()
+        finally:
+            if provider.writer.is_alive():
+                provider.shutdown()
+
     def test_release_clients_joins_real_provider_writer_thread(self):
         """Soft eviction must stop a real provider's writer thread (the leak), without extraction."""
         events = []

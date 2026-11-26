@@ -6,6 +6,8 @@ import os
 from datetime import UTC, datetime
 from pathlib import Path
 
+from agent.deadline import poll_until
+
 
 _DATABASE_FILES = ("state.db", "state.db-wal", "state.db-shm")
 
@@ -25,11 +27,6 @@ def _backup_dir(home: Path) -> Path:
     return candidate
 
 
-def _pending_backup(home: Path) -> Path | None:
-    for backup in sorted(home.glob("state.db.pre-reset-*"), reverse=True):
-        if backup.is_dir() and any((backup / name).exists() for name in _DATABASE_FILES):
-            return backup
-    return None
 
 
 def _move_database(home: Path, backup: Path) -> None:
@@ -80,51 +77,32 @@ def reset_state() -> int:
     from hermes_cli import gateway
     from gateway.status import resolve_gateway_liveness
     home = get_hermes_home()
-    pending_backup = None if _has_database(home) else _pending_backup(home)
-    was_running = False
-    if pending_backup is not None:
-        try:
-            was_running = resolve_gateway_liveness(profile_dir=home, use_cache=False).running
-        except Exception as exc:
-            print(f"State reset stopped: could not confirm gateway status ({exc}).")
-            return 1
-        if was_running:
-            try:
-                gateway._cmd_stop(Namespace(system=False, all=False, interrupt=False))
-            except SystemExit as exc:
-                print(f"State reset incomplete: database is backed up at {pending_backup}; gateway stop failed.")
-                return int(exc.code) if isinstance(exc.code, int) else 1
-            except Exception as exc:
-                print(f"State reset incomplete: database is backed up at {pending_backup}; gateway stop failed ({exc}).")
-                return 1
-    else:
-        try:
-            gateway._cmd_stop(Namespace(system=False, all=False, interrupt=False))
-        except SystemExit as exc:
-            print("State reset stopped: gateway stop was not confirmed; state.db was not moved.")
-            return int(exc.code) if isinstance(exc.code, int) else 1
-        except Exception as exc:
-            print(f"State reset stopped: gateway stop failed; state.db was not moved ({exc}).")
-            return 1
-        try:
-            gateway._cmd_stop(Namespace(system=False, all=False, interrupt=False))
-        except SystemExit as exc:
-            print("State reset stopped: gateway stop was not confirmed; state.db was not moved.")
-            return int(exc.code) if isinstance(exc.code, int) else 1
-        except Exception as exc:
-            print(f"State reset stopped: gateway stop failed; state.db was not moved ({exc}).")
-            return 1
+    done = home / "reset.done"
+    pending = home / "reset.pending"
+    if done.exists():
+        print("State reset already completed.")
+        return 0
+    try:
+        result = gateway._cmd_stop(Namespace(system=False, all=False, interrupt=False))
+        if isinstance(result, int) and result != 0:
+            raise RuntimeError(f"gateway stop returned {result}")
+    except SystemExit as exc:
+        print("State reset stopped: gateway stop was not confirmed; state.db was not moved.")
+        return exc.code if isinstance(exc.code, int) and exc.code != 0 else 1
+    except Exception as exc:
+        print(f"State reset stopped: gateway stop failed; state.db was not moved ({exc}).")
+        return 1
 
-    if pending_backup is None or was_running:
-        try:
-            if not poll_until(
-                lambda: not _gateway_is_running(resolve_gateway_liveness, home), timeout=15.0, interval=0.2
-            ):
-                print("State reset stopped: gateway is still running; state.db was not moved.")
-                return 1
-        except Exception as exc:
-            print(f"State reset stopped: could not confirm gateway exit; state.db was not moved ({exc}).")
+    try:
+        if not poll_until(
+            lambda: not _gateway_is_running(resolve_gateway_liveness, home), timeout=15.0, interval=0.2
+        ):
+            stopped = resolve_gateway_liveness(profile_dir=home, use_cache=False)
+            print(f"State reset stopped: PID {stopped.pid} is still running; state.db was not moved.")
             return 1
+    except Exception as exc:
+        print(f"State reset stopped: could not confirm gateway exit; state.db was not moved ({exc}).")
+        return 1
 
     try:
         stopped = resolve_gateway_liveness(profile_dir=home, use_cache=False)
@@ -136,13 +114,17 @@ def reset_state() -> int:
         print(f"State reset stopped: {detail}; state.db was not moved.")
         return 1
 
-    backup = pending_backup or _backup_dir(home)
-    if pending_backup is None and _has_database(home):
-        try:
+    try:
+        if pending.exists():
+            backup = home / pending.read_text(encoding="utf-8").strip()
+        else:
+            backup = _backup_dir(home)
+            pending.write_text(backup.name, encoding="utf-8")
+        if not backup.exists() and _has_database(home):
             _move_database(home, backup)
-        except OSError as exc:
-            print(f"State reset stopped: could not move state.db and its SQLite sidecars ({exc}).")
-            return 1
+    except OSError as exc:
+        print(f"State reset stopped: could not move state.db and its SQLite sidecars ({exc}).")
+        return 1
 
     try:
         _start_gateway(gateway, Namespace, resolve_gateway_liveness, home)
@@ -152,6 +134,13 @@ def reset_state() -> int:
     except Exception as exc:
         print(f"State reset incomplete: database is backed up at {backup}; gateway restart failed ({exc}).")
         return 1
+    try:
+        done.write_text(f"{backup.name}\n", encoding="utf-8")
+        pending.unlink(missing_ok=True)
+    except OSError as exc:
+        print(f"State reset incomplete: could not record completion ({exc}).")
+        return 1
+
 
     print(f"State reset complete. Previous database files: {backup}")
     return 0

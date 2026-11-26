@@ -98,6 +98,46 @@ def test_state_reset_leaves_backup_on_restart_failure(tmp_path, monkeypatch, cap
     assert (backups[0] / "state.db").exists()
 
 
+def test_state_reset_retries_after_restart_failure(tmp_path, monkeypatch):
+    home = _state_home(tmp_path, monkeypatch)
+    _database_files(home)
+    running = False
+    monkeypatch.setattr(gateway, "_cmd_stop", lambda _args: None)
+    monkeypatch.setattr(
+        "gateway.status.resolve_gateway_liveness",
+        lambda **kwargs: SimpleNamespace(running=running, pid=456 if running else None, probe_error=False),
+    )
+
+    def fail(_args):
+        raise OSError("launchd unavailable")
+
+    monkeypatch.setattr(gateway, "_cmd_start", fail)
+    assert reset_state() == 1
+    assert not (home / "reset.done").exists()
+    backups = list(home.glob("state.db.pre-reset-*"))
+    assert len(backups) == 1
+
+    def start(_args):
+        nonlocal running
+        running = True
+
+    monkeypatch.setattr(gateway, "_cmd_start", start)
+    assert reset_state() == 0
+    assert (home / "reset.done").exists()
+    assert list(home.glob("state.db.pre-reset-*")) == backups
+    assert reset_state() == 0
+
+
+def test_state_reset_refuses_nonzero_stop_return(tmp_path, monkeypatch):
+    home = _state_home(tmp_path, monkeypatch)
+    files = _database_files(home)
+    monkeypatch.setattr(gateway, "_cmd_stop", lambda _args: 1)
+    monkeypatch.setattr(gateway, "_cmd_start", lambda _args: pytest.fail("must not start"))
+    assert reset_state() == 1
+    assert all(path.exists() for path in files.values())
+    assert not (home / "reset.done").exists()
+
+
 def test_state_reset_parser_registers_subcommand():
     from hermes_cli.main import _build_cli_parser
 

@@ -371,7 +371,7 @@ def test_state_reset_refuses_invalid_pending_name(tmp_path, monkeypatch, capsys,
     assert not (home / "reset.done").exists()
 
 
-def test_state_reset_retries_after_restart_failure(tmp_path, monkeypatch, capsys):
+def test_state_reset_retries_after_restart_failure_with_fresh_database(tmp_path, monkeypatch, capsys):
     home = _state_home(tmp_path, monkeypatch)
     _database_files(home)
     _instant_poll(monkeypatch)
@@ -382,14 +382,16 @@ def test_state_reset_retries_after_restart_failure(tmp_path, monkeypatch, capsys
         lambda **kwargs: SimpleNamespace(running=running, pid=456 if running else None, probe_error=False),
     )
 
-    def fail(_args):
+    def fail_after_creating_database(_args):
+        (home / "state.db").write_text("fresh state", encoding="utf-8")
         raise OSError("launchd unavailable")
 
-    monkeypatch.setattr(gateway, "_cmd_start", fail)
+    monkeypatch.setattr(gateway, "_cmd_start", fail_after_creating_database)
     assert reset_state() == 1
     assert not (home / "reset.done").exists()
     backups = list(home.glob("state.db.pre-reset-*"))
     assert len(backups) == 1
+    backup_contents = {path.name: path.read_text(encoding="utf-8") for path in backups[0].iterdir()}
 
     def start(_args):
         nonlocal running
@@ -399,10 +401,33 @@ def test_state_reset_retries_after_restart_failure(tmp_path, monkeypatch, capsys
     assert reset_state() == 0
     assert (home / "reset.done").exists()
     assert list(home.glob("state.db.pre-reset-*")) == backups
+    assert {path.name: path.read_text(encoding="utf-8") for path in backups[0].iterdir()} == backup_contents
+    assert (home / "state.db").read_text(encoding="utf-8") == "fresh state"
+    assert "State reset complete" in capsys.readouterr().out
+
+
+def test_state_reset_with_empty_home_does_not_stop_gateway(tmp_path, monkeypatch, capsys):
+    home = _state_home(tmp_path, monkeypatch)
+    running = True
+    calls = []
+
+    def stop(_args):
+        nonlocal running
+        calls.append("stop")
+        running = False
+
+    monkeypatch.setattr(gateway, "_cmd_stop", stop)
+    monkeypatch.setattr(gateway, "_cmd_start", lambda _args: calls.append("start"))
+    monkeypatch.setattr(
+        "gateway.status.resolve_gateway_liveness",
+        lambda **kwargs: SimpleNamespace(running=running, pid=456 if running else None, probe_error=False),
+    )
+
     assert reset_state() == 0
-    output = capsys.readouterr().out
-    assert str(home / "reset.done") in output
-    assert "Delete this marker to reset again" in output
+    assert running
+    assert calls == []
+    assert not (home / "reset.done").exists()
+    assert "No state database files were found" in capsys.readouterr().out
 
 
 def test_state_reset_refuses_nonzero_stop_return(tmp_path, monkeypatch):

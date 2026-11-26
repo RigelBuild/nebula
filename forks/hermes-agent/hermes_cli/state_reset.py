@@ -109,6 +109,10 @@ def reset_state() -> int:
     if done.exists():
         print(f"State reset already completed ({done}). Delete this marker to reset again.")
         return 0
+    if not pending.exists() and not _has_database(home):
+        print(f"No state database files were found in the Hermes home: {home}; nothing to reset.")
+        return 0
+
     try:
         result = gateway._cmd_stop(Namespace(system=False, all=False, interrupt=False))
         if isinstance(result, int) and result != 0:
@@ -151,12 +155,9 @@ def reset_state() -> int:
                 backup = _backup_dir(home)
                 pending.write_text(backup.name, encoding="utf-8")
             if backup.exists():
-                has_backup_database = _has_database(backup)
+                has_backup_state = (backup / "state.db").exists()
                 has_home_database = _has_database(home)
-                has_orphaned_sidecars = any(
-                    (home / name).exists() for name in ("state.db-wal", "state.db-shm")
-                )
-                if (backup / "state.db").exists() and not (home / "state.db").exists() and has_orphaned_sidecars:
+                if has_backup_state and not (home / "state.db").exists() and has_home_database:
                     remaining = ", ".join(
                         str(home / name)
                         for name in ("state.db-wal", "state.db-shm")
@@ -167,27 +168,17 @@ def reset_state() -> int:
                         f"while SQLite sidecars remain in the Hermes home ({remaining}); "
                         "preserve both locations and resolve the split state before retrying"
                     )
-                if has_backup_database:
+                if not has_backup_state:
                     if has_home_database:
-                        raise RuntimeError(
-                            f"incomplete state reset: backup {backup} and Hermes home {home} "
-                            "both contain database files; preserve both locations and resolve the split state"
-                        )
-                elif has_home_database:
-                    if not _move_database(home, backup, allow_existing_empty=True):
-                        raise RuntimeError(f"no state database files were moved into {backup}")
-                else:
-                    raise RuntimeError(f"incomplete state reset: backup directory is empty: {backup}")
+                        if not _move_database(home, backup, allow_existing_empty=True):
+                            raise RuntimeError(f"no state database files were moved into {backup}")
+                    else:
+                        raise RuntimeError(f"incomplete state reset: backup directory is empty: {backup}")
             elif _has_database(home):
-                if not pending.exists():
-                    pending.write_text(backup.name, encoding="utf-8")
                 if not _move_database(home, backup):
                     raise RuntimeError(f"no state database files were moved into {backup}")
             else:
                 raise RuntimeError(f"no state database files were found in the Hermes home: {home}")
-
-            if not _has_database(backup):
-                raise RuntimeError(f"no state database files were moved into {backup}")
     except OwnershipConflict as exc:
         print(f"State reset stopped: gateway became active before its database could be moved ({exc}).")
         return 1

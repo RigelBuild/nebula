@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -47,6 +48,8 @@ type publishOptions struct {
 	branch   string
 	attempts int
 	manifest *manifestInput
+	// stderr receives recovery diagnostics. Nil uses os.Stderr.
+	stderr io.Writer
 	// beforePush lets tests move the remote branch between commit and push.
 	beforePush func(attempt int) error
 	// commit builds the release commit; nil means commitManifest. Tests replace it.
@@ -100,7 +103,7 @@ func publish(ctx context.Context, o publishOptions) (string, error) {
 		if existing, err := findManifestCommit(ctx, o.repo, source, tip, data); err != nil {
 			return "", err
 		} else if existing != "" {
-			return existing, nil
+			return o.resumed(existing)
 		}
 
 		makeCommit := o.commit
@@ -130,6 +133,38 @@ func publish(ctx context.Context, o publishOptions) (string, error) {
 	return "", fmt.Errorf("%w (%d attempts)", errPushRejected, o.attempts)
 }
 
+// resumed reports on stderr that publish reuses commit instead of pushing one.
+func (o publishOptions) resumed(commit string) (string, error) {
+	stderr := o.stderr
+	if stderr == nil {
+		stderr = os.Stderr
+	}
+	if _, err := fmt.Fprintf(stderr, "resuming from existing manifest commit %s\n", commit); err != nil {
+		return "", err
+	}
+	return commit, nil
+}
+
+// equalJSON reports whether two JSON values have the same canonical encoding.
+func equalJSON(expected, existing []byte) (bool, error) {
+	var expectedValue, existingValue any
+	if err := json.Unmarshal(expected, &expectedValue); err != nil {
+		return false, err
+	}
+	if err := json.Unmarshal(existing, &existingValue); err != nil {
+		return false, err
+	}
+	expectedJSON, err := json.Marshal(expectedValue)
+	if err != nil {
+		return false, err
+	}
+	existingJSON, err := json.Marshal(existingValue)
+	if err != nil {
+		return false, err
+	}
+	return bytes.Equal(expectedJSON, existingJSON), nil
+}
+
 // findManifestCommit returns a guarded release-manifest commit on tip's history
 // when its contents exactly match this release.
 func findManifestCommit(ctx context.Context, repo, source, tip string, data []byte) (string, error) {
@@ -141,22 +176,11 @@ func findManifestCommit(ctx context.Context, repo, source, tip string, data []by
 	if err != nil {
 		return "", err
 	}
-	var expected, existing any
-	if err := json.Unmarshal(data, &expected); err != nil {
-		return "", err
-	}
-	if err := json.Unmarshal([]byte(manifest), &existing); err != nil {
-		return "", err
-	}
-	expectedJSON, err := json.Marshal(expected)
+	matches, err := equalJSON(data, []byte(manifest))
 	if err != nil {
 		return "", err
 	}
-	existingJSON, err := json.Marshal(existing)
-	if err != nil {
-		return "", err
-	}
-	if !bytes.Equal(expectedJSON, existingJSON) {
+	if !matches {
 		return "", nil
 	}
 	if err := guard(ctx, repo, commit); err != nil {
@@ -187,22 +211,11 @@ func checkNewestRelease(ctx context.Context, repo, source, plannedTag string, da
 		if prev.Source != source {
 			return "", fmt.Errorf("%w: %s has source %s; this run tested %s", errStaleRelease, tag, prev.Source, source)
 		}
-		var expected, existing any
-		if err := json.Unmarshal(data, &expected); err != nil {
-			return "", err
-		}
-		if err := json.Unmarshal([]byte(previous), &existing); err != nil {
-			return "", err
-		}
-		expectedJSON, err := json.Marshal(expected)
+		matches, err := equalJSON(data, []byte(previous))
 		if err != nil {
 			return "", err
 		}
-		existingJSON, err := json.Marshal(existing)
-		if err != nil {
-			return "", err
-		}
-		if !bytes.Equal(expectedJSON, existingJSON) {
+		if !matches {
 			return "", fmt.Errorf("%w: tag %s already exists with a different manifest; re-run all jobs on a new commit", errResumeMismatch, tag)
 		}
 		commit, err := git(ctx, repo, "rev-parse", tag+"^{commit}")

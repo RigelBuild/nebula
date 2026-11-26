@@ -3,6 +3,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -314,6 +315,36 @@ func TestPublishRetriesAfterMainMoves(t *testing.T) {
 	}
 	if msg := testGit(t, remote, "log", "-1", "--format=%s", "main"); msg != "release: nebula-20261117-7 [skip ci]" {
 		t.Fatalf("message = %q", msg)
+	}
+}
+
+func TestPublishCLIResumesManifestCommitToStderr(t *testing.T) {
+	f := newPublishFixture(t)
+	tag := "nebula-20261117-10"
+	o := f.options(tag)
+	data, err := o.manifest.build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	commit, err := commitManifest(context.Background(), f.work, f.source, data, tag)
+	if err != nil {
+		t.Fatal(err)
+	}
+	testGit(t, f.work, "push", "-q", "origin", commit+":refs/heads/main")
+
+	var stdout, stderr bytes.Buffer
+	code := run(context.Background(), []string{
+		"publish", "-repo", f.work, "-remote", "origin", "-branch", "main", "-attempts", "3",
+		"-plan", f.plan, "-tag", tag, "-assets", f.assets, "-base-url", "https://x/", "-system", "x86_64-linux",
+	}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("run() = %d, stderr = %q", code, stderr.String())
+	}
+	if got, want := stdout.String(), commit+"\n"; got != want {
+		t.Fatalf("stdout = %q, want SHA only %q", got, want)
+	}
+	if got, want := stderr.String(), "resuming from existing manifest commit "+commit+"\n"; got != want {
+		t.Fatalf("stderr = %q, want resume diagnostic %q", got, want)
 	}
 }
 

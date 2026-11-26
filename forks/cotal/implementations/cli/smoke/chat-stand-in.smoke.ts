@@ -318,6 +318,32 @@ if (mode === "plain" || mode === "stdio") {
   }
 
   {
+    const uid = "01hyyyyyyyyyyyyyyyyyyyyyyy";
+    const present = { card: { id: "local.worker", name: "alice", kind: "agent" }, status: "idle", ts: 0, lifecycleUid: uid };
+    const offline = { card: { id: "u_a.alice", name: "alice", kind: "agent" }, status: "offline", ts: 0 };
+    const row = { id: "worker", name: "alice", agent: "agent", mode: "run", status: "running", uptimeMs: 1, mesh: "online", lifecycleUid: uid };
+    let census: { ok: boolean; rows: typeof row[]; silent: string[]; failed: never[]; answered: { instanceId: string; rows: typeof row[] }[] } = {
+      ok: true, rows: [row], silent: [], failed: [], answered: [{ instanceId: "manager-1", rows: [row] }],
+    };
+    const sent: string[] = [];
+    const emitter = Object.assign(new EventEmitter(), {
+      getRoster: () => [present, offline], presenceView: () => ({ state: "current" }),
+      unicastAttributed: async (to: string) => { sent.push(to); return { msg: { id: "d1" }, ack: { seq: 1, duplicate: false } }; },
+    });
+    const endpoint = emitter as unknown as CotalEndpoint;
+    const session = new NativeChatSession({ endpoint, identity: { ...identity, mode: "open" }, words, retire: async () => ({ retirement: "retired", connectionClosed: "confirmed", message: "" }),
+      managerCensus: async () => census });
+    emitter.emit("message", { id: "m1", ts: 0, space: identity.space, from: { id: offline.card.id, name: "alice" }, channel: "general", parts: [{ kind: "text", text: "hi" }] }, { ack() {}, nak() {}, durable: false }, { historical: false, kind: "channel" });
+    const resolved = await session.dm("alice", "hi");
+    check("a complete census resolves a stale heard name to an open seat with a bare manager actor ID",
+      resolved.outcome === "stored" && sent.at(-1) === present.card.id, { resolved, sent });
+    census = { ...census, silent: ["manager-2"] };
+    const partial = await session.dm("alice", "hi");
+    check("a partial census keeps the stale heard name ambiguous beside a bare-ID open seat",
+      partial.outcome === "refused" && partial.code === "TARGET_AMBIGUOUS", partial);
+  }
+
+  {
     const peer = { card: { id: "local.peer", name: "peer", kind: "agent" }, status: "idle", ts: 1 };
     const states = [[peer], [peer], [{ ...peer, activity: "working" }], [{ ...peer, status: "offline" }]];
     let index = 0;

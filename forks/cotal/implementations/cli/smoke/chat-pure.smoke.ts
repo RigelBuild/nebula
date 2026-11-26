@@ -362,6 +362,19 @@ const task = msg({ id: "t1", kind: "anycast", service: "reviewer", from: { id: "
   check("/who names a working peer's progress as unknown", who.length === 1 && who[0] === "carol · agent · working · progress unknown · building", who);
 }
 {
+  const uid = "01hyyyyyyyyyyyyyyyyyyyyyyy";
+  const openSeat = { ...presence("local.worker", "alice"), lifecycleUid: uid };
+  const openRow = { id: "worker", name: "alice", agent: "agent", mode: "run", status: "running", uptimeMs: 1, mesh: "online", lifecycleUid: uid } satisfies ManagedRow;
+  const complete = { ok: true, rows: [openRow], silent: [], failed: [], answered: [{ instanceId: "manager-1", rows: [openRow] }] } satisfies PsReply;
+  const engine = heard(["u_a.alice", "alice"]);
+  const resolved = resolveDmTarget("alice", [openSeat], "current", engine, me, complete);
+  check("a complete census maps a bare open-seat actor ID to its local principal for a stale heard name",
+    !("outcome" in resolved) && resolved.id === "local.worker", resolved);
+  const partial = resolveDmTarget("alice", [openSeat], "current", engine, me, { ...complete, silent: ["manager-2"] });
+  check("a partial census cannot resolve an absent heard sender beside a bare-ID open seat",
+    "outcome" in partial && partial.code === "TARGET_AMBIGUOUS", partial);
+}
+{
   const managedRow = { id: "u_c.alice", name: "alice", agent: "agent", mode: "run", status: "running", uptimeMs: 1, mesh: "online", lifecycleUid: "01hyyyyyyyyyyyyyyyyyyyyyyy" } satisfies ManagedRow;
   const managerAnswered = { ok: true, rows: [managedRow], silent: [], failed: [], answered: [{ instanceId: "manager-1", rows: [managedRow] }] } satisfies PsReply;
   const roster = [presence("u_c.alice", "alice"), presence("o.bob", "bob")];

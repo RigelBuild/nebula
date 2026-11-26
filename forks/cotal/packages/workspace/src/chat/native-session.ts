@@ -17,6 +17,7 @@
  */
 import {
   DEFAULT_HEARTBEAT_MS,
+  DEV_OWNER,
   EpEnvelopeError,
   channelInAllow,
   isConcreteChannel,
@@ -24,6 +25,7 @@ import {
   isPublishPermissionDenied,
   parsePrincipalKey,
   partsToText,
+  principalKey,
   resolvePeer,
   type CotalEndpoint,
   type CotalMessage,
@@ -123,7 +125,7 @@ function vouchable(p: Presence): boolean {
 function managerAnsweredFor(census: PsReply | undefined, seat: Presence): boolean {
   return census?.ok === true && census.silent.length === 0 && census.failed.length === 0 &&
     vouchable(seat) &&
-    census.answered.some((manager) => manager.rows.some((row) => row.id === seat.card.id && row.lifecycleUid === seat.lifecycleUid));
+    census.answered.some((manager) => manager.rows.some((row) => (parsePrincipalKey(row.id) ? row.id : principalKey(DEV_OWNER, row.id).key) === seat.card.id && row.lifecycleUid === seat.lifecycleUid));
 }
 
 function needsManagerCensus(to: DmTarget, roster: readonly Presence[], rosterState: PresenceView["state"], engine: ParticipantEngine, selfPrincipal: string): boolean {

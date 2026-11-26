@@ -536,7 +536,7 @@ class GatewayProfileReconcileMixin:
             cache = getattr(self, "_agent_cache", None)
             for key in [k for k in list(cache or {}) if str(k).startswith(prefix)]:
                 with _log_suppressed(logging.DEBUG, "agent eviction failed for %s", key, exc_info=True):
-                    self._evict_cached_agent(key)
+                    self._evict_cached_agent(key, release_after_turn=True)
             if not retired:
                 # A writer outlived its Stop and may still write this home: the profile leaves the
                 # served set (ingress is gone above) but keeps its reservation and store handles until

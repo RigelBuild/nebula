@@ -245,7 +245,7 @@ class GatewayAgentCacheMixin:
             self._session_state(session_key).conversation.model_override = dict(snapshot.get("override") or {})
         elif (state := self._peek_session_state(session_key)) is not None:
             state.conversation.model_override = None
-        self._evict_cached_agent(session_key)
+        self._evict_cached_agent(session_key, release_after_turn=True)
 
     def _is_intentional_model_switch(self, session_key: str, agent: Any, config_model: str) -> bool:
         """True when *agent* running a model other than *config_model* is deliberate: a /model session

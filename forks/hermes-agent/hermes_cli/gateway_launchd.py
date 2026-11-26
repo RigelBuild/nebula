@@ -754,16 +754,6 @@ def _nix_home_manager_plist_path() -> Path:
     return Path(get_real_home()) / "Library" / "LaunchAgents" / "org.nix-community.home.hermes-agent.plist"
 
 
-def _install_root_is_read_only() -> bool:
-    """Whether start must avoid publishing launchers into this installation."""
-    root = Path(_gw().PROJECT_ROOT).resolve()
-    try:
-        root.relative_to(Path("/nix/store"))
-    except ValueError:
-        mode = root.stat().st_mode
-        return not (mode & 0o222) or not os.access(root, os.W_OK)
-    return True
-
 
 def _start_nix_home_manager_service(plist_path: Path) -> None:
     """Start the verified Home Manager job without generating files in the Nix store."""
@@ -789,8 +779,7 @@ def launchd_start():
     gateway_service_owner.refuse_foreign_launchd_plist("start")
 
     nix_plist = _nix_home_manager_plist_path()
-    read_only = _install_root_is_read_only()
-    if nix_plist.exists() or read_only:
+    if nix_plist.exists():
         _start_nix_home_manager_service(nix_plist)
         return
     plist_path = _gw().get_launchd_plist_path()

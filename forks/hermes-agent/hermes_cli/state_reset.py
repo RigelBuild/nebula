@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 from datetime import UTC, datetime
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 from agent.deadline import poll_until
 
@@ -25,8 +25,6 @@ def _backup_dir(home: Path) -> Path:
         candidate = home / f"{base.name}-{suffix}"
         suffix += 1
     return candidate
-
-
 
 
 def _move_database(home: Path, backup: Path) -> None:
@@ -59,14 +57,39 @@ def _gateway_is_running(resolve_liveness, home: Path) -> bool:
     return state.running
 
 
+_STOP_TIMEOUT = 15.0
+_START_TIMEOUT = 10.0
+_POLL_INTERVAL = 0.2
+
+
 def _start_gateway(gateway, Namespace, resolve_liveness, home: Path) -> None:
     result = gateway._cmd_start(Namespace(system=False, all=False, force=False))
     if isinstance(result, int) and result != 0:
         raise RuntimeError(f"gateway start returned {result}")
     if not poll_until(
-        lambda: _gateway_is_running(resolve_liveness, home), timeout=10.0, interval=0.2
+        lambda: _gateway_is_running(resolve_liveness, home), timeout=_START_TIMEOUT, interval=_POLL_INTERVAL
     ):
         raise RuntimeError("gateway start was not confirmed")
+
+
+def _validated_backup(home: Path, pending: Path) -> Path:
+    name = pending.read_text(encoding="utf-8").strip()
+    relative = Path(name)
+    windows_relative = PureWindowsPath(name)
+    if (
+        not name
+        or name in {".", ".."}
+        or relative.is_absolute()
+        or windows_relative.is_absolute()
+        or windows_relative.drive
+        or len(relative.parts) != 1
+        or len(windows_relative.parts) != 1
+    ):
+        raise ValueError("reset.pending must contain one relative backup name inside the Hermes home")
+    backup = home / relative
+    if backup.resolve().parent != home.resolve():
+        raise ValueError("reset.pending backup must resolve inside the Hermes home")
+    return backup
 
 
 def reset_state() -> int:
@@ -75,7 +98,9 @@ def reset_state() -> int:
 
     from hermes_constants import get_hermes_home
     from hermes_cli import gateway
+    from gateway.runtime_ownership import OwnershipConflict, exclusive_maintenance
     from gateway.status import resolve_gateway_liveness
+
     home = get_hermes_home()
     done = home / "reset.done"
     pending = home / "reset.pending"
@@ -95,7 +120,9 @@ def reset_state() -> int:
 
     try:
         if not poll_until(
-            lambda: not _gateway_is_running(resolve_gateway_liveness, home), timeout=15.0, interval=0.2
+            lambda: not _gateway_is_running(resolve_gateway_liveness, home),
+            timeout=_STOP_TIMEOUT,
+            interval=_POLL_INTERVAL,
         ):
             stopped = resolve_gateway_liveness(profile_dir=home, use_cache=False)
             print(f"State reset stopped: PID {stopped.pid} is still running; state.db was not moved.")
@@ -105,25 +132,44 @@ def reset_state() -> int:
         return 1
 
     try:
-        stopped = resolve_gateway_liveness(profile_dir=home, use_cache=False)
-    except Exception as exc:
-        print(f"State reset stopped: could not confirm gateway exit; state.db was not moved ({exc}).")
-        return 1
-    if stopped.running or stopped.probe_error:
-        detail = f"PID {stopped.pid} is still running" if stopped.running else "gateway status is unknown"
-        print(f"State reset stopped: {detail}; state.db was not moved.")
-        return 1
+        with exclusive_maintenance([home]):
+            stopped = resolve_gateway_liveness(profile_dir=home, use_cache=False)
+            if stopped.probe_error:
+                print("State reset stopped: gateway status is unknown; state.db was not moved.")
+                return 1
+            if stopped.running:
+                print(f"State reset stopped: PID {stopped.pid} is still running; state.db was not moved.")
+                return 1
 
-    try:
-        if pending.exists():
-            backup = home / pending.read_text(encoding="utf-8").strip()
-        else:
-            backup = _backup_dir(home)
-            pending.write_text(backup.name, encoding="utf-8")
-        if not backup.exists() and _has_database(home):
-            _move_database(home, backup)
-    except OSError as exc:
-        print(f"State reset stopped: could not move state.db and its SQLite sidecars ({exc}).")
+            if pending.exists():
+                backup = _validated_backup(home, pending)
+            else:
+                backup = _backup_dir(home)
+                pending.write_text(backup.name, encoding="utf-8")
+
+            if backup.exists():
+                has_backup_database = (backup / "state.db").exists()
+                has_orphaned_sidecars = any(
+                    (home / name).exists() for name in ("state.db-wal", "state.db-shm")
+                )
+                if has_backup_database and not (home / "state.db").exists() and has_orphaned_sidecars:
+                    remaining = ", ".join(
+                        str(home / name)
+                        for name in ("state.db-wal", "state.db-shm")
+                        if (home / name).exists()
+                    )
+                    raise RuntimeError(
+                        f"incomplete state reset: backup contains {backup / 'state.db'} "
+                        f"while SQLite sidecars remain in the Hermes home ({remaining}); "
+                        "preserve both locations and resolve the split state before retrying"
+                    )
+            elif _has_database(home):
+                _move_database(home, backup)
+    except OwnershipConflict as exc:
+        print(f"State reset stopped: gateway became active before its database could be moved ({exc}).")
+        return 1
+    except (OSError, UnicodeError, ValueError, RuntimeError) as exc:
+        print(f"State reset stopped: could not safely move state.db and its SQLite sidecars ({exc}).")
         return 1
 
     try:
@@ -141,9 +187,8 @@ def reset_state() -> int:
         print(f"State reset incomplete: could not record completion ({exc}).")
         return 1
 
-
     print(f"State reset complete. Previous database files: {backup}")
     return 0
 
 
-__all__ = ["_backup_dir", "_move_database", "reset_state"]
+__all__ = ["reset_state"]

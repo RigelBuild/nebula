@@ -747,10 +747,66 @@ def launchd_uninstall():
     print("✓ Service uninstalled")
 
 
+def _nix_home_manager_plist_path() -> Path:
+    """Home Manager's launchd definition for the Nix-managed gateway."""
+    from hermes_constants import get_real_home
+
+    return Path(get_real_home()) / "Library" / "LaunchAgents" / "org.nix-community.home.hermes-agent.plist"
+
+
+def _install_root_is_read_only() -> bool:
+    """Whether start must avoid publishing launchers into this installation."""
+    root = Path(_gw().PROJECT_ROOT).resolve()
+    try:
+        root.relative_to(Path("/nix/store"))
+    except ValueError:
+        mode = root.stat().st_mode
+        return not (mode & 0o222) or not os.access(root, os.W_OK)
+    return True
+
+
+def _start_nix_home_manager_service(plist_path: Path) -> None:
+    """Start the verified Home Manager job without generating files in the Nix store."""
+    from hermes_cli.gateway_runtime_service import (
+        RuntimeStartError, discover_existing_gateway_service, start_existing_gateway_service,
+    )
+
+    deadline = time.monotonic() + 5
+    try:
+        service = discover_existing_gateway_service(_gw().get_hermes_home(), deadline=deadline)
+        if service is None or service.backend != "launchd":
+            raise RuntimeStartError("service_not_loaded")
+        start_existing_gateway_service(service, deadline=deadline)
+    except (RuntimeStartError, TimeoutError, OSError) as exc:
+        _gw().print_error(
+            f"Could not start the Nix-managed gateway; check launchd plist {plist_path}: {exc}"
+        )
+        sys.exit(1)
+    _launchd_ok("✓ Nix-managed service started")
+
+
 def launchd_start():
     gateway_service_owner.refuse_foreign_launchd_plist("start")
+    nix_plist = _nix_home_manager_plist_path()
+    if nix_plist.exists():
+        _start_nix_home_manager_service(nix_plist)
+        return
     plist_path = _gw().get_launchd_plist_path()
     label = _gw().get_launchd_label()
+    if _install_root_is_read_only():
+        if plist_path.exists():
+            try:
+                _launchctl_kickstart_current(label)
+            except subprocess.CalledProcessError as exc:
+                if not _launchd_error_indicates_unloaded(exc):
+                    raise
+                if not _launchd_bootstrap_and_kickstart(plist_path, label):
+                    return
+            _launchd_ok("✓ Service started")
+            return
+        _gw().print_error(f"Cannot regenerate launchd service from this read-only install; check plist {nix_plist}")
+        sys.exit(1)
+
 
     # Self-heal if the plist is missing entirely (e.g., manual cleanup, failed upgrade)
     if not plist_path.exists():

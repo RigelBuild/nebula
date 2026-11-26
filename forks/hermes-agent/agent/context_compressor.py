@@ -2521,6 +2521,8 @@ class ContextCompressor(
             return
         if used_fallback:
             self._fallback_compression_streak += 1
+            if self._fallback_compression_streak >= 2:
+                self._set_fallback_probe_at(time.time() + self._ANTI_THRASH_RECOVERY_SECONDS)
             if not self.quiet_mode:
                 logger.warning(
                     "Compaction completed with a deterministic fallback summary. fallback_compression_streak=%d",
@@ -2528,6 +2530,7 @@ class ContextCompressor(
                 )
         elif self._fallback_compression_streak:
             self._fallback_compression_streak = 0
+            self._set_fallback_probe_at(0.0)
         self._persist_fallback_compression_streak()
         # Any completed boundary (incl. the degraded fallback) settles the overload budget (#123167).
         self._reset_consecutive_overload_aborts()

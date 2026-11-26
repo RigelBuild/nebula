@@ -1,5 +1,6 @@
 """Safe gateway state reset behavior."""
 
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -263,7 +264,7 @@ def test_state_reset_does_not_mark_done_when_start_is_not_confirmed(tmp_path, mo
 
 @pytest.mark.parametrize(
     "pending_name",
-    ["", "/tmp/outside", "../outside", "nested/backup", "C:\\outside", "not-a-backup"],
+    ["", "/tmp/outside", "../outside", "nested/backup", "C:\\outside", "."],
 )
 def test_state_reset_refuses_invalid_pending_name(tmp_path, monkeypatch, capsys, pending_name):
     home = _state_home(tmp_path, monkeypatch)
@@ -275,7 +276,7 @@ def test_state_reset_refuses_invalid_pending_name(tmp_path, monkeypatch, capsys,
     monkeypatch.setattr(gateway, "_cmd_start", lambda _args: pytest.fail("must not start"))
 
     assert reset_state() == 1
-    assert "reset.pending must contain one relative backup name inside the Hermes home" in capsys.readouterr().out
+    assert "reset.pending must contain one relative state.db.pre-reset backup name inside the Hermes home" in capsys.readouterr().out
     assert all(path.exists() for path in files.values())
     assert not (home / "reset.done").exists()
 
@@ -331,4 +332,4 @@ def test_state_reset_parser_registers_subcommand(capsys):
 
     with pytest.raises(SystemExit):
         parser.parse_args(["state", "reset", "--help"])
-    assert "one-shot per home" in capsys.readouterr().out
+    assert "once per Hermes home" in capsys.readouterr().out

@@ -754,7 +754,6 @@ def _nix_home_manager_plist_path() -> Path:
     return Path(get_real_home()) / "Library" / "LaunchAgents" / "org.nix-community.home.hermes-agent.plist"
 
 
-
 def _install_root_is_nix_store() -> bool:
     """Whether this gateway executable is installed in the immutable Nix store."""
     root = Path(_gw().PROJECT_ROOT).resolve()

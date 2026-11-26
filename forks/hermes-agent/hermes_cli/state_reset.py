@@ -77,15 +77,14 @@ def _validated_backup(home: Path, pending: Path) -> Path:
     relative = Path(name)
     windows_relative = PureWindowsPath(name)
     if (
-        not name
-        or name in {".", ".."}
+        not name.startswith("state.db.pre-reset-")
         or relative.is_absolute()
         or windows_relative.is_absolute()
         or windows_relative.drive
         or len(relative.parts) != 1
         or len(windows_relative.parts) != 1
     ):
-        raise ValueError("reset.pending must contain one relative backup name inside the Hermes home")
+        raise ValueError("reset.pending must contain one relative state.db.pre-reset backup name inside the Hermes home")
     backup = home / relative
     if backup.resolve().parent != home.resolve():
         raise ValueError("reset.pending backup must resolve inside the Hermes home")

@@ -233,7 +233,7 @@ class GatewayLoginCommandsMixin:
                     continue
                 overrides.pop(key, None)
             try:
-                self._evict_cached_agent(key)
+                self._evict_cached_agent(key, release_after_turn=True)
             except Exception:
                 logger.warning("/login: failed to evict free-tier session %s", key, exc_info=True)
         return failed

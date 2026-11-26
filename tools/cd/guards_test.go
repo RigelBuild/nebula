@@ -389,6 +389,38 @@ func TestPlanSkipsNonGoBinaries(t *testing.T) {
 	}
 }
 
+func TestPublishReturnsExistingManifestCommitWithoutTag(t *testing.T) {
+	f := newPublishFixture(t)
+	tag := "nebula-20261117-8"
+	o := f.options(tag)
+	data, err := o.manifest.build()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Simulate the manifest commit reaching remote main before tag push failed.
+	commit, err := commitManifest(context.Background(), f.work, f.source, data, tag)
+	if err != nil {
+		t.Fatal(err)
+	}
+	testGit(t, f.work, "push", "-q", "origin", commit+":refs/heads/main")
+	before := testGit(t, f.remote, "rev-parse", "main")
+	if before != commit {
+		t.Fatalf("remote main = %s, want existing manifest commit %s", before, commit)
+	}
+
+	got, err := publish(context.Background(), o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != commit {
+		t.Fatalf("publish() = %s, want existing manifest commit %s", got, commit)
+	}
+	if after := testGit(t, f.remote, "rev-parse", "main"); after != before {
+		t.Fatalf("remote main moved from %s to %s", before, after)
+	}
+}
+
 func TestPublishReturnsExistingCommitForSameTagAndSource(t *testing.T) {
 	f := newPublishFixture(t)
 	tag := "nebula-20261117-6"

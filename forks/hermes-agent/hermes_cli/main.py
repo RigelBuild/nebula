@@ -3187,6 +3187,8 @@ def _build_cli_parser():
     chat_parser.set_defaults(func=cmd_chat)
 
     build_model_parser(subparsers, cmd_model=cmd_model)
+    from hermes_cli.subcommands.state import build_state_parser, cmd_state_reset
+    build_state_parser(subparsers, cmd_state_reset=cmd_state_reset)
     build_moa_parser(subparsers)
     build_fallback_parser(subparsers)
     build_worktree_parser(subparsers)

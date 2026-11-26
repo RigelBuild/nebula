@@ -234,3 +234,96 @@ def test_hm_job_serving_another_profile_of_our_root_is_not_ours(tmp_path, monkey
 
     assert service._launchd(profile, time.monotonic() + 5) is None
     assert not any(call[1] == "kickstart" for call in calls)
+
+def test_launchd_start_uses_existing_home_manager_plist_for_nix_store_install(
+    tmp_path, monkeypatch
+):
+    from hermes_cli import gateway, gateway_launchd, gateway_runtime_service
+
+    home = tmp_path / ".hermes"
+    home.mkdir()
+    nix_plist = tmp_path / "Library" / "LaunchAgents" / f"{HM_LABEL}.plist"
+    nix_plist.parent.mkdir(parents=True)
+    nix_plist.touch()
+    ordinary_plist = tmp_path / "ai.hermes.gateway.plist"
+    monkeypatch.setattr(gateway, "PROJECT_ROOT", Path("/nix/store/hermes-agent"))
+    monkeypatch.setattr(gateway, "get_hermes_home", lambda: home)
+    monkeypatch.setattr(gateway, "get_launchd_plist_path", lambda: ordinary_plist)
+    monkeypatch.setattr(gateway_launchd, "_nix_home_manager_plist_path", lambda: nix_plist)
+    monkeypatch.setattr(gateway_launchd.gateway_service_owner,
+                        "refuse_foreign_launchd_plist", lambda verb: None)
+    service = gateway_runtime_service.ExistingService(
+        "launchd", ("launchctl", "kickstart", f"gui/{os.getuid()}/{HM_LABEL}"), False)
+    found = []
+    started = []
+    monkeypatch.setattr(gateway_runtime_service, "discover_existing_gateway_service",
+                        lambda target, *, deadline: found.append((target, deadline)) or service)
+    monkeypatch.setattr(gateway_runtime_service, "start_existing_gateway_service",
+                        lambda target, *, deadline: started.append((target, deadline)))
+    monkeypatch.setattr(gateway_launchd, "_launchd_ok", lambda message: None)
+    monkeypatch.setattr(gateway, "refresh_launchd_plist_if_needed",
+                        lambda: pytest.fail("must not refresh a Nix-owned service"))
+    monkeypatch.setattr(gateway, "_prepare_service_launcher",
+                        lambda **kwargs: pytest.fail("must not publish into /nix/store"))
+
+    gateway_launchd.launchd_start()
+
+    assert found and found[0][0] == home
+    assert started == [(service, found[0][1])]
+    assert not ordinary_plist.exists()
+
+
+def test_launchd_start_regenerates_for_non_nix_root_with_home_manager_plist(tmp_path, monkeypatch):
+    from hermes_cli import gateway, gateway_launchd
+
+    home = tmp_path / ".hermes"
+    home.mkdir()
+    nix_plist = tmp_path / "Library" / "LaunchAgents" / f"{HM_LABEL}.plist"
+    nix_plist.parent.mkdir(parents=True)
+    nix_plist.touch()
+    ordinary_plist = tmp_path / "ai.hermes.gateway.plist"
+    monkeypatch.setattr(gateway, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(gateway, "get_launchd_plist_path", lambda: ordinary_plist)
+    monkeypatch.setattr(gateway_launchd, "_nix_home_manager_plist_path", lambda: nix_plist)
+    monkeypatch.setattr(gateway_launchd.gateway_service_owner,
+                        "refuse_foreign_launchd_plist", lambda verb: None)
+    monkeypatch.setattr(gateway, "generate_launchd_plist", lambda: "generated")
+    prepared = []
+    bootstrapped = []
+    monkeypatch.setattr(gateway, "_prepare_service_launcher", lambda **kwargs: prepared.append(True))
+    monkeypatch.setattr(gateway_launchd, "_launchd_bootstrap_and_kickstart",
+                        lambda path, label: bootstrapped.append((path, label)) or True)
+    monkeypatch.setattr(gateway_launchd, "_launchd_ok", lambda message: None)
+
+    gateway_launchd.launchd_start()
+
+    assert ordinary_plist.read_text(encoding="utf-8") == "generated"
+    assert prepared == [True]
+    assert len(bootstrapped) == 1
+    assert bootstrapped[0][0] == ordinary_plist
+    assert bootstrapped[0][1].startswith("ai.hermes.gateway")
+    assert nix_plist.exists()
+
+
+def test_launchd_start_without_nix_plist_generates_ordinary_plist(tmp_path, monkeypatch):
+    from hermes_cli import gateway, gateway_launchd
+
+    home = tmp_path / ".hermes"
+    home.mkdir()
+    nix_plist = tmp_path / "Library" / "LaunchAgents" / f"{HM_LABEL}.plist"
+    ordinary_plist = tmp_path / "ai.hermes.gateway.plist"
+    monkeypatch.setattr(gateway, "PROJECT_ROOT", Path("/nix/store/hermes-agent"))
+    monkeypatch.setattr(gateway, "get_hermes_home", lambda: home)
+    monkeypatch.setattr(gateway, "get_launchd_plist_path", lambda: ordinary_plist)
+    monkeypatch.setattr(gateway_launchd, "_nix_home_manager_plist_path", lambda: nix_plist)
+    monkeypatch.setattr(gateway_launchd.gateway_service_owner,
+                        "refuse_foreign_launchd_plist", lambda verb: None)
+    monkeypatch.setattr(gateway, "generate_launchd_plist", lambda: "generated")
+    monkeypatch.setattr(gateway, "_prepare_service_launcher", lambda **kwargs: None)
+    monkeypatch.setattr(gateway_launchd, "_launchd_bootstrap_and_kickstart", lambda path, label: True)
+    monkeypatch.setattr(gateway_launchd, "_launchd_ok", lambda message: None)
+
+    gateway_launchd.launchd_start()
+
+    assert ordinary_plist.read_text(encoding="utf-8") == "generated"
+    assert not nix_plist.exists()

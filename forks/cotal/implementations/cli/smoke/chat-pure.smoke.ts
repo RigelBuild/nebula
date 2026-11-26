@@ -451,6 +451,10 @@ const task = msg({ id: "t1", kind: "anycast", service: "reviewer", from: { id: "
   check("unread census preserves ambiguity", "outcome" in unread && unread.code === "TARGET_AMBIGUOUS", unread);
   const partial = resolveDmTarget("alice", [presentSeat, deadSeat], "current", heard(["u_a.alice", "alice"]), me, { ok: true, rows: [managedRow], silent: ["manager-2"], failed: [], answered: [{ instanceId: "manager-1", rows: [managedRow] }] });
   check("partial census preserves ambiguity", "outcome" in partial && partial.code === "TARGET_AMBIGUOUS", partial);
+  const malformed = resolveDmTarget("alice", [presentSeat, deadSeat], "current", heard(["u_a.alice", "alice"]), me, { ok: true, rows: [{ ...managedRow, id: "bad-id" }], silent: [], failed: [], answered: [{ instanceId: "manager-1", rows: [{ ...managedRow, id: "bad-id" }] }] });
+  check("an invalid manager ID cannot crash DM name resolution", "outcome" in malformed && malformed.code === "TARGET_AMBIGUOUS", malformed);
+  const unavailable = resolveDmTarget("alice", [presentSeat, deadSeat], "current", heard(["u_a.alice", "alice"]), me, undefined, true);
+  check("unavailable census explains why the name remains ambiguous", "outcome" in unavailable && unavailable.code === "TARGET_AMBIGUOUS" && unavailable.message.includes("manager could not confirm"), unavailable);
   const failed = resolveDmTarget("alice", [presentSeat, deadSeat], "current", heard(["u_a.alice", "alice"]), me, { ...managerAnswered, failed: [{ instanceId: "manager-2", error: "failed" }] });
   check("failed manager preserves ambiguity", "outcome" in failed && failed.code === "TARGET_AMBIGUOUS", failed);
   const multiple = resolveDmTarget("alice", [presentSeat, { ...presentSeat, card: { ...presentSeat.card, id: "u_d.alice" } }, deadSeat], "current", heard(["u_a.alice", "alice"]), me, managerAnswered);
@@ -462,8 +466,6 @@ const task = msg({ id: "t1", kind: "anycast", service: "reviewer", from: { id: "
   const joinedHuman = { ...presence("u_h.human", "alice", "offline"), lifecycleUid: "01haaaaaaaaaaaaaaaaaaaaaaa", card: { ...presence("u_h.human", "alice").card, kind: "endpoint" as const } };
   const humanJoin = resolveDmTarget("alice", [presentSeat, joinedHuman], "current", heard(["u_h.human", "alice"]), me, managerAnswered);
   check("offline joined human is skipped when the present seat is confirmed", !("outcome" in humanJoin) && humanJoin.id === "u_c.alice", humanJoin);
-
-
 }
 /** An engine that received one message on #review from each sender. A channel's subject names its
  *  sender as a DM's does, so each is a heard sender. */

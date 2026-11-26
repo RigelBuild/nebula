@@ -314,7 +314,7 @@ if (mode === "plain" || mode === "stdio") {
     check("multiple present peers bypass census and refuse", multiple.outcome === "refused" && calls === 2, { multiple, calls });
     roster = [present, offline]; throws = true;
     const failed = await session.dm("alice", "hi");
-    check("thrown census preserves ambiguity", failed.outcome === "refused" && failed.code === "TARGET_AMBIGUOUS" && calls === 3, { failed, calls });
+    check("thrown census preserves ambiguity and explains it could not confirm the peer", failed.outcome === "refused" && failed.code === "TARGET_AMBIGUOUS" && failed.message.includes("manager could not confirm") && calls === 3, { failed, calls });
   }
 
   {
@@ -322,7 +322,7 @@ if (mode === "plain" || mode === "stdio") {
     const present = { card: { id: "local.worker", name: "alice", kind: "agent" }, status: "idle", ts: 0, lifecycleUid: uid };
     const offline = { card: { id: "u_a.alice", name: "alice", kind: "agent" }, status: "offline", ts: 0 };
     const row = { id: "worker", name: "alice", agent: "agent", mode: "run", status: "running", uptimeMs: 1, mesh: "online", lifecycleUid: uid };
-    let census: { ok: boolean; rows: typeof row[]; silent: string[]; failed: never[]; answered: { instanceId: string; rows: typeof row[] }[] } = {
+    let census: { ok: true; rows: typeof row[]; silent: string[]; failed: never[]; answered: { instanceId: string; rows: typeof row[] }[] } = {
       ok: true, rows: [row], silent: [], failed: [], answered: [{ instanceId: "manager-1", rows: [row] }],
     };
     const sent: string[] = [];

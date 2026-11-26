@@ -125,7 +125,10 @@ function vouchable(p: Presence): boolean {
 function managerAnsweredFor(census: PsReply | undefined, seat: Presence): boolean {
   return census?.ok === true && census.silent.length === 0 && census.failed.length === 0 &&
     vouchable(seat) &&
-    census.answered.some((manager) => manager.rows.some((row) => (parsePrincipalKey(row.id) ? row.id : principalKey(DEV_OWNER, row.id).key) === seat.card.id && row.lifecycleUid === seat.lifecycleUid));
+    census.answered.some((manager) => manager.rows.some((row) => {
+      const principal = parsePrincipalKey(row.id) ? row.id : /^[A-Za-z0-9_]+$/.test(row.id) ? principalKey(DEV_OWNER, row.id).key : undefined;
+      return principal === seat.card.id && row.lifecycleUid === seat.lifecycleUid;
+    }));
 }
 
 function needsManagerCensus(to: DmTarget, roster: readonly Presence[], rosterState: PresenceView["state"], engine: ParticipantEngine, selfPrincipal: string): boolean {
@@ -145,6 +148,7 @@ export function resolveDmTarget(
   engine: ParticipantEngine,
   self: { readonly principal: string; readonly name?: string; readonly answerOne: string },
   census?: PsReply,
+  censusUnavailable = false,
 ): { readonly id: string; readonly name: string } | Refused {
   if (typeof to !== "string" || parsePrincipalKey(to)) {
     const principal = typeof to === "string" ? to : to.principal;
@@ -176,7 +180,10 @@ export function resolveDmTarget(
     const present = new Set(roster.filter((p) => p.status !== "offline").map((p) => p.card.id));
     if (rosterState === "current" && !ids.some((id) => present.has(id)))
       return { outcome: "refused", code: "TARGET_AMBIGUOUS", message: `"${to}" names ${ids.length} senders that are no longer present (${ids.join(", ")}), such as one-shot senders, which exit once they have sent; ${self.answerOne}` };
-    return { outcome: "refused", code: "TARGET_AMBIGUOUS", message: `"${to}" names more than one principal (${ids.join(", ")}); use the full principal` };
+    const censusNote = censusUnavailable || (census !== undefined && peer !== undefined && !managerAnsweredFor(census, peer))
+      ? "; the manager could not confirm the present seat"
+      : "";
+    return { outcome: "refused", code: "TARGET_AMBIGUOUS", message: `"${to}" names more than one principal (${ids.join(", ")})${censusNote}; use the full principal` };
   }
   const only = [...named.values()][0];
   if (only) return only;
@@ -274,12 +281,13 @@ export class NativeChatSession implements AdmittedChatSession {
   }
 
   /** Read the manager census only when a current roster and an absent or offline heard sender make it relevant. */
-  private async managerCensusFor(to: DmTarget, roster: readonly Presence[], rosterState: PresenceView["state"]): Promise<PsReply | undefined> {
-    if (!needsManagerCensus(to, roster, rosterState, this.engine, this.inputs.identity.principal) || !this.inputs.managerCensus) return undefined;
+  private async managerCensusFor(to: DmTarget, roster: readonly Presence[], rosterState: PresenceView["state"]): Promise<{ readonly reply?: PsReply; readonly unavailable: boolean }> {
+    if (!needsManagerCensus(to, roster, rosterState, this.engine, this.inputs.identity.principal)) return { unavailable: false };
+    if (!this.inputs.managerCensus) return { unavailable: true };
     try {
-      return await this.inputs.managerCensus();
+      return { reply: await this.inputs.managerCensus(), unavailable: false };
     } catch {
-      return undefined;
+      return { unavailable: true };
     }
   }
 
@@ -363,7 +371,7 @@ export class NativeChatSession implements AdmittedChatSession {
     const initialRoster = ep.getRoster();
     const initialState = ep.presenceView().state;
     const census = await this.managerCensusFor(to, initialRoster, initialState);
-    const recipient = resolveDmTarget(to, initialRoster, initialState, this.engine, this.self(), census);
+    const recipient = resolveDmTarget(to, initialRoster, initialState, this.engine, this.self(), census.reply, census.unavailable);
     return "outcome" in recipient ? recipient : { outcome: "ok", value: recipient };
   }
 
@@ -376,7 +384,7 @@ export class NativeChatSession implements AdmittedChatSession {
     const initialRoster = ep.getRoster();
     const initialState = ep.presenceView().state;
     const census = await this.managerCensusFor(to, initialRoster, initialState);
-    const recipient = resolveDmTarget(to, initialRoster, initialState, this.engine, this.self(), census);
+    const recipient = resolveDmTarget(to, initialRoster, initialState, this.engine, this.self(), census.reply, census.unavailable);
     if ("outcome" in recipient) return recipient;
     const gone = await this.beforePublish();
     if (gone) return gone;

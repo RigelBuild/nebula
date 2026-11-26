@@ -394,8 +394,6 @@ func TestPublishReturnsExistingManifestCommitWithoutTag(t *testing.T) {
 	f := newPublishFixture(t)
 	tag := "nebula-20261117-8"
 	o := f.options(tag)
-	var stderr strings.Builder
-	o.stderr = &stderr
 	data, err := o.manifest.build()
 	if err != nil {
 		t.Fatal(err)
@@ -412,15 +410,16 @@ func TestPublishReturnsExistingManifestCommitWithoutTag(t *testing.T) {
 		t.Fatalf("remote main = %s, want existing manifest commit %s", before, commit)
 	}
 
-	got, err := publish(context.Background(), o)
-	if err != nil {
+	var stdout, stderr strings.Builder
+	args := []string{"publish", "-repo", f.work, "-plan", f.plan, "-tag", tag, "-assets", f.assets, "-base-url", "https://x/", "-system", "x86_64-linux"}
+	if err := dispatch(context.Background(), args, &stdout, &stderr); err != nil {
 		t.Fatal(err)
 	}
-	if got != commit {
-		t.Fatalf("publish() = %s, want existing manifest commit %s", got, commit)
+	if got := stdout.String(); got != commit+"\n" {
+		t.Fatalf("stdout = %q, want only commit SHA", got)
 	}
 	if got := stderr.String(); got != "resuming from existing manifest commit "+commit+"\n" {
-		t.Fatalf("stderr = %q, want resume message for %s", got, commit)
+		t.Fatalf("stderr = %q, want resume message", got)
 	}
 	if after := testGit(t, f.remote, "rev-parse", "main"); after != before {
 		t.Fatalf("remote main moved from %s to %s", before, after)

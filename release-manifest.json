@@ -1,1001 +1,1001 @@
 {
   "akiflow": {
     "aarch64-darwin": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/akiflow-0.1.0-aarch64-darwin.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/akiflow-0.1.0-aarch64-darwin.tar.zst",
       "sha256": "056f9c5e0e4771660b2b8b5b85e9fc90bf4a2ba31b8e26bdbb7bc257f6d6fc8d"
     },
     "aarch64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/akiflow-0.1.0-aarch64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/akiflow-0.1.0-aarch64-linux.tar.zst",
       "sha256": "2e2b9bb74716ee6b7ee8667b698e6b3a2bde3dd68b09522d9ae42611785f02c3"
     },
     "version": "0.1.0",
     "x86_64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/akiflow-0.1.0-x86_64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/akiflow-0.1.0-x86_64-linux.tar.zst",
       "sha256": "7c93fcb9ec1c5ce7d24123bf43c62c5391f19497f3b251d694ef98201a8f19f5"
     }
   },
   "alloy-event-feed": {
     "aarch64-darwin": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/alloy-event-feed-0.1.0-aarch64-darwin.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/alloy-event-feed-0.1.0-aarch64-darwin.tar.zst",
       "sha256": "76cf0cba8d0d8401639d84f3c048320c65af213156fa2795c9f10f208a4af49a"
     },
     "aarch64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/alloy-event-feed-0.1.0-aarch64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/alloy-event-feed-0.1.0-aarch64-linux.tar.zst",
       "sha256": "86ade0fa8ad6f6f4ca339095d3b1d1f286e6325220035e9c4425cfdf8935afa9"
     },
     "version": "0.1.0",
     "x86_64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/alloy-event-feed-0.1.0-x86_64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/alloy-event-feed-0.1.0-x86_64-linux.tar.zst",
       "sha256": "5c8fab51a80052511c6243c1ba2dcd34f8118390a66675e7edd654beb528cd2c"
     }
   },
   "alloy-log-caps": {
     "aarch64-darwin": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/alloy-log-caps-0.1.0-aarch64-darwin.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/alloy-log-caps-0.1.0-aarch64-darwin.tar.zst",
       "sha256": "96138a6e1f70493239d293c2f6373890e811f443abedf4d035efbd4897bf7b66"
     },
     "aarch64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/alloy-log-caps-0.1.0-aarch64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/alloy-log-caps-0.1.0-aarch64-linux.tar.zst",
       "sha256": "bc37c671c07c058fdbe61da667b889b6f3d1ce36910a0e7a193bf6d5dc20e515"
     },
     "version": "0.1.0",
     "x86_64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/alloy-log-caps-0.1.0-x86_64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/alloy-log-caps-0.1.0-x86_64-linux.tar.zst",
       "sha256": "556457c0fe4a7497fef5e8c47f7183c5fe6c54abda6193cc099dea3ef983e249"
     }
   },
   "alloy-scrape-limits": {
     "aarch64-darwin": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/alloy-scrape-limits-0.1.0-aarch64-darwin.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/alloy-scrape-limits-0.1.0-aarch64-darwin.tar.zst",
       "sha256": "0ad731fa1f28778157b9e7d07028aa97eeb7b947e410175408780c4db1abb4e6"
     },
     "aarch64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/alloy-scrape-limits-0.1.0-aarch64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/alloy-scrape-limits-0.1.0-aarch64-linux.tar.zst",
       "sha256": "62efe103eff4dcc52e9ef3264f3740c83696da2801b5e74aad2f9ddc92965074"
     },
     "version": "0.1.0",
     "x86_64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/alloy-scrape-limits-0.1.0-x86_64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/alloy-scrape-limits-0.1.0-x86_64-linux.tar.zst",
       "sha256": "a482b75562d47950dd2a19b449f524aae6bffadc95d8932c1a131c80c16b7a97"
     }
   },
   "caddy-cloudflare": {
     "aarch64-darwin": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/caddy-cloudflare-2.11.9-aarch64-darwin.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/caddy-cloudflare-2.11.9-aarch64-darwin.tar.zst",
       "sha256": "79f5a0474276c8187e0c2a959518b77209ec8b54269496711ce7aa88b8c658a9"
     },
     "version": "2.11.9",
     "x86_64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/caddy-cloudflare-2.11.9-x86_64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/caddy-cloudflare-2.11.9-x86_64-linux.tar.zst",
       "sha256": "55e28f4f27286c7f74a40bc3847e0948a1cec2b816d5c9da72d1d53b30a39f86"
     }
   },
   "ci-queue": {
     "aarch64-darwin": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/ci-queue-0.1.0-aarch64-darwin.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/ci-queue-0.1.0-aarch64-darwin.tar.zst",
       "sha256": "4fcca0fe07531974d5108a7f78783494882342655a0c585dea5a2f35648feee2"
     },
     "aarch64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/ci-queue-0.1.0-aarch64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/ci-queue-0.1.0-aarch64-linux.tar.zst",
       "sha256": "83d2e585c3c225b9595e90c30891ca218fddfccdbe5484dcabf4797076cbf808"
     },
     "version": "0.1.0",
     "x86_64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/ci-queue-0.1.0-x86_64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/ci-queue-0.1.0-x86_64-linux.tar.zst",
       "sha256": "c6de301e33257673cba2f80704b90256a9634a4a7941401ee8c7b3bfcde5870b"
     }
   },
   "code-shape-gate": {
     "aarch64-darwin": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/code-shape-gate-0.4.0-aarch64-darwin.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/code-shape-gate-0.4.0-aarch64-darwin.tar.zst",
       "sha256": "1d26d694c7b8676d7d0ddb43ab45f26c82aec416f03e8095e4a241f2184f38bf"
     },
     "aarch64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/code-shape-gate-0.4.0-aarch64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/code-shape-gate-0.4.0-aarch64-linux.tar.zst",
       "sha256": "12b7543d55e926936ec992ea5c4f494557a01f7154671808fe186afa9d57a850"
     },
     "version": "0.4.0",
     "x86_64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/code-shape-gate-0.4.0-x86_64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/code-shape-gate-0.4.0-x86_64-linux.tar.zst",
       "sha256": "313645a4fd98dc19279eee007e68b332c6fd973da82aae14fd7b78d6de33dae8"
     }
   },
   "cotal-presence-probe": {
     "version": "0.1.0",
     "x86_64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/cotal-presence-probe-0.1.0-x86_64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/cotal-presence-probe-0.1.0-x86_64-linux.tar.zst",
       "sha256": "a2bf4849e1f46475a3e177dfafae1d5d78c3bb964237a34c95c39bc28e408637"
     }
   },
   "cotal-sys-creds-check": {
     "aarch64-darwin": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/cotal-sys-creds-check-0.4.0-aarch64-darwin.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/cotal-sys-creds-check-0.4.0-aarch64-darwin.tar.zst",
       "sha256": "f65b5719fc2de1cf1c7066110be97c3190f6ead0f71bf8d7d10e58f52c1d19bc"
     },
     "aarch64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/cotal-sys-creds-check-0.4.0-aarch64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/cotal-sys-creds-check-0.4.0-aarch64-linux.tar.zst",
       "sha256": "3bd6f4675f579013c2523d4064c49811caf47e79be084ccfa74116ec2b1f7fee"
     },
     "version": "0.4.0",
     "x86_64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/cotal-sys-creds-check-0.4.0-x86_64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/cotal-sys-creds-check-0.4.0-x86_64-linux.tar.zst",
       "sha256": "b3f353497ca2c7b979816d217d6a2ecc86a880d0cf32b82cdff752226d2a1832"
     }
   },
   "deploy-output": {
     "aarch64-darwin": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/deploy-output-0.1.0-aarch64-darwin.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/deploy-output-0.1.0-aarch64-darwin.tar.zst",
       "sha256": "ebbc7402b02bc597790665cbad9e6fbb428233aa15d2c54fccaf0b776953ba15"
     },
     "aarch64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/deploy-output-0.1.0-aarch64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/deploy-output-0.1.0-aarch64-linux.tar.zst",
       "sha256": "295de5501ab10145f61076afe949ee1c732c883c86fed3893b661269efe058e7"
     },
     "version": "0.1.0",
     "x86_64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/deploy-output-0.1.0-x86_64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/deploy-output-0.1.0-x86_64-linux.tar.zst",
       "sha256": "99a70dc0739b20df1e0825cbd6e836b8978421bf155f4c6bdbfa97ae7da77a8b"
     }
   },
   "depsupdate-wake": {
     "aarch64-darwin": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/depsupdate-wake-0.4.0-aarch64-darwin.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/depsupdate-wake-0.4.0-aarch64-darwin.tar.zst",
       "sha256": "6f6c053b552a6996880a0f7de1b10b549ba888847baba1a2a725e733d35254ae"
     },
     "aarch64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/depsupdate-wake-0.4.0-aarch64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/depsupdate-wake-0.4.0-aarch64-linux.tar.zst",
       "sha256": "c1d4a69a2410f95d212416d94b88bbd64b0098d209f7f4864f8e58fb64011adb"
     },
     "version": "0.4.0",
     "x86_64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/depsupdate-wake-0.4.0-x86_64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/depsupdate-wake-0.4.0-x86_64-linux.tar.zst",
       "sha256": "b120981907e2af2f9bebcd557a55424ef6fe7ff91b12dc00ff61564b31ed3ce0"
     }
   },
   "design-ledger-gate": {
     "aarch64-darwin": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/design-ledger-gate-0.4.0-aarch64-darwin.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/design-ledger-gate-0.4.0-aarch64-darwin.tar.zst",
       "sha256": "333ad33413833e56ba382ef7fbb57e42722a5c9e7cf40c496591293c386d5662"
     },
     "aarch64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/design-ledger-gate-0.4.0-aarch64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/design-ledger-gate-0.4.0-aarch64-linux.tar.zst",
       "sha256": "feb2f7dfec749928d2f689a1429aff482f4d0391e18f41d9aa94559896d9681e"
     },
     "version": "0.4.0",
     "x86_64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/design-ledger-gate-0.4.0-x86_64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/design-ledger-gate-0.4.0-x86_64-linux.tar.zst",
       "sha256": "c9defe5439c0f03d4d55078d67cd41e91443e6c75194bb56da0a76f22c7b6448"
     }
   },
   "dev-hygiene": {
     "aarch64-darwin": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/dev-hygiene-0.4.0-aarch64-darwin.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/dev-hygiene-0.4.0-aarch64-darwin.tar.zst",
       "sha256": "4d6c5184e18c05ab08223b6226c56e6bb179e3a45076c5fb39394515a0ea5095"
     },
     "aarch64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/dev-hygiene-0.4.0-aarch64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/dev-hygiene-0.4.0-aarch64-linux.tar.zst",
       "sha256": "126a6c6f9231e89d852f395558c24772151af9874dbd0f6948dee004a4cdb184"
     },
     "version": "0.4.0",
     "x86_64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/dev-hygiene-0.4.0-x86_64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/dev-hygiene-0.4.0-x86_64-linux.tar.zst",
       "sha256": "3362094285a948545a1a4ddb2a6edb8b99a4520384928fe8e9009c5e674b4af4"
     }
   },
   "devenv": {
     "aarch64-darwin": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/devenv-2.4.1-rigel.1-aarch64-darwin.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/devenv-2.4.1-rigel.1-aarch64-darwin.tar.zst",
       "sha256": "4b2f45955e16d0d0061dcd78ff9c7a7473837e626d973c16ba3266365595d32d"
     },
     "aarch64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/devenv-2.4.1-rigel.1-aarch64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/devenv-2.4.1-rigel.1-aarch64-linux.tar.zst",
       "sha256": "fddc9bd778fbbb2ba61137059a691c3f5c818be8ea5c2f72ea702d17241379f4"
     },
     "upstreamRev": "72e18a7a33a9fe7b157a46f8eea58f424a511f14",
     "version": "2.4.1-rigel.1",
     "x86_64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/devenv-2.4.1-rigel.1-x86_64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/devenv-2.4.1-rigel.1-x86_64-linux.tar.zst",
       "sha256": "067a743943abf6f553c8ac9bdd928b86f83e1b82dd4ea15b1eb5ec39beae0c46"
     }
   },
   "direnv": {
     "aarch64-darwin": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/direnv-2.38.2-aarch64-darwin.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/direnv-2.38.2-aarch64-darwin.tar.zst",
       "sha256": "78ffa78ac627dd127ad30ba77838c7c07ae4445ae745b53da390a1b7d29d8ec5"
     },
     "version": "2.38.2",
     "x86_64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/direnv-2.38.2-x86_64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/direnv-2.38.2-x86_64-linux.tar.zst",
       "sha256": "9b8378b5eda0f3d1a039396ccdb90d2283d9a9be05d75b253fa0e5a650442a90"
     }
   },
   "dl-claim": {
     "aarch64-darwin": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/dl-claim-0.4.0-aarch64-darwin.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/dl-claim-0.4.0-aarch64-darwin.tar.zst",
       "sha256": "448f19c6c6d596111a7072e25b9d12863cd90553d371fad59ab3a99c552b61fa"
     },
     "aarch64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/dl-claim-0.4.0-aarch64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/dl-claim-0.4.0-aarch64-linux.tar.zst",
       "sha256": "c693c0b947b64e46de657a882f60749cd274d9bbec8bcf8a177223a014978692"
     },
     "version": "0.4.0",
     "x86_64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/dl-claim-0.4.0-x86_64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/dl-claim-0.4.0-x86_64-linux.tar.zst",
       "sha256": "f2d39234238588b92ea5524920bd738ee27322277c2f8ddf4ac0b23e3659f77b"
     }
   },
   "dl-list": {
     "aarch64-darwin": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/dl-list-0.4.0-aarch64-darwin.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/dl-list-0.4.0-aarch64-darwin.tar.zst",
       "sha256": "0cb1a42bba31d8eb05fcfdef2288bae4c519649dbf695bc1f13573e56aecdfe2"
     },
     "aarch64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/dl-list-0.4.0-aarch64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/dl-list-0.4.0-aarch64-linux.tar.zst",
       "sha256": "9ac6a126e45525c788a9940514de9a2bd4f0a72022067e655e03076e1632016f"
     },
     "version": "0.4.0",
     "x86_64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/dl-list-0.4.0-x86_64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/dl-list-0.4.0-x86_64-linux.tar.zst",
       "sha256": "8a88bdf63a60803a953d96b0170ec57107d6aa95f3d25b80d2ec18ab32c08574"
     }
   },
   "dl-reconcile": {
     "aarch64-darwin": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/dl-reconcile-0.4.0-aarch64-darwin.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/dl-reconcile-0.4.0-aarch64-darwin.tar.zst",
       "sha256": "74838d1879ebdd03d1a9f115536a202ba51fd49a459c42de9bf2e6844387a9ab"
     },
     "aarch64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/dl-reconcile-0.4.0-aarch64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/dl-reconcile-0.4.0-aarch64-linux.tar.zst",
       "sha256": "bf905c028be6717f985eb39137882c9384c9d3ce5b33405c6023be62c0654e18"
     },
     "version": "0.4.0",
     "x86_64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/dl-reconcile-0.4.0-x86_64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/dl-reconcile-0.4.0-x86_64-linux.tar.zst",
       "sha256": "72cdc3c8ec422c1dbfe8fa8dfcf12b20a044ccd9ca4652f43ba4e14c6927c874"
     }
   },
   "filevault-unlock": {
     "aarch64-darwin": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/filevault-unlock-0.4.0-aarch64-darwin.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/filevault-unlock-0.4.0-aarch64-darwin.tar.zst",
       "sha256": "f0321674b0b6b45653232af99e8502f23a43ee6106ed580bb33afed4aa8b65cc"
     },
     "aarch64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/filevault-unlock-0.4.0-aarch64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/filevault-unlock-0.4.0-aarch64-linux.tar.zst",
       "sha256": "c7ad2361a7272e923d4d7add87a2ccc917ff00224f92e6df866ea3ade7a69f9f"
     },
     "version": "0.4.0",
     "x86_64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/filevault-unlock-0.4.0-x86_64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/filevault-unlock-0.4.0-x86_64-linux.tar.zst",
       "sha256": "428efb18bbb3514d5d3d9811dcf317d4b285ece7bb89561c9909a7809a0e2d29"
     }
   },
   "fleet-gc-roots": {
     "aarch64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/fleet-gc-roots-0.4.0-aarch64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/fleet-gc-roots-0.4.0-aarch64-linux.tar.zst",
       "sha256": "eb98f441ded0e39417fd0b169b85e0f0e0b49f132d1c052feecb8b0915d5ac08"
     },
     "version": "0.4.0",
     "x86_64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/fleet-gc-roots-0.4.0-x86_64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/fleet-gc-roots-0.4.0-x86_64-linux.tar.zst",
       "sha256": "4b217d56ed8ca33d9624e4d234867e870ae1a10d60efba81399ef25d8d47e9dc"
     }
   },
   "fleet-switch": {
     "aarch64-darwin": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/fleet-switch-0.4.0-aarch64-darwin.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/fleet-switch-0.4.0-aarch64-darwin.tar.zst",
       "sha256": "5c7862e1007da30d3d8d86a7cc46f09a689db00279701aa381c6107aded83aa9"
     },
     "aarch64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/fleet-switch-0.4.0-aarch64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/fleet-switch-0.4.0-aarch64-linux.tar.zst",
       "sha256": "4128f2a913394dbb79c3c87c07f293ae630159204f327ef34e8ff495e91c33fa"
     },
     "version": "0.4.0",
     "x86_64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/fleet-switch-0.4.0-x86_64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/fleet-switch-0.4.0-x86_64-linux.tar.zst",
       "sha256": "59a7e313c5caec70b6d73f3e7dd950ad2564bfea8909797a9be0750a26f96d1d"
     }
   },
   "garage-admin-token-mint": {
     "aarch64-darwin": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/garage-admin-token-mint-0.1.0-aarch64-darwin.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/garage-admin-token-mint-0.1.0-aarch64-darwin.tar.zst",
       "sha256": "99d313f79a42e6d7ad446c5bca26b80d3b84e86632c5192595261eaae32dfa5d"
     },
     "aarch64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/garage-admin-token-mint-0.1.0-aarch64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/garage-admin-token-mint-0.1.0-aarch64-linux.tar.zst",
       "sha256": "e1c5650397bbbcf42084d51a7ffe52d08cf52f589ccaac97ca5e60e1727ef826"
     },
     "version": "0.1.0",
     "x86_64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/garage-admin-token-mint-0.1.0-x86_64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/garage-admin-token-mint-0.1.0-x86_64-linux.tar.zst",
       "sha256": "6091cfb3b566676443a915f68e1c322bf7a7aeedd25f00ca4d0d2ff7a43632dd"
     }
   },
   "garage-bucket-reconcile": {
     "aarch64-darwin": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/garage-bucket-reconcile-0.1.0-aarch64-darwin.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/garage-bucket-reconcile-0.1.0-aarch64-darwin.tar.zst",
       "sha256": "39b8c86e987913ac5d9f98946579b5f59bd6bfb6fb277d1a30ff2eef80a643fe"
     },
     "aarch64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/garage-bucket-reconcile-0.1.0-aarch64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/garage-bucket-reconcile-0.1.0-aarch64-linux.tar.zst",
       "sha256": "0bd045a76601341898cacc22b32092906a80fbff602cd7666e66557394699766"
     },
     "version": "0.1.0",
     "x86_64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/garage-bucket-reconcile-0.1.0-x86_64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/garage-bucket-reconcile-0.1.0-x86_64-linux.tar.zst",
       "sha256": "96f99089544796218fa51013d904817caff547d03a850d32d6b0941a3b87231f"
     }
   },
   "get-pr-diff": {
     "aarch64-darwin": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/get-pr-diff-0.1.0-aarch64-darwin.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/get-pr-diff-0.1.0-aarch64-darwin.tar.zst",
       "sha256": "6de78f36eec745dfcb62f75e7803bf76c2d8d1f6fbdbfc128650164ad76bb72c"
     },
     "aarch64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/get-pr-diff-0.1.0-aarch64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/get-pr-diff-0.1.0-aarch64-linux.tar.zst",
       "sha256": "956db079fe06ca270c17c28316e7be52d73ae1353660f22098537887ade6cd8e"
     },
     "version": "0.1.0",
     "x86_64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/get-pr-diff-0.1.0-x86_64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/get-pr-diff-0.1.0-x86_64-linux.tar.zst",
       "sha256": "a13385c5c0c93833922ec79bfd88d6ac9d154d0427bcbeac46e934ec4c2acf99"
     }
   },
   "gh-route": {
     "aarch64-darwin": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/gh-route-0.4.0-aarch64-darwin.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/gh-route-0.4.0-aarch64-darwin.tar.zst",
       "sha256": "df67efc05125552edc71c03e2541d919080d9f99b79f530178e01fb3c6565ad2"
     },
     "aarch64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/gh-route-0.4.0-aarch64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/gh-route-0.4.0-aarch64-linux.tar.zst",
       "sha256": "fdac7de12af96f7416f6ddde2508aad447a16c211875cf4cd48590e96d77b1e1"
     },
     "version": "0.4.0",
     "x86_64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/gh-route-0.4.0-x86_64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/gh-route-0.4.0-x86_64-linux.tar.zst",
       "sha256": "9d40c31f8c1770b67b9d2d02f831afaa192edce76c7316ec0e2e297acde07e8c"
     }
   },
   "held": [],
   "hk-hook": {
     "aarch64-darwin": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/hk-hook-0.4.0-aarch64-darwin.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/hk-hook-0.4.0-aarch64-darwin.tar.zst",
       "sha256": "1421a509c8c37fe39b40f6f46c96701a8858d86f15fa6d7a6ebb7047601c5d54"
     },
     "aarch64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/hk-hook-0.4.0-aarch64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/hk-hook-0.4.0-aarch64-linux.tar.zst",
       "sha256": "3594047deac60a4e182610252323d9cbfc92357f95b4fde6a5660e31fce4c2aa"
     },
     "version": "0.4.0",
     "x86_64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/hk-hook-0.4.0-x86_64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/hk-hook-0.4.0-x86_64-linux.tar.zst",
       "sha256": "a1f703f2555539b6944459ef381c28174950b391f269780d5600fc5e59d1f82c"
     }
   },
   "host-bao-seal": {
     "aarch64-darwin": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/host-bao-seal-0.4.0-aarch64-darwin.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/host-bao-seal-0.4.0-aarch64-darwin.tar.zst",
       "sha256": "7fd3505fdd28b0a3b5913fbe0725832019df012cc976cf9451d0041ac00573b2"
     },
     "aarch64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/host-bao-seal-0.4.0-aarch64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/host-bao-seal-0.4.0-aarch64-linux.tar.zst",
       "sha256": "77d72c0f58eb92b2d0baed5b20f3226167cf6302d9c18524f9502d80dd6c2ece"
     },
     "version": "0.4.0",
     "x86_64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/host-bao-seal-0.4.0-x86_64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/host-bao-seal-0.4.0-x86_64-linux.tar.zst",
       "sha256": "1fe180984d3a5d2371f38a960f22ccb6ed6189caf403bba07c8211d969d4ed29"
     }
   },
   "host-secret-ready": {
     "aarch64-darwin": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/host-secret-ready-0.4.0-aarch64-darwin.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/host-secret-ready-0.4.0-aarch64-darwin.tar.zst",
       "sha256": "2bcea952441a11253f59adefd8f4738dd641a24514dd01422ef1537e0dfb574d"
     },
     "aarch64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/host-secret-ready-0.4.0-aarch64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/host-secret-ready-0.4.0-aarch64-linux.tar.zst",
       "sha256": "11a2c145f4d86f46611703b6eb2dad7e7b13a4e126bc6a8d2aebfbc3b377a33b"
     },
     "version": "0.4.0",
     "x86_64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/host-secret-ready-0.4.0-x86_64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/host-secret-ready-0.4.0-x86_64-linux.tar.zst",
       "sha256": "cb5a05f363719c83e24cd6bdc4f8f951dc93e9724b1c18880d2a57295e2fe19d"
     }
   },
   "images": {
     "autoscaler": {
       "repository": "ghcr.io/rigelbuild/autoscaler",
-      "tag": "nebula-20261127-237",
+      "tag": "nebula-20261127-238",
       "digest": "sha256:75995c4cf5b74d2d20738f464cce0218575b7ad6002f708c4ca8e1ae652c1b88"
     },
     "headlamp": {
       "repository": "ghcr.io/rigelbuild/headlamp",
-      "tag": "nebula-20261127-237",
+      "tag": "nebula-20261127-238",
       "digest": "sha256:890e7ddad316da20d29c1f25007da0ac2ef4b120e7b90c4745617b2355be94bd"
     },
     "omp": {
       "repository": "ghcr.io/rigelbuild/omp",
-      "tag": "nebula-20261127-237",
+      "tag": "nebula-20261127-238",
       "digest": "sha256:7071a015138ffb0a154fdeb37edca53df1a7fb1e726d35d5a31763f46399d0c4"
     },
     "woodpecker-agent-image": {
       "repository": "ghcr.io/rigelbuild/woodpecker-agent",
-      "tag": "nebula-20261127-237",
+      "tag": "nebula-20261127-238",
       "digest": "sha256:4069aebf7fdd558e47a6d0f6e11c289e9b2e4d1274dcb9ac5d246fd7d2cd2306"
     },
     "woodpecker-server-image": {
       "repository": "ghcr.io/rigelbuild/woodpecker-server",
-      "tag": "nebula-20261127-237",
+      "tag": "nebula-20261127-238",
       "digest": "sha256:7d2e6bcbbb1c769eb30cbadbdb645f892cf1ef60e2c3355bacca5796aa641135"
     }
   },
   "jj-hooks-bin": {
     "aarch64-darwin": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/jj-hooks-bin-0.7.0-aarch64-darwin.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/jj-hooks-bin-0.7.0-aarch64-darwin.tar.zst",
       "sha256": "8bd92620060545dd4d6a2c650e2afe9d513c75b98ba6969a5037ad692b50cc93"
     },
     "aarch64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/jj-hooks-bin-0.7.0-aarch64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/jj-hooks-bin-0.7.0-aarch64-linux.tar.zst",
       "sha256": "9f8a21ff89e2b854a7b78401fba8ec88057b443fb4ed496a42982ec566b663f9"
     },
     "version": "0.7.0",
     "x86_64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/jj-hooks-bin-0.7.0-x86_64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/jj-hooks-bin-0.7.0-x86_64-linux.tar.zst",
       "sha256": "07ae26e6e9f366e47cfa916a761b4e4b101bc364784b4661686ff7f662982912"
     }
   },
   "jj-vine": {
     "aarch64-darwin": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/jj-vine-0.5.4-rigel.3-aarch64-darwin.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/jj-vine-0.5.4-rigel.3-aarch64-darwin.tar.zst",
       "sha256": "8edcbc610ce5cc8e14b7bb34ba71c9308246541f2bf906a7434e7a4af1cb2960"
     },
     "aarch64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/jj-vine-0.5.4-rigel.3-aarch64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/jj-vine-0.5.4-rigel.3-aarch64-linux.tar.zst",
       "sha256": "e40a52a6639f3c21ce1410b8df5b068529fa708e7b3936831fbabe10755222da"
     },
     "upstreamRev": "0c0341846809cada2f8d2a6d30bc9a8097a3409d",
     "version": "0.5.4-rigel.3",
     "x86_64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/jj-vine-0.5.4-rigel.3-x86_64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/jj-vine-0.5.4-rigel.3-x86_64-linux.tar.zst",
       "sha256": "ad22793f05924c1f1d4f514f9a8409e711e4e9ebb3238b78d4916be047c1dcac"
     }
   },
   "length-gate": {
     "aarch64-darwin": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/length-gate-0.4.0-aarch64-darwin.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/length-gate-0.4.0-aarch64-darwin.tar.zst",
       "sha256": "47a6a7960414afa5dae4bc56c3a6abaf996afba2bab1c62cb3bc5b2baea37377"
     },
     "aarch64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/length-gate-0.4.0-aarch64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/length-gate-0.4.0-aarch64-linux.tar.zst",
       "sha256": "8dc93b9d5b7bae247edbbd5e76ef6e8bd65f3970c951325ba4641cb5cb15b5d4"
     },
     "version": "0.4.0",
     "x86_64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/length-gate-0.4.0-x86_64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/length-gate-0.4.0-x86_64-linux.tar.zst",
       "sha256": "e4d2dcce900ef10a2965251fbc75174d8208c7af676aa9e0de82a8f8167da9fc"
     }
   },
   "linear-acceptance": {
     "aarch64-darwin": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/linear-acceptance-0.4.0-aarch64-darwin.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/linear-acceptance-0.4.0-aarch64-darwin.tar.zst",
       "sha256": "8d0802aae9708a703a3906d139beb1343b2b5aa6e244fab4cdc5c1c31f9da696"
     },
     "aarch64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/linear-acceptance-0.4.0-aarch64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/linear-acceptance-0.4.0-aarch64-linux.tar.zst",
       "sha256": "cfa71b168ea7bc77cd046b5922ac957ac309578db3ffae1677350b99b1d97848"
     },
     "version": "0.4.0",
     "x86_64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/linear-acceptance-0.4.0-x86_64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/linear-acceptance-0.4.0-x86_64-linux.tar.zst",
       "sha256": "040bc88261143afd590ddf525afe43f077b1b0318abd424ab3c14cb2447458d3"
     }
   },
   "linear-agent-token": {
     "aarch64-darwin": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/linear-agent-token-0.1.0-aarch64-darwin.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/linear-agent-token-0.1.0-aarch64-darwin.tar.zst",
       "sha256": "3b111a12e20ce8063904f2a89052aca1985a1a480442a6e804fa905311d2001d"
     },
     "aarch64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/linear-agent-token-0.1.0-aarch64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/linear-agent-token-0.1.0-aarch64-linux.tar.zst",
       "sha256": "c773d818bec1bd379c4cb7a1c4c67dc229a7fbd96fe03cdb10432433b23322b9"
     },
     "version": "0.1.0",
     "x86_64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/linear-agent-token-0.1.0-x86_64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/linear-agent-token-0.1.0-x86_64-linux.tar.zst",
       "sha256": "c41603be1249288c32ff4d73cb18e1fafbc8a9d3506fc4a3b7089a6d456ae7a1"
     }
   },
   "linear-comment-poller": {
     "aarch64-darwin": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/linear-comment-poller-0.1.0-aarch64-darwin.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/linear-comment-poller-0.1.0-aarch64-darwin.tar.zst",
       "sha256": "1f2f937e28d184584e7fc6806b2687170e6cc193740784fbc1ea7d5bfc77f740"
     },
     "aarch64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/linear-comment-poller-0.1.0-aarch64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/linear-comment-poller-0.1.0-aarch64-linux.tar.zst",
       "sha256": "43775d8629419e4ecb468cad60f0df8cae5e8724eb907310ec041d55eb7126ec"
     },
     "version": "0.1.0",
     "x86_64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/linear-comment-poller-0.1.0-x86_64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/linear-comment-poller-0.1.0-x86_64-linux.tar.zst",
       "sha256": "8ec618cf34b22c881261b577a47ec4f8331e1ed15f90603a37c7489db9e92a28"
     }
   },
   "longhorn-drain": {
     "aarch64-darwin": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/longhorn-drain-0.4.0-aarch64-darwin.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/longhorn-drain-0.4.0-aarch64-darwin.tar.zst",
       "sha256": "4eaa8f92bf3a3034461a1a4afd30731847e99f33be3e242e9ba9d775e8810bbc"
     },
     "aarch64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/longhorn-drain-0.4.0-aarch64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/longhorn-drain-0.4.0-aarch64-linux.tar.zst",
       "sha256": "d65b21692d142a370c650235f644a87fb65c482f18279c19eef2bfed6cf6f5d9"
     },
     "version": "0.4.0",
     "x86_64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/longhorn-drain-0.4.0-x86_64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/longhorn-drain-0.4.0-x86_64-linux.tar.zst",
       "sha256": "fd682198f65a712a857c83548631643b4ca55a8510443424f07f7b9e1fb26d35"
     }
   },
   "mem-sampler": {
     "aarch64-darwin": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/mem-sampler-0.1.0-aarch64-darwin.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/mem-sampler-0.1.0-aarch64-darwin.tar.zst",
       "sha256": "51aed929e01f4b38ad81720bce25de2681c5d554129d4c9bf40886e8decd20f7"
     },
     "aarch64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/mem-sampler-0.1.0-aarch64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/mem-sampler-0.1.0-aarch64-linux.tar.zst",
       "sha256": "c3af016008967ebc75a3d0c80c941ec29cde327c6f8bc75bac9580d731a95253"
     },
     "version": "0.1.0",
     "x86_64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/mem-sampler-0.1.0-x86_64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/mem-sampler-0.1.0-x86_64-linux.tar.zst",
       "sha256": "3bde5e9dee869a8a6f67a2af836913c600ddc1120e0f700cf0612e330c7ff52b"
     }
   },
   "nemo-move": {
     "aarch64-darwin": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/nemo-move-0.1.0-aarch64-darwin.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/nemo-move-0.1.0-aarch64-darwin.tar.zst",
       "sha256": "23e71f615b146838eac4e210c63f1161217d51957899e8d4164f7dcdc9700c60"
     },
     "aarch64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/nemo-move-0.1.0-aarch64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/nemo-move-0.1.0-aarch64-linux.tar.zst",
       "sha256": "32fa5e94558b51d5c2323608974c77a8b5b058f481714c1ce9072f1333bc6fbf"
     },
     "version": "0.1.0",
     "x86_64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/nemo-move-0.1.0-x86_64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/nemo-move-0.1.0-x86_64-linux.tar.zst",
       "sha256": "3cb92d35a1d3df17bda8f7e99213ef11f37112328a86cdda4c5828f5541e8d6e"
     }
   },
   "nix-switch": {
     "aarch64-darwin": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/nix-switch-0.4.0-aarch64-darwin.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/nix-switch-0.4.0-aarch64-darwin.tar.zst",
       "sha256": "a43cf2eeea5c7fff9166d1091cbfa39f4101a007a7f798b9e90efa52689ebeed"
     },
     "aarch64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/nix-switch-0.4.0-aarch64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/nix-switch-0.4.0-aarch64-linux.tar.zst",
       "sha256": "c985fa3331e61a7be427e497c9aa6e768b37e4022ae7c2d7759a1cdb95f2a37f"
     },
     "version": "0.4.0",
     "x86_64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/nix-switch-0.4.0-x86_64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/nix-switch-0.4.0-x86_64-linux.tar.zst",
       "sha256": "3ded0e53c73f9d595989098d0c09364e0e929285d7f49d514033bc47e6629f44"
     }
   },
   "nix2container": {
     "aarch64-darwin": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/nix2container-1.1.0-rigel.2-aarch64-darwin.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/nix2container-1.1.0-rigel.2-aarch64-darwin.tar.zst",
       "sha256": "82d33bbab4a228a4457f8e5a374f1f36bce800f0b6070519868056257adfdd3a"
     },
     "aarch64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/nix2container-1.1.0-rigel.2-aarch64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/nix2container-1.1.0-rigel.2-aarch64-linux.tar.zst",
       "sha256": "28b0eee530e6e5d749c60251eecc5f8ab6688ac2b53e7959a533fefed20b4867"
     },
     "upstreamRev": "42d1df94f001a9416ef08be7b305144074aca9d2",
     "version": "1.1.0-rigel.2",
     "x86_64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/nix2container-1.1.0-rigel.2-x86_64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/nix2container-1.1.0-rigel.2-x86_64-linux.tar.zst",
       "sha256": "ecc76ebefdec596e65c2dd9a186ad62bc7258f6ecaaa7b141c7dcde6a43b03b6"
     }
   },
   "node-removal": {
     "aarch64-darwin": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/node-removal-0.1.0-aarch64-darwin.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/node-removal-0.1.0-aarch64-darwin.tar.zst",
       "sha256": "827ff1acd7de945d851bf8ef53afceba5b951b8ad1ec1a93a4a7d0df7350f473"
     },
     "aarch64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/node-removal-0.1.0-aarch64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/node-removal-0.1.0-aarch64-linux.tar.zst",
       "sha256": "d8754b588aeb496e9c08057f262d9106bfc257193324c30c9278031a14ff9f3d"
     },
     "version": "0.1.0",
     "x86_64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/node-removal-0.1.0-x86_64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/node-removal-0.1.0-x86_64-linux.tar.zst",
       "sha256": "846ebf63541fea8e53effe2db503767475f2c8b91de6831f7e916115436d2950"
     }
   },
   "omp-bin": {
     "aarch64-darwin": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/omp-bin-18.22.2-rigel.2-aarch64-darwin.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/omp-bin-18.22.2-rigel.2-aarch64-darwin.tar.zst",
       "sha256": "aaa5e4a79bfba558827beb0eca78d8b2b01f693346e4a74575fb2a5831541dbe"
     },
     "aarch64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/omp-bin-18.22.2-rigel.2-aarch64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/omp-bin-18.22.2-rigel.2-aarch64-linux.tar.zst",
       "sha256": "724b2b7ec8abce9fa837a44476dff44d8dd22821a513a2f0c50a7d976c13ce6b"
     },
     "upstreamRev": "e1ae2cc998efd1ca151b46ebefc0e0dab6c23c63",
     "version": "18.22.2-rigel.2",
     "x86_64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/omp-bin-18.22.2-rigel.2-x86_64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/omp-bin-18.22.2-rigel.2-x86_64-linux.tar.zst",
       "sha256": "d6dc522d6e4cab64b07514f77427eb1ce70603c6a223bfda8a4562236cb273b9"
     }
   },
   "omp-pool": {
     "aarch64-darwin": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/omp-pool-0.4.0-aarch64-darwin.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/omp-pool-0.4.0-aarch64-darwin.tar.zst",
       "sha256": "9ef7331182bef2d04f298693e6ce8364921912bca8480b72683762f08f32a762"
     },
     "aarch64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/omp-pool-0.4.0-aarch64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/omp-pool-0.4.0-aarch64-linux.tar.zst",
       "sha256": "037807f009473c599a182d4a1c642f9d40e5245d08fc6a991c405680c271afeb"
     },
     "version": "0.4.0",
     "x86_64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/omp-pool-0.4.0-x86_64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/omp-pool-0.4.0-x86_64-linux.tar.zst",
       "sha256": "1f8f3570ed3f8670b6a636fbf1f8aad49f5b4a8f0ce8f566aae4c6df153b3014"
     }
   },
   "openbao-agent-macos-smoke": {
     "aarch64-darwin": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/openbao-agent-macos-smoke-0.1.0-aarch64-darwin.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/openbao-agent-macos-smoke-0.1.0-aarch64-darwin.tar.zst",
       "sha256": "eb26af8dd5d4d1b538d8bd6dfd5bd9d6b2600bd0ffcc438d8b38e26bf071decd"
     },
     "aarch64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/openbao-agent-macos-smoke-0.1.0-aarch64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/openbao-agent-macos-smoke-0.1.0-aarch64-linux.tar.zst",
       "sha256": "cac1bdc82c9b2941ad52359802250a90e53f5960bc5e0326414d7715ba40fe61"
     },
     "version": "0.1.0",
     "x86_64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/openbao-agent-macos-smoke-0.1.0-x86_64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/openbao-agent-macos-smoke-0.1.0-x86_64-linux.tar.zst",
       "sha256": "6c336dabbfbcef40fe94147a5a117ba12d55ec91bd975333d0ebd2025237974d"
     }
   },
   "rbuild-workspace-prune": {
     "aarch64-darwin": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/rbuild-workspace-prune-0.4.0-aarch64-darwin.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/rbuild-workspace-prune-0.4.0-aarch64-darwin.tar.zst",
       "sha256": "f8a2885846e6cbf874de403e057df1c338cdfaa8265993b4cb1a9cfe2d5a7281"
     },
     "aarch64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/rbuild-workspace-prune-0.4.0-aarch64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/rbuild-workspace-prune-0.4.0-aarch64-linux.tar.zst",
       "sha256": "4b60c16e5d2a3f0d4d19ae863aece9d671952ab01fe0481f2e15749e0c87cf62"
     },
     "version": "0.4.0",
     "x86_64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/rbuild-workspace-prune-0.4.0-x86_64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/rbuild-workspace-prune-0.4.0-x86_64-linux.tar.zst",
       "sha256": "149b93ab3972259dd406b1ab348e4d4a4afb4e18c16046c9bf82cb0f443016cb"
     }
   },
   "reddit-fetch": {
     "aarch64-darwin": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/reddit-fetch-0.4.0-aarch64-darwin.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/reddit-fetch-0.4.0-aarch64-darwin.tar.zst",
       "sha256": "8c1a4e75e92bbb6858e9f68f0671ae18fef42901e045baff50ced46db3808fb6"
     },
     "aarch64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/reddit-fetch-0.4.0-aarch64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/reddit-fetch-0.4.0-aarch64-linux.tar.zst",
       "sha256": "1ef9f14175ff5512517b56c0048324e456aa3cb0cd55ff78d176fc9f2d7c5407"
     },
     "version": "0.4.0",
     "x86_64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/reddit-fetch-0.4.0-x86_64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/reddit-fetch-0.4.0-x86_64-linux.tar.zst",
       "sha256": "eea3cdfa178e54b6a20b2a12eef560b4f8a61064ce2dc8d1ce4539321e27a850"
     }
   },
   "ref-gate": {
     "aarch64-darwin": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/ref-gate-0.4.0-aarch64-darwin.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/ref-gate-0.4.0-aarch64-darwin.tar.zst",
       "sha256": "42d2642fc68c98e4dab7b663de0296bad28f61269f3cc4c77593cc133ec48d49"
     },
     "aarch64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/ref-gate-0.4.0-aarch64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/ref-gate-0.4.0-aarch64-linux.tar.zst",
       "sha256": "bc438030e99d53c223728110c3a7b7dd5c2ce7bdb94197fff81f033c9c844f3d"
     },
     "version": "0.4.0",
     "x86_64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/ref-gate-0.4.0-x86_64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/ref-gate-0.4.0-x86_64-linux.tar.zst",
       "sha256": "81f4f504310ac686bf3da5eace28578c7f470e83aa14c90af28037d6c4fe37e6"
     }
   },
   "rigel-backup-sync": {
     "aarch64-darwin": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/rigel-backup-sync-0.4.0-aarch64-darwin.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/rigel-backup-sync-0.4.0-aarch64-darwin.tar.zst",
       "sha256": "cbfb8e1d694ae9270e75b1d2c6b767217e6ce1600c363d9563fe3e63d5e4b96b"
     },
     "aarch64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/rigel-backup-sync-0.4.0-aarch64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/rigel-backup-sync-0.4.0-aarch64-linux.tar.zst",
       "sha256": "81c966de0549368d76ced563d32f402f7c6a4734395a2577dd638cc8898bab5a"
     },
     "version": "0.4.0",
     "x86_64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/rigel-backup-sync-0.4.0-x86_64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/rigel-backup-sync-0.4.0-x86_64-linux.tar.zst",
       "sha256": "d47883c206b975ed960b9ac6977ed03d41ace2032417b297fd6e79a899792664"
     }
   },
   "rigel-storeload-nightly": {
     "aarch64-darwin": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/rigel-storeload-nightly-0.4.0-aarch64-darwin.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/rigel-storeload-nightly-0.4.0-aarch64-darwin.tar.zst",
       "sha256": "fa7613961d59290045d1931c5a7aefaa4349cfd243b10f708f1b152a65f5ef81"
     },
     "aarch64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/rigel-storeload-nightly-0.4.0-aarch64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/rigel-storeload-nightly-0.4.0-aarch64-linux.tar.zst",
       "sha256": "30f84479de652c7c2259c5bc9437aa6b38e7045a8d1dee15a3562c0333f5c57e"
     },
     "version": "0.4.0",
     "x86_64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/rigel-storeload-nightly-0.4.0-x86_64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/rigel-storeload-nightly-0.4.0-x86_64-linux.tar.zst",
       "sha256": "1dbb51078e70d44eb2752c3886c39d0d9e7089cea62f286ad1b6b60c563c4ef6"
     }
   },
   "rjc": {
     "aarch64-darwin": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/rjc-0.1.0-aarch64-darwin.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/rjc-0.1.0-aarch64-darwin.tar.zst",
       "sha256": "db8d4d8bbdf11e06bac0959a8e55961108e10082b05158cf2be22b2f34a73449"
     },
     "aarch64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/rjc-0.1.0-aarch64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/rjc-0.1.0-aarch64-linux.tar.zst",
       "sha256": "5b80791efcc5e0523c1713e5b517007d6258e9e64240ea5aaeb81ddaa33c7b41"
     },
     "version": "0.1.0",
     "x86_64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/rjc-0.1.0-x86_64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/rjc-0.1.0-x86_64-linux.tar.zst",
       "sha256": "f2609b112dc57a6822cbbe6c6166f4cf96378fe22860421ee87e6c527a6163dc"
     }
   },
   "rjc-gates-gc": {
     "aarch64-darwin": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/rjc-gates-gc-0.1.0-aarch64-darwin.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/rjc-gates-gc-0.1.0-aarch64-darwin.tar.zst",
       "sha256": "a93d4f9e3bcfa452d12cd5bb316bce06affb7def7503bfef99d43e85f840b9cc"
     },
     "aarch64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/rjc-gates-gc-0.1.0-aarch64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/rjc-gates-gc-0.1.0-aarch64-linux.tar.zst",
       "sha256": "3757e33df04e2e21f92bb216e444758e95ca8da90ab5264f62a166e100691b6d"
     },
     "version": "0.1.0",
     "x86_64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/rjc-gates-gc-0.1.0-x86_64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/rjc-gates-gc-0.1.0-x86_64-linux.tar.zst",
       "sha256": "9a4062d62aa0ee3388cbf0af4ace9cf2cb55a96031a53852fec626101279900e"
     }
   },
   "rjc-gates-image": {
     "aarch64-darwin": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/rjc-gates-image-0.4.0-aarch64-darwin.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/rjc-gates-image-0.4.0-aarch64-darwin.tar.zst",
       "sha256": "0ee078621d2719ccca6a788c255742c102ea5754c7d866cb8433ae3ab3e02875"
     },
     "aarch64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/rjc-gates-image-0.4.0-aarch64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/rjc-gates-image-0.4.0-aarch64-linux.tar.zst",
       "sha256": "e7a46151b21716d9cedf34677cb83486d50d3b161353643737b71e6829d9a65e"
     },
     "version": "0.4.0",
     "x86_64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/rjc-gates-image-0.4.0-x86_64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/rjc-gates-image-0.4.0-x86_64-linux.tar.zst",
       "sha256": "42a05f6de8e870dfae36febb44caaf5cf9a9b3295df50500388b334a1c2b9f4f"
     }
   },
   "run-cd": {
     "aarch64-darwin": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/run-cd-0.1.0-aarch64-darwin.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/run-cd-0.1.0-aarch64-darwin.tar.zst",
       "sha256": "b4c7e4b18316ec85cd1bcc2cf00e90ba5129a906d3d251ded323971c3d6dd647"
     },
     "aarch64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/run-cd-0.1.0-aarch64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/run-cd-0.1.0-aarch64-linux.tar.zst",
       "sha256": "adeabb4d5f734041cbfa128cb5fac6f37336281e22dfaa6e19e3f2a1fa0c36d3"
     },
     "version": "0.1.0",
     "x86_64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/run-cd-0.1.0-x86_64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/run-cd-0.1.0-x86_64-linux.tar.zst",
       "sha256": "9530f6872b34c9fbb42b77c6ebcbda3586cfb0629c153aec8cb6c031a1007483"
     }
   },
   "service-urls": {
     "aarch64-darwin": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/service-urls-0.4.0-aarch64-darwin.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/service-urls-0.4.0-aarch64-darwin.tar.zst",
       "sha256": "d97f07a5d002e90c525a0b509e7ddcb334e4713708bbd03086aa7f7b95f13751"
     },
     "aarch64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/service-urls-0.4.0-aarch64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/service-urls-0.4.0-aarch64-linux.tar.zst",
       "sha256": "92d2112c5539508171ea1d1989e95017506dc6f33e9c6e203af3358f2f2318c6"
     },
     "version": "0.4.0",
     "x86_64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/service-urls-0.4.0-x86_64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/service-urls-0.4.0-x86_64-linux.tar.zst",
       "sha256": "28767f027ed0945ad15c6585560d39fcb6bcdd878a4bbb1714df0bc6e389edc3"
     }
   },
   "sops-install-secrets": {
     "aarch64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/sops-install-secrets-0.0.1-aarch64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/sops-install-secrets-0.0.1-aarch64-linux.tar.zst",
       "sha256": "310e0284b449d3f30d1341510c18823e1904bfa80d3f370ab1a1e8b35785ac1d"
     },
     "version": "0.0.1",
     "x86_64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/sops-install-secrets-0.0.1-x86_64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/sops-install-secrets-0.0.1-x86_64-linux.tar.zst",
       "sha256": "a4d7f198b6b2af3d3bff0ceb4077ca132a90c5af845dde69727c94bd97ab6084"
     }
   },
-  "source": "7636312f2f552f6f09449aee8bdd1829f02d466b",
+  "source": "f54f6d37cb8adceb77260dd379634f8a539c3abc",
   "ssh-orphan-reap": {
     "aarch64-darwin": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/ssh-orphan-reap-0.4.0-aarch64-darwin.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/ssh-orphan-reap-0.4.0-aarch64-darwin.tar.zst",
       "sha256": "13a95809e62bca82653dbce1ee1a3efbcddbb76ccae6edb7f436467c04eb7e70"
     },
     "aarch64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/ssh-orphan-reap-0.4.0-aarch64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/ssh-orphan-reap-0.4.0-aarch64-linux.tar.zst",
       "sha256": "c9990d32b09ad35c576b1422811c9fd0afc1a68091b136fc897b8a86be651c91"
     },
     "version": "0.4.0",
     "x86_64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/ssh-orphan-reap-0.4.0-x86_64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/ssh-orphan-reap-0.4.0-x86_64-linux.tar.zst",
       "sha256": "71e83cb7623fa545b028fdc6943d3ee3d237b3a81a1971254a476cd8c92860de"
     }
   },
-  "tag": "nebula-20261127-237",
+  "tag": "nebula-20261127-238",
   "terraform-provider-googleworkspace": {
     "aarch64-darwin": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/terraform-provider-googleworkspace-0.10.1-aarch64-darwin.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/terraform-provider-googleworkspace-0.10.1-aarch64-darwin.tar.zst",
       "sha256": "aebecf8d95f9c7eb742d44c328f3896f4eace5cd574b0899a06c88e20592a5e1"
     },
     "aarch64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/terraform-provider-googleworkspace-0.10.1-aarch64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/terraform-provider-googleworkspace-0.10.1-aarch64-linux.tar.zst",
       "sha256": "87eea87bea5ef38a3f99ee18d855dbfe2f37d5dbf36fd76aaeeb9a1c765d430d"
     },
     "version": "0.10.1",
     "x86_64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/terraform-provider-googleworkspace-0.10.1-x86_64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/terraform-provider-googleworkspace-0.10.1-x86_64-linux.tar.zst",
       "sha256": "be763c430414ebaabc552978e3c64ba1c0abb1cc94443965a0bf439c003707bc"
     }
   },
   "transcript-archive": {
     "aarch64-darwin": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/transcript-archive-0.1.0-aarch64-darwin.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/transcript-archive-0.1.0-aarch64-darwin.tar.zst",
       "sha256": "9ed7630d8a07370215b842498b56d79c10b20a9340d7da919176f0c477a651a9"
     },
     "aarch64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/transcript-archive-0.1.0-aarch64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/transcript-archive-0.1.0-aarch64-linux.tar.zst",
       "sha256": "2ac43d6d5770da80f17ce5903b69b46536d3b06e376b745adc46e4115f4880c3"
     },
     "version": "0.1.0",
     "x86_64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/transcript-archive-0.1.0-x86_64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/transcript-archive-0.1.0-x86_64-linux.tar.zst",
       "sha256": "ea255c29207bec2cb0d95c6e4e6155bd03b6077080244b8536c1615de366b8f2"
     }
   },
   "trunk-mq-mcp": {
     "version": "0.1.0",
     "x86_64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/trunk-mq-mcp-0.1.0-x86_64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/trunk-mq-mcp-0.1.0-x86_64-linux.tar.zst",
       "sha256": "73ce6803071a614b9a9d3886a4d88b861f9e46c96eb0b29eec98a5c880452e71"
     }
   },
   "wave-dreamer": {
     "aarch64-darwin": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/wave-dreamer-0.4.0-aarch64-darwin.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/wave-dreamer-0.4.0-aarch64-darwin.tar.zst",
       "sha256": "6374be3522082b7c896e03e437696842f1d3e86ed09cf04849786496339c2b50"
     },
     "aarch64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/wave-dreamer-0.4.0-aarch64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/wave-dreamer-0.4.0-aarch64-linux.tar.zst",
       "sha256": "229422b06bbb05650e672d2f22b801a996ba1853a4109e0d4a03ea7dceff092b"
     },
     "version": "0.4.0",
     "x86_64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/wave-dreamer-0.4.0-x86_64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/wave-dreamer-0.4.0-x86_64-linux.tar.zst",
       "sha256": "1115a7a15883841d9463aa68b2e9b7cb34db8e4dd778f547715f70330b1f24e6"
     }
   },
   "wave-host": {
     "aarch64-darwin": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/wave-host-0.4.0-aarch64-darwin.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/wave-host-0.4.0-aarch64-darwin.tar.zst",
       "sha256": "9a9c4a19cf87d1bdec929c1629f920e28f02c3cf8f1c645fffff2fc4ddd4637a"
     },
     "aarch64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/wave-host-0.4.0-aarch64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/wave-host-0.4.0-aarch64-linux.tar.zst",
       "sha256": "52b589e39a01fb2bf9af2c4d1405b9f993b3605031ea0ee4368cf3d42affbbab"
     },
     "version": "0.4.0",
     "x86_64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/wave-host-0.4.0-x86_64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/wave-host-0.4.0-x86_64-linux.tar.zst",
       "sha256": "46869cceee3f304ca0d7ec2ff787073b18271d1accda7722cd6fb37c2bed8d51"
     }
   },
   "wave-ledger": {
     "aarch64-darwin": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/wave-ledger-0.1.0-aarch64-darwin.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/wave-ledger-0.1.0-aarch64-darwin.tar.zst",
       "sha256": "ad834e19a6823e9bef242b1f735a62ebdf76e8cc32c00c4dd9b3de1eb6b24f89"
     },
     "aarch64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/wave-ledger-0.1.0-aarch64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/wave-ledger-0.1.0-aarch64-linux.tar.zst",
       "sha256": "7c4e9743bd06f9d00054fdc2dab5877ef07904da9f7968ccd9da5197fbb05f1a"
     },
     "version": "0.1.0",
     "x86_64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/wave-ledger-0.1.0-x86_64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/wave-ledger-0.1.0-x86_64-linux.tar.zst",
       "sha256": "fde18575302d4706ae63d8e45b446dcc25705350c083d535872d8cbe6cedac24"
     }
   },
   "wave-recall": {
     "aarch64-darwin": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/wave-recall-0.4.0-aarch64-darwin.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/wave-recall-0.4.0-aarch64-darwin.tar.zst",
       "sha256": "844fc1917301ab4b4c019eff5add1aeab1521244d20462b6c22070c1e9589018"
     },
     "aarch64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/wave-recall-0.4.0-aarch64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/wave-recall-0.4.0-aarch64-linux.tar.zst",
       "sha256": "1367ec5c1ff339504494b3667b199ca75053e6fc1deee81fc12772078d714385"
     },
     "version": "0.4.0",
     "x86_64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/wave-recall-0.4.0-x86_64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/wave-recall-0.4.0-x86_64-linux.tar.zst",
       "sha256": "64a0b92caf3eb113dadfb2ce9428c1e192f00e9779cd35f231c2ed33d41194e7"
     }
   },
   "wave-seat-holder": {
     "aarch64-darwin": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/wave-seat-holder-0.4.0-aarch64-darwin.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/wave-seat-holder-0.4.0-aarch64-darwin.tar.zst",
       "sha256": "ca251419fb9bb3e22708d140ad6665db1138052bd5179854e26cf158ff07c06d"
     },
     "aarch64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/wave-seat-holder-0.4.0-aarch64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/wave-seat-holder-0.4.0-aarch64-linux.tar.zst",
       "sha256": "0efe2866963790f5eda7a577e208433052a67bb89243234ef2e6e015d25f063c"
     },
     "version": "0.4.0",
     "x86_64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/wave-seat-holder-0.4.0-x86_64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/wave-seat-holder-0.4.0-x86_64-linux.tar.zst",
       "sha256": "5815341d24fd7e66f5ec2f9f52d5ec639ee760cfb2e02ea4e0c43f2189944d29"
     }
   },
   "wave-supervisor-relaunch": {
     "aarch64-darwin": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/wave-supervisor-relaunch-0.4.0-aarch64-darwin.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/wave-supervisor-relaunch-0.4.0-aarch64-darwin.tar.zst",
       "sha256": "2780d031e1bca8a384be53a147281d8f4d513c91752e4b86c5d84774b2674052"
     },
     "aarch64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/wave-supervisor-relaunch-0.4.0-aarch64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/wave-supervisor-relaunch-0.4.0-aarch64-linux.tar.zst",
       "sha256": "3447855200b5c9813e11429071133f05a1271f3e4839b73d0676831fe6cd417d"
     },
     "version": "0.4.0",
     "x86_64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/wave-supervisor-relaunch-0.4.0-x86_64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/wave-supervisor-relaunch-0.4.0-x86_64-linux.tar.zst",
       "sha256": "5bc69b145e45d8c5c2919482ef8e2a42283b018c8eb76fa1c89fe9dba0213173"
     }
   },
   "windows-agent-sync": {
     "version": "0.4.0",
     "windows-amd64": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/windows-agent-sync-0.4.0-windows-amd64.exe.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/windows-agent-sync-0.4.0-windows-amd64.exe.tar.zst",
       "sha256": "44ff7cb8d6da5250ecea3a3e57fc38c539604774820fa3aa95c811cfb3ceb29a"
     }
   },
   "woodpecker-agent": {
     "aarch64-darwin": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/woodpecker-agent-3.17.0-rigel.27-aarch64-darwin.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/woodpecker-agent-3.17.0-rigel.27-aarch64-darwin.tar.zst",
       "sha256": "145c1f2989ab0fb539e0f5183d326b0e590aa7df3909ed1e1234cca74cf5200c"
     },
     "aarch64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/woodpecker-agent-3.17.0-rigel.27-aarch64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/woodpecker-agent-3.17.0-rigel.27-aarch64-linux.tar.zst",
       "sha256": "8f2ab17ac00cd15ccc09a88bef6271fb2c82f90015f40b1192817e0018e59300"
     },
     "upstreamRev": "f4d3d580e7aecb388963f40388678238bb287aad",
     "version": "3.17.0-rigel.27",
     "x86_64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/woodpecker-agent-3.17.0-rigel.27-x86_64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/woodpecker-agent-3.17.0-rigel.27-x86_64-linux.tar.zst",
       "sha256": "4c61dfec0701817864cba5c354457392aa30f482266988b0c4e8a4de4801803a"
     }
   },
   "zellij-rss-watchdog": {
     "aarch64-darwin": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/zellij-rss-watchdog-0.1.0-aarch64-darwin.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/zellij-rss-watchdog-0.1.0-aarch64-darwin.tar.zst",
       "sha256": "d8a6ae3e813d15bac2ad97742d7be715faa1d4ad7e67c289a700413e0fb15110"
     },
     "aarch64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/zellij-rss-watchdog-0.1.0-aarch64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/zellij-rss-watchdog-0.1.0-aarch64-linux.tar.zst",
       "sha256": "ad56817c8956210d9ed7900d15e6b855437fe7bbef2d6b0244b10ab47803fb48"
     },
     "version": "0.1.0",
     "x86_64-linux": {
-      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-237/zellij-rss-watchdog-0.1.0-x86_64-linux.tar.zst",
+      "url": "https://github.com/RigelBuild/nebula/releases/download/nebula-20261127-238/zellij-rss-watchdog-0.1.0-x86_64-linux.tar.zst",
       "sha256": "7eeda2b0f9737d4cd61c66e9bf5bc21c9ef1f87e37ee59e6dfd1355cbb117526"
     }
   }

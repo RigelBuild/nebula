@@ -10,8 +10,8 @@
       # entries come from a real build on each system, never a guessed value.
       depsHash = {
         x86_64-linux = "sha256-9UknAR4DqXY/PfWVoHYrK5ur5uGOAw6lebl45iV1MOg=";
-        aarch64-linux = "";
-        aarch64-darwin = "";
+        aarch64-linux = "sha256-lJ0Q9T22Dkfgs9LuEz0WETg+btxnIUxWAZ1nj7VEK+I=";
+        aarch64-darwin = "sha256-QcfVJyRL9HRC3UnaIhjiwbyP88YhMyzgrlUOizUDoF0=";
       };
       # Released on all three release systems.
       systems = [ "x86_64-linux" "aarch64-linux" "aarch64-darwin" ];
@@ -43,24 +43,32 @@
             '';
           };
           # bun build --compile appends its payload to a copy of bun's runtime.
-          # The ELF links glibc and names a /nix/store interpreter, so postFixup
-          # points it at the standard loader and drops the RPATH. The payload is
-          # appended data that patchelf keeps, and dontStrip stops strip from
-          # rewriting the file. CD's check-asset gate declares the NEEDED sonames
-          # in component.cue.
+          # On Linux this is an ELF that links glibc and names a /nix/store
+          # interpreter. Point it at the standard loader for the target architecture
+          # and drop the RPATH. Darwin outputs are Mach-O and need no patchelf.
+          # patchelf preserves the appended payload; dontStrip prevents strip from
+          # rewriting it. CD's check-asset gate declares the NEEDED sonames in
+          # component.cue.
           cotal-presence-probe = pkgs.stdenvNoCC.mkDerivation {
             pname = "cotal-presence-probe";
             version = "0.1.0";
             src = ./.;
-            nativeBuildInputs = [ pkgs.bun pkgs.patchelf ];
+            nativeBuildInputs =
+              [ pkgs.bun ]
+              ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.patchelf ];
             dontStrip = true;
             buildPhase = ''
               export HOME="$TMPDIR"
               cp -R ${deps}/node_modules ./node_modules
               bun build --compile --outfile cotal-presence-probe main.ts
             '';
-            postFixup = ''
-              patchelf --set-interpreter /lib64/ld-linux-x86-64.so.2 --remove-rpath "$out/bin/cotal-presence-probe"
+            postFixup = pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
+              patchelf --set-interpreter ${
+                if pkgs.stdenv.hostPlatform.isAarch64 then
+                  "/lib/ld-linux-aarch64.so.1"
+                else
+                  "/lib64/ld-linux-x86-64.so.2"
+              } --remove-rpath "$out/bin/cotal-presence-probe"
             '';
             installPhase = ''
               install -Dm755 cotal-presence-probe "$out/bin/cotal-presence-probe"

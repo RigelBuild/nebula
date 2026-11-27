@@ -31,6 +31,22 @@ export function suiteInvocation(input) {
   };
 }
 
+/** Run the requested command with the delegated suite's privilege, outside its cgroup scope. */
+/** @param {{ delegated: boolean, bin: string, args: string[], path: string }} input @returns {{ bin: string, args: string[] }} */
+export function reaperInvocation(input) {
+  return input.delegated
+    ? { bin: "sudo", args: ["env", `PATH=${input.path}`, input.bin, ...input.args] }
+    : { bin: input.bin, args: input.args };
+}
+
+/** The visible fallback is an operational warning, not an implicit claim that delegation worked. */
+/** @param {{ suite: string, delegated: boolean }} input @returns {string | undefined} */
+export function delegationFallback(input) {
+  return input.suite === DELEGATED_SUITE && !input.delegated
+    ? `[delegated-shard] ${DELEGATED_SUITE} is running without its pinned GitHub Actions Linux delegated route; leftover processes may be privileged and cannot be reaped here`
+    : undefined;
+}
+
 /** Keep only the explicit cgroup delegation declaration across a suite's COTAL_ scrub. */
 /** @param {Record<string, string | undefined>} environment @returns {Record<string, string>} */
 export function preserveSeatCgroupDelegation(environment) {

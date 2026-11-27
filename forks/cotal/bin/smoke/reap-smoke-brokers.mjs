@@ -38,16 +38,16 @@ import { createHash } from "node:crypto";
  * @typedef {{ pid: number, args: string }} NatsServerRow
  */
 
-/**
- * A broker this reaper claimed, with the dead owner whose pid the store dir carried.
- * @typedef {NatsServerRow & { owner: number }} ReapedBroker
- */
+/** A broker killed after its owner was found dead. */
+/** @typedef {NatsServerRow & { owner: number }} ReapedBroker */
+/** A broker the reaper could not signal. */
+/** @typedef {NatsServerRow & { owner: number, error: string }} FailedBroker */
 
 /**
  * What one reap pass did, and what it deliberately made no claim on. `supported` is false on a
  * platform where the enumerator cannot look, so a caller can tell "nothing leaked" from "nothing was
  * looked at".
- * @typedef {{ inspected: number, reaped: ReapedBroker[], ownedLive: number, unparseable: number, unclaimable: number, supported: boolean }} ReapReport
+ * @typedef {{ inspected: number, reaped: ReapedBroker[], failed: FailedBroker[], ownedLive: number, unparseable: number, unclaimable: number, supported: boolean }} ReapReport
  */
 
 /** The stable half of the token minted by `@cotal-ai/smoke-kit`. Duplicated as a literal on purpose:
@@ -143,12 +143,14 @@ export function reapSmokeBrokers({ dryRun = false, scope } = {}) {
     : new RegExp(`${SMOKE_BROKER_PREFIX}(\\d+)-s${digest}-`);
   const rows = listNatsServers();
   if (rows === undefined) {
-    return { inspected: 0, reaped: [], ownedLive: 0, unparseable: 0, unclaimable: 0, supported: false };
+    return { inspected: 0, reaped: [], failed: [], ownedLive: 0, unparseable: 0, unclaimable: 0, supported: false };
   }
 
   const tokened = rows.filter((r) => r.args.includes(SMOKE_BROKER_PREFIX));
   /** @type {ReapedBroker[]} */
   const reaped = [];
+  /** @type {FailedBroker[]} */
+  const failed = [];
   let ownedLive = 0, unparseable = 0;
   for (const { pid, args } of tokened) {
     const owner = ownerPattern.exec(args);
@@ -165,15 +167,17 @@ export function reapSmokeBrokers({ dryRun = false, scope } = {}) {
       process.kill(pid, "SIGKILL");
       reaped.push({ pid, args, owner: Number(owner[1]) });
     } catch (e) {
-      console.error(`smoke broker reaper: could not kill pid ${pid}: ${/** @type {Error} */ (e).message}`);
+      const error = /** @type {NodeJS.ErrnoException} */ (e);
+      if (error.code !== "ESRCH") failed.push({ pid, args, owner: Number(owner[1]), error: error.message });
     }
   }
   return {
     inspected: rows.length,
     reaped,
+    failed,
     ownedLive,
     unparseable,
-    unclaimable: rows.length - reaped.length,
+    unclaimable: rows.length - reaped.length - failed.length,
     supported: true,
   };
 }
@@ -194,8 +198,12 @@ export function reportReaped(label, result) {
     const owned = result.ownedLive > 0 ? `, ${result.ownedLive} owned by a live process` : "";
     const old = result.unparseable > 0 ? `, ${result.unparseable} tokened with no owner recorded` : "";
     console.log(`  [reaper] no leaked smoke brokers after ${label} (${result.inspected} nats-server live, ${result.unclaimable} not claimed${owned}${old})`);
-    return;
+  } else {
+    console.log(`  [reaper] ✗ ${label} LEAKED ${result.reaped.length} broker(s) it had already been asked to own:`);
+    for (const { pid, args } of result.reaped) console.log(`  [reaper]   killed pid ${pid}: ${args.slice(0, 120)}`);
   }
-  console.log(`  [reaper] ✗ ${label} LEAKED ${result.reaped.length} broker(s) it had already been asked to own:`);
-  for (const { pid, args } of result.reaped) console.log(`  [reaper]   killed pid ${pid}: ${args.slice(0, 120)}`);
+  for (const { pid, error } of result.failed) {
+    console.error(`smoke broker reaper: could not kill pid ${pid}: ${error}`);
+  }
 }
+

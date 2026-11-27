@@ -20,11 +20,14 @@
  */
 import { strict as assert } from "node:assert";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { SMOKE_BROKER_PREFIX as KIT_PREFIX, SMOKE_BROKER_TOKEN, freePort, killAndAwaitExit, teardownOnSignal } from "@cotal-ai/smoke-kit";
 import { SMOKE_BROKER_PREFIX, listNatsServers, reapSmokeBrokers } from "./reap-smoke-brokers.mjs";
+import { reapRunCustodians } from "./reap-seat-custodians.mjs";
 // A NAMESPACE import for the reporter, deliberately: a named import of every export makes this
 // suite die at LOAD when a mutation renames one, which turns a graded row into an unexplained
 // crash and cost exactly that here. Reached through the namespace, a renamed export is a missing
@@ -47,6 +50,33 @@ console.log("\n── smoke broker reaper ────────────�
 // The reaper duplicates the prefix as a literal because it runs from the CI runner before any
 // workspace build. That duplication is only safe if it cannot drift, which is what this asserts.
 check("the reaper's prefix literal is the one the kit mints", SMOKE_BROKER_PREFIX === KIT_PREFIX, `${SMOKE_BROKER_PREFIX} vs ${KIT_PREFIX}`);
+const expectedMarker = process.env.COTAL_RUN ?? `reaper-smoke-${process.pid}`;
+const custodianFixture = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)", "--", "--cotal-run", expectedMarker, "/tmp/dist/custodian.js"], { stdio: "ignore" });
+const custodianPid = custodianFixture.pid;
+for (let attempt = 0; attempt < 50 && custodianPid !== undefined; attempt++) {
+  try {
+    if (readFileSync(`/proc/${custodianPid}/cmdline`, "utf8").includes("/tmp/dist/custodian.js")) break;
+  } catch { /* wait for the fixture to start */ }
+  await wait(10);
+}
+try {
+  const originalKill = process.kill;
+  process.kill = ((pid, signal) => {
+    if (pid === custodianPid && signal === "SIGKILL") throw Object.assign(new Error("permission denied"), { code: "EPERM" });
+    return originalKill(pid, signal);
+  }) as typeof process.kill;
+  try {
+    const report = reapRunCustodians(expectedMarker);
+    check("a denied custodian reap records its pid instead of throwing or claiming success", custodianPid !== undefined && report.failed.some((row) => row.pid === custodianPid) && !report.reaped.some((row) => row.pid === custodianPid));
+    const error = report.failed.find((row) => row.pid === custodianPid)?.error;
+    check("custodian failure retains the permission error for reporting", error?.includes("permission denied") === true, error);
+  } finally {
+    process.kill = originalKill;
+  }
+} finally {
+  if (custodianPid !== undefined) { try { process.kill(custodianPid, "SIGKILL"); } catch { /* fixture exited */ } }
+  await killAndAwaitExit(custodianFixture, "SIGKILL");
+}
 // And the minted token must actually carry this process's pid, or the owner check has nothing to read.
 check("the kit's token stamps the owning pid into the dir name", new RegExp(`^${KIT_PREFIX}${process.pid}-(?:s[A-Za-z0-9_-]{22}-)?$`).test(SMOKE_BROKER_TOKEN), SMOKE_BROKER_TOKEN);
 
@@ -203,7 +233,7 @@ const armKey = (arm: DeclaredShape): string =>
 // These are values, not types.
 const NAMED_ARMS: Readonly<Record<string, string>> = {
   "reapSmokeBrokers#0#object{dryRun:union(boolean|undefined),scope:union(string|undefined)}": "{ dryRun: true }",
-  "reportReaped#1#object{inspected:number,ownedLive:number,reaped:array<object{args:string,owner:number,pid:number}>,supported:boolean,unclaimable:number,unparseable:number}": "report",
+  "reportReaped#1#object{failed:array<object{args:string,error:string,owner:number,pid:number}>,inspected:number,ownedLive:number,reaped:array<object{args:string,owner:number,pid:number}>,supported:boolean,unclaimable:number,unparseable:number}": "report",
 };
 // And the arms that are COMPILED but not RUN, each named with the reason it cannot be run.
 // `reapSmokeBrokers` is the one export here that does something, and its parameter is optional, so
@@ -372,7 +402,7 @@ check(
 // The three type names are exercised too, by the consumer's `import type` and its annotations: a
 // type that stopped being exported would fail that compile rather than pass unnoticed.
 const EXERCISED = [
-  "NatsServerRow", "ReapReport", "ReapedBroker",
+  "FailedBroker", "NatsServerRow", "ReapReport", "ReapedBroker",
   "SMOKE_BROKER_PREFIX", "listNatsServers", "reapSmokeBrokers", "reportReaped",
 ];
 check(
@@ -540,6 +570,43 @@ try {
   check("the non-broker argument control is running", mention.exitCode === null && alive(mention.pid!));
   check("an argument's broker path does not classify its process as a broker", !pids.includes(mention.pid!));
 
+  const delegatedRun = `delegated-reaper-${process.pid}`;
+  const delegatedScope = `delegated-scope-${process.pid}`;
+  const fixturePath = fileURLToPath(new URL("./fixtures/delegated-reaper-root-fixture.mjs", import.meta.url));
+  const fixture = spawnSync("sudo", ["-n", "env", `PATH=${process.env.PATH ?? ""}`, process.execPath, fixturePath, delegatedRun, delegatedScope], { encoding: "utf8", timeout: 15_000 });
+  const rootFixturesUnavailable = fixture.status !== 0 && fixture.stderr.includes("a password is required");
+  if (rootFixturesUnavailable) console.log(`  ↪ root-owned fixture unavailable: ${fixture.stderr.trim()}`);
+  check("root-owned fixture starts under its privileged uid when sudo is available", rootFixturesUnavailable || fixture.status === 0, fixture.stderr);
+  let rootBrokerPid: number | undefined;
+  let rootCustodianPid: number | undefined;
+  let rootFixtureDir: string | undefined;
+  if (!rootFixturesUnavailable) {
+    try {
+      const parsedFixture = JSON.parse(fixture.stdout.trim()) as { brokerPid: number; custodianPid: number; dir: string; uid: number };
+      rootBrokerPid = parsedFixture.brokerPid;
+      rootCustodianPid = parsedFixture.custodianPid;
+      rootFixtureDir = parsedFixture.dir;
+      check("fixture proves the test processes are root-owned", parsedFixture.uid === 0);
+      const privilegedReaper = spawnSync("sudo", ["-n", "env", `PATH=${process.env.PATH ?? ""}`, process.execPath,
+        fileURLToPath(new URL("./reap-delegated-suite.mjs", import.meta.url)), delegatedRun, delegatedScope], { encoding: "utf8", timeout: 15_000 });
+      const marker = privilegedReaper.stdout.split("\n").find((line) => line.startsWith("__DELEGATED_REAP__"));
+      const reapReport = marker ? JSON.parse(marker.slice("__DELEGATED_REAP__".length)) as {
+        brokers: { reaped: number[]; failed: Array<{ pid: number; error: string }> };
+        custodians: { reaped: number[]; failed: Array<{ pid: number; error: string }> };
+      } : undefined;
+      check("privileged reaper kills and reports root-owned custodian", reapReport?.custodians.reaped.includes(rootCustodianPid!) === true && !alive(rootCustodianPid!));
+      check("privileged reaper kills and counts root-owned broker", reapReport?.brokers.reaped.includes(rootBrokerPid!) === true && !alive(rootBrokerPid!));
+      check("privileged reaper has no permission-denied leftovers", reapReport?.brokers.failed.length === 0 && reapReport.custodians.failed.length === 0, privilegedReaper.stderr);
+      check("privileged reaping exits cleanly for successfully killed processes", privilegedReaper.status === 0);
+      check("privileged broker sweep respects scope and run marker attribution", reapReport?.brokers.reaped.length === 1 && reapReport.custodians.reaped.length === 1);
+    } catch (error) {
+      check("root-owned reaper fixture produced a complete report", false, error instanceof Error ? error.message : String(error));
+    } finally {
+      if (rootBrokerPid !== undefined) { try { process.kill(rootBrokerPid, "SIGKILL"); } catch { /* already gone */ } }
+      if (rootCustodianPid !== undefined) { try { process.kill(rootCustodianPid, "SIGKILL"); } catch { /* already gone */ } }
+      if (rootFixtureDir !== undefined) spawnSync("sudo", ["-n", "rm", "-rf", rootFixtureDir]);
+    }
+  }
   // Kill the OWNER only. Its broker is a plain child, so it survives and is reparented: a real orphan.
   process.kill(ownerPid!, "SIGKILL");
   for (let i = 0; i < 40 && alive(ownerPid!); i++) await wait(100);
@@ -575,6 +642,18 @@ try {
     JSON.stringify(dry.reaped.map((r) => r.pid)),
   );
 
+  const originalKill = process.kill;
+  const deniedBrokerPid = orphanPid;
+  let deniedBrokerReport;
+  process.kill = ((pid, signal) => {
+    if (pid === deniedBrokerPid && signal === "SIGKILL") throw Object.assign(new Error("permission denied"), { code: "EPERM" });
+    return originalKill(pid, signal);
+  }) as typeof process.kill;
+  try { deniedBrokerReport = reapSmokeBrokers(); }
+  finally { process.kill = originalKill; }
+  const deniedBroker = deniedBrokerReport?.failed.find((row) => row.pid === deniedBrokerPid);
+  check("a denied broker reap records its pid as a failed reap", deniedBroker !== undefined && deniedBrokerPid !== undefined && !deniedBrokerReport?.reaped.some((row) => row.pid === deniedBrokerPid));
+  check("a denied broker reap retains permission detail", deniedBroker?.error.includes("permission denied") === true);
   const result = reapSmokeBrokers();
   await wait(500);
 

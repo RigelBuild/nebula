@@ -42,10 +42,16 @@ export const RUN_MARKER_FLAG = "--cotal-run";
  */
 
 /**
+ * A custodian the reaper could not signal.
+ * @typedef {{ pid: number, run: string, error: string }} CustodianFailure
+ */
+
+/**
  * What one pass did. `supported` is false where `/proc` cannot be read, so a caller can tell
  * "nothing leaked" from "nothing was looked at".
- * @typedef {{ inspected: number, reaped: CustodianRow[], unattributed: number, otherRuns: number, supported: boolean }} CustodianReapReport
+ * @typedef {{ inspected: number, reaped: CustodianRow[], failed: CustodianFailure[], unattributed: number, otherRuns: number, supported: boolean }} CustodianReapReport
  */
+ 
 
 /**
  * Every live seat custodian, as `{ pid, run }`. Linux only: the custody transport is.
@@ -84,8 +90,9 @@ export function listCustodians() {
  */
 export function reapRunCustodians(run) {
   const rows = listCustodians();
-  if (rows === undefined) return { inspected: 0, reaped: [], unattributed: 0, otherRuns: 0, supported: false };
+  if (rows === undefined) return { inspected: 0, reaped: [], failed: [], unattributed: 0, otherRuns: 0, supported: false };
   const reaped = [];
+  const failed = [];
   let unattributed = 0;
   let otherRuns = 0;
   for (const row of rows) {
@@ -104,10 +111,11 @@ export function reapRunCustodians(run) {
       process.kill(row.pid, "SIGKILL");
       reaped.push(row);
     } catch (e) {
-      if (/** @type {NodeJS.ErrnoException} */ (e).code !== "ESRCH") throw e;
+      const error = /** @type {NodeJS.ErrnoException} */ (e);
+      if (error.code !== "ESRCH") failed.push({ ...row, error: error.message });
     }
   }
-  return { inspected: rows.length, reaped, unattributed, otherRuns, supported: true };
+  return { inspected: rows.length, reaped, failed, unattributed, otherRuns, supported: true };
 }
 
 /**
@@ -123,6 +131,9 @@ export function reportCustodians(cmd, report) {
   if (report.reaped.length > 0) {
     console.error(`[seat-reaper] ${cmd} LEAKED ${report.reaped.length} custodian(s); killed:`);
     for (const { pid, run } of report.reaped) console.error(`[seat-reaper]   killed pid ${pid} (run ${run})`);
+  }
+  for (const { pid, run, error } of report.failed) {
+    console.error(`[seat-reaper] ${cmd}: could not kill pid ${pid} (run ${run}): ${error}`);
   }
   if (report.unattributed > 0) {
     console.log(

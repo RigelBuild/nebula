@@ -36,7 +36,9 @@ import { neverRanBlock } from "./shard-never-ran.mjs";
 import { parseSentinel } from "./sentinel.mjs";
 import { poolSelection, runPool } from "./shard-pool.mjs";
 import { QUARANTINED } from "./ci-quarantine.mjs";
-import { DELEGATED_SUITE, isDelegatedShard, suiteInvocation } from "./shard-delegation.mjs";
+import { DELEGATED_SUITE, delegationFallback, isDelegatedShard, reaperInvocation, suiteInvocation } from "./shard-delegation.mjs";
+import { fileURLToPath } from "node:url";
+const DELEGATED_REAPER = fileURLToPath(new URL("./reap-delegated-suite.mjs", import.meta.url));
 
 const REPO = process.cwd();
 const offline = process.argv.includes("--offline");
@@ -223,6 +225,8 @@ async function main() {
       platform: process.platform,
       githubActions: process.env.GITHUB_ACTIONS,
     });
+    const fallback = delegationFallback({ suite, delegated });
+    if (fallback) console.error(fallback);
     const invocation = suiteInvocation({
       delegated,
       bin: "pnpm",
@@ -233,17 +237,55 @@ async function main() {
     });
     process.env.SMOKE_BROKER_SCOPE = scope;
     const r = await runSuite(invocation.bin, invocation.args);
+    let delegatedLeaks;
+    if (delegated) {
+      const reaper = reaperInvocation({ delegated, bin: process.execPath, args: [DELEGATED_REAPER, RUN_MARKER, scope], path: process.env.PATH ?? "" });
+      const reap = await runSuite(reaper.bin, reaper.args);
+      const marker = reap.out.split("\n").find((line) => line.startsWith("__DELEGATED_REAP__"));
+      if (marker) {
+        try {
+          const report = JSON.parse(marker.slice("__DELEGATED_REAP__".length));
+          delegatedLeaks = { ...report, output: reap.out, status: reap.status };
+        } catch (error) {
+          delegatedLeaks = { output: reap.out, status: 1, error: error instanceof Error ? error.message : String(error) };
+        }
+      } else {
+        delegatedLeaks = { output: reap.out, status: reap.status || 1, error: "privileged reaper returned no report" };
+      }
+      if (delegatedLeaks.status !== 0 || delegatedLeaks.error || delegatedLeaks.brokers?.failed?.length || delegatedLeaks.custodians?.failed?.length) {
+        console.error(`[delegated-reaper] ${DELEGATED_SUITE} failed to account for privileged leftovers: ${JSON.stringify(delegatedLeaks)}`);
+        failAt(cmd, i, `privileged reaper failed: ${delegatedLeaks.error ?? `exit ${delegatedLeaks.status}`}`, 1);
+        break;
+      }
+      const brokerPids = delegatedLeaks.brokers?.reaped ?? [];
+      const custodianPids = delegatedLeaks.custodians?.reaped ?? [];
+      if (brokerPids.length > 0 || custodianPids.length > 0) {
+        console.error(`[delegated-reaper] ${DELEGATED_SUITE} leaked privileged process(es); killed broker pid(s) ${brokerPids.join(",") || "none"}; custodian pid(s) ${custodianPids.join(",") || "none"}`);
+        failAt(cmd, i, `leaked privileged process pid ${brokerPids[0] ?? custodianPids[0]}`, 1);
+        break;
+      }
+    }
     // Reap before deciding the exit status, but claim only this suite's brokers. Another run's owner
     // can exit while this suite is active, so arrival after the pre-sweep does not establish ownership.
     const after = reapSmokeBrokers({ scope });
     reportReaped(cmd, after);
     if (after.reaped.length > 0) leaked.push({ cmd, count: after.reaped.length });
+    if (after.failed.length > 0) {
+      for (const { pid, error } of after.failed) console.error(`[reaper] ${cmd}: could not kill broker pid ${pid}: ${error}`);
+      failAt(cmd, i, `could not kill leaked broker pid ${after.failed[0].pid}`, 1);
+      break;
+    }
     // Same rule for seat custodians: anything still carrying this run's marker outlived the suite
     // that launched it, so it is that suite's leak and it is killed here rather than left to the
     // custodian's own (much longer) unattended timer.
     const seats = reapRunCustodians(RUN_MARKER);
     reportCustodians(cmd, seats);
     if (seats.reaped.length > 0) leakedSeats.push({ cmd, count: seats.reaped.length });
+    if (seats.failed.length > 0) {
+      for (const { pid, run, error } of seats.failed) console.error(`[seat-reaper] ${cmd}: could not kill pid ${pid} (run ${run}): ${error}`);
+      failAt(cmd, i, `could not kill leaked custodian pid ${seats.failed[0].pid}`, 1);
+      break;
+    }
     if (r.status !== 0) {
       failAt(cmd, i, `exit ${r.status}`, r.status || 1);
       break;

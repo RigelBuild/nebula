@@ -1,19 +1,19 @@
 {
-  "tag": "nebula-20261119-51",
+  "tag": "nebula-20261126-234",
   "version": "0.151.2",
   "repo": "RigelBuild/nebula",
   "assets": {
     "x86_64-linux": {
       "platform": "linux-x64",
-      "hash": "sha256-9rHs/grzaq4xd+yxzNu4goVnPGWftqfZ5cG9eRW6O74="
+      "hash": "sha256-Q+if7wmho3+ypXi2/FpZxZKcFvZVfUgWS+QmbCmKmL8="
     },
     "aarch64-linux": {
       "platform": "linux-arm64",
-      "hash": "sha256-SD2cy4g6tHqyGVlg650vVIJ2OWzxgGCLa0B/wTLFV6Q="
+      "hash": "sha256-j3S0qWgRM5Y9eZXvRCbC16W9Toj4SC45RRsRu9nP5yo="
     },
     "aarch64-darwin": {
       "platform": "darwin-arm64",
-      "hash": "sha256-7tqPLdDlCo6W2EoQc4FCO3sYf2pP/Dq6la9YK4sPepg="
+      "hash": "sha256-GhIRbRpJlPge56DAEquqiTU96AnIhLM8kC1HyVgJ8uE="
     }
   }
 }

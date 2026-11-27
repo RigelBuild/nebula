@@ -1,0 +1,2 @@
+# The CLI credentials pins smoke starts a real NATS broker; its script builds cotal-ai before running.
+smoke:send-creds-pins

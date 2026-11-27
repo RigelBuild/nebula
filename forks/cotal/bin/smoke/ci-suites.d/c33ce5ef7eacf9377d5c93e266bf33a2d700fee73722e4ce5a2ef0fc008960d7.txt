@@ -1,0 +1,2 @@
+# The pi adapter reads live background work at lifecycle hooks and ignores stale event payloads.
+smoke:pi-background-wiring

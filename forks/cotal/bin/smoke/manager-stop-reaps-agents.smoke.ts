@@ -56,12 +56,14 @@ import { spawn as spawnProc, type ChildProcess } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { makeScratch } from "./_scratch.js";
+import { preserveSeatCgroupDelegation } from "./shard-delegation.mjs";
 
-// Seat-env hygiene BEFORE any cotal import: whatever runs this suite may itself be a managed
-// session whose COTAL_* names a live mesh; nothing may leak into the rig or its children.
+// Seat-env hygiene BEFORE any cotal import: preserve only the runner's delegation declaration.
+const delegatedEnv = preserveSeatCgroupDelegation(process.env);
+for (const k of Object.keys(process.env)) if (k.startsWith("COTAL_")) delete process.env[k];
+Object.assign(process.env, delegatedEnv);
 const scratch = makeScratch("cotal-964-scratch-");
 const home = mkdtempSync(join(scratch, "home-"));
-for (const k of Object.keys(process.env)) if (k.startsWith("COTAL_")) delete process.env[k];
 process.env.COTAL_HOME = home;
 process.env.XDG_CONFIG_HOME = join(home, "xdg");
 // The spare phase's custodial seat keeps its custody record in this run's scratch.

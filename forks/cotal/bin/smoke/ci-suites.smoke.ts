@@ -24,8 +24,10 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import ts from "typescript";
-import { parseCiSuites, readCiSuites, CI_SUITES_PATH } from "./ci-suites.mjs";
+import { parseCiSuites, readCiSuites, readShardCosts, CI_SUITES_PATH } from "./ci-suites.mjs";
 import { duplicateObjectKeys } from "./json-duplicate-keys.js";
+import { QUARANTINED } from "./ci-quarantine.mjs";
+import { DELEGATED_SUITE, isDelegatedShard, preserveSeatCgroupDelegation, suiteInvocation } from "./shard-delegation.mjs";
 
 let pass = 0;
 let fail = 0;
@@ -195,7 +197,35 @@ const duplicateRoot = (duplicateSource.statements[0] as ts.ExpressionStatement |
 const duplicateKeys = duplicateRoot ? duplicateObjectKeys(duplicateRoot, duplicateSource) : [];
 check("duplicate manifest keys remain visible to the source-level inventory", duplicateKeys.length === 1 && duplicateKeys[0] === "$.smoke:ci", duplicateKeys);
 
-const EXPECTED = 30;
+const costs = readShardCosts();
+const managerStopPin = costs.suites.get(DELEGATED_SUITE);
+check("manager-stop-reap remains pinned to shard 1 in the four-shard CI topology", managerStopPin?.shard === 1 && costs.count === 4);
+const managerStopRoute = {
+  suite: DELEGATED_SUITE,
+  shard: 1,
+  count: 4,
+  pinnedShard: managerStopPin?.shard,
+  pinnedCount: costs.count,
+  platform: "linux",
+  githubActions: "true",
+};
+check("the pinned manager-stop-reap suite receives delegated execution on its CI shard", isDelegatedShard(managerStopRoute));
+check("the manager suite is not delegated on another shard", !isDelegatedShard({ ...managerStopRoute, shard: 0 }));
+check("the manager suite is not delegated outside its pinned shard count", !isDelegatedShard({ ...managerStopRoute, count: 1 }));
+check("other suites never receive delegated execution", !isDelegatedShard({ ...managerStopRoute, suite: "smoke:manager-stop-spare-guard" }));
+check("non-CI runs do not receive delegated execution", !isDelegatedShard({ ...managerStopRoute, githubActions: undefined }));
+check("non-Linux runs do not receive delegated execution", !isDelegatedShard({ ...managerStopRoute, platform: "darwin" }));
+
+const managerInvocation = suiteInvocation({ delegated: true, bin: "pnpm", args: ["smoke:manager-stop-reap"], path: "/usr/bin", runMarker: "run-1", brokerScope: "scope-1" });
+check("delegated invocation uses systemd-run with Delegate=yes and the cgroup declaration", managerInvocation.bin === "sudo" && managerInvocation.args.includes("Delegate=yes") && managerInvocation.args.includes("COTAL_SEAT_CGROUP_DELEGATED=1"));
+check("delegated invocation retains the isolated broker scope and seat marker", managerInvocation.args.includes("SMOKE_BROKER_SCOPE=scope-1") && managerInvocation.args.includes("COTAL_RUN=run-1"));
+const ordinaryInvocation = suiteInvocation({ delegated: false, bin: "pnpm", args: ["smoke:manager-stop-spare-guard"], path: "/usr/bin", runMarker: "run-1", brokerScope: "scope-2" });
+check("ordinary suite invocation remains unchanged", ordinaryInvocation.bin === "pnpm" && JSON.stringify(ordinaryInvocation.args) === JSON.stringify(["--silent", "smoke:manager-stop-spare-guard"]));
+check("suite scrub preserves only the delegation declaration", JSON.stringify(preserveSeatCgroupDelegation({ COTAL_SEAT_CGROUP_DELEGATED: "1", COTAL_HOME: "/home/live", COTAL_SERVERS: "nats://live" })) === JSON.stringify({ COTAL_SEAT_CGROUP_DELEGATED: "1" }));
+check("suite scrub does not create delegation outside the delegated run", Object.keys(preserveSeatCgroupDelegation({ COTAL_HOME: "/home/live" })).length === 0);
+check("the real manager-stop-reap suite is no longer quarantined", !QUARANTINED[DELEGATED_SUITE]);
+
+const EXPECTED = 43;
 check(
   `every cell ran - ${EXPECTED} expected, so a cell that stops existing is not mistaken for one that passed`,
   pass + fail === EXPECTED,

@@ -20,7 +20,7 @@
  */
 import { strict as assert } from "node:assert";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -44,6 +44,9 @@ const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const alive = (pid: number): boolean => {
   try { process.kill(pid, 0); return true; } catch (e) { return (e as NodeJS.ErrnoException).code === "EPERM"; }
 };
+const suiteScope = `${process.env.SMOKE_BROKER_SCOPE?.trim() || "reaper-smoke"}-${process.pid}-${randomUUID()}`;
+const unrelatedScope = `${suiteScope}-unrelated-${randomUUID()}`;
+const scopeDigest = (scope: string): string => createHash("sha256").update(scope.trim()).digest().subarray(0, 16).toString("base64url");
 
 console.log("\n── smoke broker reaper ─────────────────────────\n");
 
@@ -452,7 +455,7 @@ const unverifiable = (shape: DeclaredShape, path: string): string[] => {
   }
 };
 
-const dryReport = reapSmokeBrokers({ dryRun: true });
+const dryReport = reapSmokeBrokers({ dryRun: true, scope: suiteScope });
 const dryMismatches = mismatches(surface.returns.reapSmokeBrokers!, dryReport, "reapSmokeBrokers()");
 check(
   "and every field the declaration promises of a report is the type the report actually carries",
@@ -538,40 +541,74 @@ const startBroker = async (prefix: string): Promise<ChildProcess> => {
 };
 
 let ownerPid: number | undefined, orphanPid: number | undefined, orphanDir: string | undefined;
-let owner: ChildProcess | undefined;
+let unrelatedOwnerPid: number | undefined, unrelatedOrphanPid: number | undefined, unrelatedOrphanDir: string | undefined;
+let owner: ChildProcess | undefined, unrelatedOwner: ChildProcess | undefined;
+const startOrphanOwner = async (scope: string): Promise<{ child: ChildProcess; ownerPid: number; brokerPid: number; dir: string }> => {
+  const tsx = join(import.meta.dirname, "..", "..", "node_modules", ".bin", "tsx");
+  const child = spawn(tsx, [join(import.meta.dirname, "fixtures", "reaper-owner-child.mjs")], {
+    stdio: ["ignore", "pipe", "pipe"],
+    env: { ...process.env, SMOKE_BROKER_SCOPE: scope },
+  });
+  if (child.pid !== undefined) kids.push(child);
+  let startupError: Error | undefined;
+  let closed = false;
+  child.on("error", (error) => { startupError = error; });
+  child.once("close", () => { closed = true; });
+  let output = "";
+  child.stdout!.on("data", (chunk: Buffer) => { output += chunk.toString(); });
+  child.stderr!.on("data", (chunk: Buffer) => { output += chunk.toString(); });
+  try {
+    for (let attempt = 0; attempt < 120 && !output.includes("brokerPid"); attempt++) await wait(250);
+    if (startupError) throw startupError;
+    if (closed) throw new Error(`owner fixture exited before reporting a live orphan: ${output.slice(-300)}`);
+    const parsed = /\{"ownerPid".*\}/.exec(output);
+    if (!parsed) throw new Error(`owner fixture never reported its pids: ${output.slice(-300)}`);
+    const fixture: unknown = JSON.parse(parsed[0]);
+    if (typeof fixture !== "object" || fixture === null
+      || !("ownerPid" in fixture) || typeof fixture.ownerPid !== "number" || !Number.isInteger(fixture.ownerPid)
+      || !("brokerPid" in fixture) || typeof fixture.brokerPid !== "number" || !Number.isInteger(fixture.brokerPid)
+      || !("dir" in fixture) || typeof fixture.dir !== "string") {
+      throw new Error(`owner fixture reported invalid pids or dir: ${parsed[0]}`);
+    }
+    return { child, ownerPid: fixture.ownerPid, brokerPid: fixture.brokerPid, dir: fixture.dir };
+  } catch (error) {
+    await killAndAwaitExit(child, "SIGTERM");
+    if (startupError) throw startupError;
+    throw error;
+  }
+};
 try {
   const mention = spawn(process.execPath, ["-e", "setInterval(() => {}, 1_000)", "COTAL_BROKER_LOG_NATS=/official/nats-server"], { stdio: "ignore" });
   kids.push(mention);
   // (1) A broker this process owns and is still using. Tokened, owner alive: must survive.
-  const ownedLive = await startBroker(SMOKE_BROKER_TOKEN);
+  const ownedLive = await startBroker(`${KIT_PREFIX}${process.pid}-s${scopeDigest(suiteScope)}-`);
   // (2) A broker nobody minted through the kit: must survive for a different reason.
   const untokened = await startBroker("cotal-reaper-control-");
-  // (3) A genuine orphan: a child mints under ITS pid, spawns a broker, then is SIGKILLed.
-  // `.bin/tsx` is a shell wrapper, not a JS file, so it is EXECUTED, never passed to node.
-  const tsx = join(import.meta.dirname, "..", "..", "node_modules", ".bin", "tsx");
-  owner = spawn(tsx, [join(import.meta.dirname, "fixtures", "reaper-owner-child.mjs")], { stdio: ["ignore", "pipe", "pipe"] });
-  let out = "";
-  owner.stdout!.on("data", (b: Buffer) => { out += b.toString(); });
-  owner.stderr!.on("data", (b: Buffer) => { out += b.toString(); });
-  for (let i = 0; i < 120 && !out.includes("brokerPid"); i++) await wait(250);
-  const parsed = /\{"ownerPid".*\}/.exec(out);
-  check("the owner fixture reported its pids", parsed !== null, out.slice(-300));
-  if (!parsed) throw new Error("owner fixture never reported");
-  ({ ownerPid, brokerPid: orphanPid, dir: orphanDir } = JSON.parse(parsed[0]) as { ownerPid: number; brokerPid: number; dir: string });
-  if (orphanDir) dirs.push(orphanDir);
+  // (3) A genuine orphan in this suite's unique scope; another scope's orphan must remain untouched.
+  const ownFixture = await startOrphanOwner(suiteScope);
+  owner = ownFixture.child;
+  ({ ownerPid, brokerPid: orphanPid, dir: orphanDir } = ownFixture);
+  dirs.push(orphanDir);
+  const unrelatedFixture = await startOrphanOwner(unrelatedScope);
+  unrelatedOwner = unrelatedFixture.child;
+  ({ ownerPid: unrelatedOwnerPid, brokerPid: unrelatedOrphanPid, dir: unrelatedOrphanDir } = unrelatedFixture);
+  dirs.push(unrelatedOrphanDir);
 
   await wait(800);
-  check("all three fixture brokers are running before the reaper", alive(ownedLive.pid!) && alive(untokened.pid!) && alive(orphanPid!));
-
+  check("all four fixture brokers are running before the reaper", alive(ownedLive.pid!) && alive(untokened.pid!) && alive(orphanPid!) && alive(unrelatedOrphanPid!));
+  process.kill(unrelatedOwnerPid!, "SIGKILL");
+  for (let attempt = 0; attempt < 40 && alive(unrelatedOwnerPid!); attempt++) await wait(100);
+  check("the out-of-scope orphan's owner is dead", !alive(unrelatedOwnerPid!), `owner ${unrelatedOwnerPid}`);
+  check("the out-of-scope broker survives its owner's death", alive(unrelatedOrphanPid!), `broker ${unrelatedOrphanPid}`);
   const listed = listNatsServers();
   check("the enumerator is supported on this platform", listed !== undefined);
   const pids = (listed ?? []).map((r) => r.pid);
-  check("the enumerator sees all three", pids.includes(ownedLive.pid!) && pids.includes(untokened.pid!) && pids.includes(orphanPid!));
+  check("the enumerator sees all four", pids.includes(ownedLive.pid!) && pids.includes(untokened.pid!) && pids.includes(orphanPid!) && pids.includes(unrelatedOrphanPid!));
   check("the non-broker argument control is running", mention.exitCode === null && alive(mention.pid!));
   check("an argument's broker path does not classify its process as a broker", !pids.includes(mention.pid!));
 
   const delegatedRun = `delegated-reaper-${process.pid}`;
-  const delegatedScope = `delegated-scope-${process.pid}`;
+  const delegatedScope = `${suiteScope}-delegated`;
   const fixturePath = fileURLToPath(new URL("./fixtures/delegated-reaper-root-fixture.mjs", import.meta.url));
   const fixture = spawnSync("sudo", ["-n", "env", `PATH=${process.env.PATH ?? ""}`, process.execPath, fixturePath, delegatedRun, delegatedScope], { encoding: "utf8", timeout: 15_000 });
   const rootFixturesUnavailable = fixture.status !== 0 && fixture.stderr.includes("a password is required");
@@ -620,11 +657,16 @@ try {
   // unchanged and green. Reproduced first-party before this trio. The claim and the silence are
   // separate properties, so they are separate cells: a dryRun that claimed nothing would satisfy
   // "killed nothing" for the wrong reason.
-  const dry = reapSmokeBrokers({ dryRun: true });
+  const dry = reapSmokeBrokers({ dryRun: true, scope: suiteScope });
   check(
     "a dry run CLAIMS the orphan, so the two cells below are not vacuous",
     dry.reaped.some((r) => r.pid === orphanPid),
     JSON.stringify(dry.reaped.map((r) => r.pid)),
+  );
+  check(
+    "the dry-run claim excludes an orphan from another suite scope",
+    !dry.reaped.some((row) => row.pid === unrelatedOrphanPid),
+    JSON.stringify(dry.reaped.map((row) => row.pid)),
   );
   // The wait is load-bearing and was measured: a child SIGKILLed a moment ago still answers
   // `kill(pid, 0)` until its parent reaps it, so checking immediately reported a killed broker as
@@ -649,12 +691,12 @@ try {
     if (pid === deniedBrokerPid && signal === "SIGKILL") throw Object.assign(new Error("permission denied"), { code: "EPERM" });
     return originalKill(pid, signal);
   }) as typeof process.kill;
-  try { deniedBrokerReport = reapSmokeBrokers(); }
+  try { deniedBrokerReport = reapSmokeBrokers({ scope: suiteScope }); }
   finally { process.kill = originalKill; }
   const deniedBroker = deniedBrokerReport?.failed.find((row) => row.pid === deniedBrokerPid);
   check("a denied broker reap records its pid as a failed reap", deniedBroker !== undefined && deniedBrokerPid !== undefined && !deniedBrokerReport?.reaped.some((row) => row.pid === deniedBrokerPid));
   check("a denied broker reap retains permission detail", deniedBroker?.error.includes("permission denied") === true);
-  const result = reapSmokeBrokers();
+  const result = reapSmokeBrokers({ scope: suiteScope });
   await wait(500);
 
   check("the reaper reports the platform as supported", result.supported);
@@ -664,6 +706,8 @@ try {
   check("the killed broker is named in the report, not just counted", result.reaped.some((r) => r.pid === orphanPid));
   check("the report names the dead owner it acted on", result.reaped.some((r) => r.owner === ownerPid), JSON.stringify(result.reaped.map((r) => r.owner)));
   check("neither survivor is named as reaped", !result.reaped.some((r) => r.pid === ownedLive.pid || r.pid === untokened.pid));
+  check("the out-of-scope orphan survives the suite-scoped reap", alive(unrelatedOrphanPid!), `pid ${unrelatedOrphanPid} was killed`);
+  check("the suite-scoped report does not name the foreign broker", !result.reaped.some((row) => row.pid === unrelatedOrphanPid));
   // The counts are what keep a quiet run honest: "0 reaped" reads the same on a clean box and on a
   // box where every candidate was declined, so the declines are reported rather than implied.
   check("the live-owner broker is counted as owned, not silently skipped", result.ownedLive >= 1, `ownedLive=${result.ownedLive}`);
@@ -684,16 +728,19 @@ try {
 
   // Running again with the orphan already gone must be a clean no-op: the reaper runs after every
   // suite in the chain, so the quiet path is the common one.
-  const second = reapSmokeBrokers();
+  const second = reapSmokeBrokers({ scope: suiteScope });
   check("a second run reaps nothing and does not throw", second.reaped.every((r) => r.pid !== orphanPid));
-  check("both survivors are still alive after the second run", alive(ownedLive.pid!) && alive(untokened.pid!));
+  check("the out-of-scope orphan also survives the second suite-scoped pass", alive(unrelatedOrphanPid!), `pid ${unrelatedOrphanPid} was killed`);
 } catch (e) {
   fail++;
   console.log(`  ✗ FAIL: scenario threw: ${(e as Error).message}`);
 } finally {
   if (ownerPid !== undefined && alive(ownerPid)) { try { process.kill(ownerPid, "SIGKILL"); } catch { /* gone */ } }
+  if (unrelatedOwnerPid !== undefined && alive(unrelatedOwnerPid)) { try { process.kill(unrelatedOwnerPid, "SIGKILL"); } catch { /* gone */ } }
   if (orphanPid !== undefined && alive(orphanPid)) { try { process.kill(orphanPid, "SIGKILL"); } catch { /* gone */ } }
+  if (unrelatedOrphanPid !== undefined && alive(unrelatedOrphanPid)) { try { process.kill(unrelatedOrphanPid, "SIGKILL"); } catch { /* gone */ } }
   if (owner) await killAndAwaitExit(owner, "SIGKILL");
+  if (unrelatedOwner) await killAndAwaitExit(unrelatedOwner, "SIGKILL");
   for (const k of kids) await killAndAwaitExit(k, "SIGKILL");
   for (const d of dirs) rmSync(d, { recursive: true, force: true });
   for (const r of releases) r();

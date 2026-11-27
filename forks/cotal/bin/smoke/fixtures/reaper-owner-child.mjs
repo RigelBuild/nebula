@@ -11,11 +11,11 @@
  * it, so the broker survives and is reparented, which is exactly how a real orphan arises.
  */
 import { spawn } from "node:child_process";
-import { mkdtempSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { SMOKE_BROKER_TOKEN, teardownOnSignal } from "@cotal-ai/smoke-kit";
+import { SMOKE_BROKER_TOKEN, teardownOnSignal, teardownPathOnSignal } from "@cotal-ai/smoke-kit";
 
 const port = await new Promise((res, rej) => {
   const s = createServer();
@@ -23,9 +23,18 @@ const port = await new Promise((res, rej) => {
   s.listen(0, "127.0.0.1", () => { const p = s.address().port; s.close(() => res(p)); });
 });
 const dir = mkdtempSync(join(tmpdir(), SMOKE_BROKER_TOKEN));
+const releaseDir = teardownPathOnSignal(dir);
 writeFileSync(join(dir, "server.conf"), `port: ${port}\njetstream { store_dir: "${join(dir, "js")}" }\n`);
 const broker = spawn("nats-server", ["-c", join(dir, "server.conf")], { stdio: "ignore" });
-teardownOnSignal(broker);
+let brokerStartupError;
+let brokerExit;
+broker.once("error", (error) => { brokerStartupError = error; });
+broker.once("exit", (code, signal) => { brokerExit = { code, signal }; });
+teardownOnSignal(broker, dir);
+releaseDir();
 await new Promise((r) => setTimeout(r, 1200));
-console.log(JSON.stringify({ ownerPid: process.pid, brokerPid: broker.pid, dir }));
+if (brokerStartupError || brokerExit) {
+  throw brokerStartupError ?? new Error(`broker exited before orphan fixture startup: ${JSON.stringify(brokerExit)}`);
+}
+process.stdout.write(`${JSON.stringify({ ownerPid: process.pid, brokerPid: broker.pid, dir })}\n`);
 setInterval(() => {}, 1 << 30);

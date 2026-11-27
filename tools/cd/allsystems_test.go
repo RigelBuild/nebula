@@ -7,21 +7,17 @@ import (
 	"testing"
 )
 
-// releaseSystems are the systems every binary package releases. A package
-// whose systems list omits one of them fails TestEveryBinaryPackageReleasesAllThreeSystems.
-var releaseSystems = []string{"x86_64-linux", "aarch64-linux", "aarch64-darwin"}
-
 // repoRoot is the nebula repository root, two levels above tools/cd.
 const repoRoot = "../.."
 
-// missingSystems lists the release systems a package does not target. A package
-// with no systems list targets every system, so it misses none.
+// missingSystems lists the default release systems a package does not target. A package
+// with no systems list targets every default system, so it misses none.
 func missingSystems(b Binary) []string {
 	if len(b.Systems) == 0 {
 		return nil
 	}
 	var out []string
-	for _, system := range releaseSystems {
+	for _, system := range defaultSystems {
 		if !slices.Contains(b.Systems, system) {
 			out = append(out, system)
 		}
@@ -31,7 +27,7 @@ func missingSystems(b Binary) []string {
 
 // TestEveryBinaryPackageReleasesAllThreeSystems reads every tools/* and forks/*
 // component.cue through the planner and requires each binary package to target
-// all three release systems.
+// all three default release systems.
 func TestEveryBinaryPackageReleasesAllThreeSystems(t *testing.T) {
 	binaries, err := listBinaries(repoRoot)
 	if err != nil {

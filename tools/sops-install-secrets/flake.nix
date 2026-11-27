@@ -12,7 +12,7 @@
   outputs =
     { nixpkgs, sops-nix, ... }:
     let
-      systems = [ "x86_64-linux" "aarch64-linux" ];
+      systems = [ "x86_64-linux" "aarch64-linux" "aarch64-darwin" ];
       forAllSystems = nixpkgs.lib.genAttrs systems;
       # The package version is upstream's 0.0.1. Its exact source revision is
       # locked above to the consumer's sops-nix input.

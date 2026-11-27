@@ -170,8 +170,12 @@ export class HolderRuntime implements Runtime {
         });
         holderAcceptedStart = true;
       } catch (error) {
-        if (exitStatus(error) === 4)
-          throw new SpawnRefused(`seat ${name} is already live; stop it with: systemctl --user stop ${this.prefix()}${name}`);
+        if (exitStatus(error) === 4) {
+          const stop = this.platform === "darwin"
+            ? `${this.requireWaveHost()} seat-stop --name ${name}`
+            : `systemctl --user stop ${this.prefix()}${name}`;
+          throw new SpawnRefused(`seat ${name} is already live; stop it with: ${stop}`);
+        }
         throw error;
       }
 

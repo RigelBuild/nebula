@@ -83,6 +83,28 @@ await check("darwin identity reads wave-host process-identity, never /proc or sy
     f.cleanup();
   }
 });
+await check("an already-live Darwin seat suggests wave-host seat-stop", () => {
+  const calls: ExecCall[] = [];
+  const runtime = new HolderRuntime({
+    platform: "darwin",
+    holderCommand: () => holder,
+    waveHostCommand: () => waveHost,
+    execFileSync: (file: string, args: string[]) => {
+      calls.push({ file, args });
+      if (file === holder && args[0] === "start")
+        throw Object.assign(new Error("seat is live"), { status: 4 });
+      return "";
+    },
+  });
+  assert.throws(() => runtime.spawn(seatName, launchSpec, process.cwd()), (error: unknown) =>
+    error instanceof Error && error.name === "SpawnRefused" &&
+      error.message === `seat ${seatName} is already live; stop it with: ${waveHost} seat-stop --name ${seatName}`,
+  );
+  assert.deepEqual(calls.map(({ file, args }) => [file, args[0]]), [
+    [holder, "start"],
+  ]);
+});
+
 
 await check("darwin status is exited only after both token-verified identities are absent", () => {
   const f = fixture();

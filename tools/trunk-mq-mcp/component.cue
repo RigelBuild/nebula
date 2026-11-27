@@ -12,6 +12,7 @@ release: {
 				"libpthread.so.0",
 				"libdl.so.2",
 				"libm.so.6",
+				"ld-linux-aarch64.so.1",
 			]
 		}
 	}

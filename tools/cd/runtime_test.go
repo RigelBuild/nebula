@@ -3,6 +3,7 @@
 package main
 
 import (
+	"debug/elf"
 	"encoding/binary"
 	"errors"
 	"os"
@@ -11,14 +12,16 @@ import (
 	"testing"
 )
 
-// dynELF writes a minimal ELF64 x86_64 executable with a PT_INTERP program
-// header naming interp and a SHT_DYNAMIC section whose DT_NEEDED entries are
-// needed. It is the smallest shape debug/elf reads as a dynamic binary, so the
-// gate sees a real interpreter and real DT_NEEDED entries.
+// dynELF writes a minimal ELF64 executable with a PT_INTERP program header
+// naming interp and a SHT_DYNAMIC section whose DT_NEEDED entries are needed.
 func dynELF(t *testing.T, interp string, needed ...string) string {
+	return dynELFWithMachine(t, elf.EM_X86_64, interp, needed...)
+}
+
+func dynELFWithMachine(t *testing.T, machine elf.Machine, interp string, needed ...string) string {
 	t.Helper()
 	le := binary.LittleEndian
-	// Layout: ELF header | PT_INTERP phdr | interp | strtab | dynamic | shstrtab | section headers.
+
 	const ehsize, phsize, shsize = 64, 56, 64
 	interpStr := interp + "\x00"
 	strtab := []byte{0}
@@ -46,11 +49,11 @@ func dynELF(t *testing.T, interp string, needed ...string) string {
 	b := make([]byte, shOff+5*shsize)
 	copy(b, "\x7fELF")
 	b[4], b[5], b[6] = 2, 1, 1
-	le.PutUint16(b[16:], 2)      // ET_EXEC
-	le.PutUint16(b[18:], 62)     // EM_X86_64
-	le.PutUint32(b[20:], 1)      // version
-	le.PutUint64(b[32:], ehsize) // phoff
-	le.PutUint64(b[40:], shOff)  // shoff
+	le.PutUint16(b[16:], 2)               // ET_EXEC
+	le.PutUint16(b[18:], uint16(machine)) // e_machine
+	le.PutUint32(b[20:], 1)               // e_version
+	le.PutUint64(b[32:], ehsize)          // phoff
+	le.PutUint64(b[40:], shOff)           // shoff
 	le.PutUint16(b[52:], ehsize)
 	le.PutUint16(b[54:], phsize)
 	le.PutUint16(b[56:], 1) // phnum
@@ -102,6 +105,22 @@ func TestCheckAssetAcceptsDeclaredRuntimeDeps(t *testing.T) {
 	path := dynELF(t, glibcInterp, "libc.so.6", "libm.so.6")
 	if err := checkAssetWithRuntime(path, "x86_64-linux", []string{"libc.so.6", "libm.so.6"}); err != nil {
 		t.Fatalf("declared runtime deps refused: %v", err)
+	}
+}
+
+// The aarch64 interpreter is also a DT_NEEDED soname, so runtimeDeps must list
+// both the loader path accepted by checkInterp and the loader soname imported.
+func TestCheckAssetAcceptsAarch64LoaderSoname(t *testing.T) {
+	path := dynELFWithMachine(
+		t,
+		elf.EM_AARCH64,
+		"/lib/ld-linux-aarch64.so.1",
+		"libc.so.6",
+		"ld-linux-aarch64.so.1",
+	)
+	runtime := []string{"libc.so.6", "ld-linux-aarch64.so.1"}
+	if err := checkAssetWithRuntime(path, "aarch64-linux", runtime); err != nil {
+		t.Fatalf("aarch64 loader soname refused: %v", err)
 	}
 }
 

@@ -27,7 +27,7 @@
  */
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { parseCiSuites, readCiSuiteFragments, suitesForShard, CI_SUITES_PATH } from "./ci-suites.mjs";
+import { parseCiSuites, readCiSuiteFragments, readShardCosts, suitesForShard, CI_SUITES_PATH } from "./ci-suites.mjs";
 import { readFileSync } from "node:fs";
 import { liveShapedCommandReason } from "../../scripts/mutation-command-safety.mjs";
 import { reapSmokeBrokers, reportReaped } from "./reap-smoke-brokers.mjs";
@@ -36,10 +36,11 @@ import { neverRanBlock } from "./shard-never-ran.mjs";
 import { parseSentinel } from "./sentinel.mjs";
 import { poolSelection, runPool } from "./shard-pool.mjs";
 import { QUARANTINED } from "./ci-quarantine.mjs";
+import { DELEGATED_SUITE, isDelegatedShard, suiteInvocation } from "./shard-delegation.mjs";
 
 const REPO = process.cwd();
-
 const offline = process.argv.includes("--offline");
+const SHARD_COSTS = readShardCosts();
 const positional = process.argv.slice(2).filter((arg) => arg !== "--offline");
 const shard = Number(positional[0]);
 const count = Number(positional[1]);
@@ -209,15 +210,29 @@ async function main() {
   for (let i = 0; failure === undefined && i < planned.length; i++) {
     const cmd = planned[i];
     if (started.has(cmd)) continue;
-    const [bin, ...args] = cmd.split(/\s+/);
     started.add(cmd);
     console.log(`\n===== ${cmd} =====`);
-    // shell:true on Windows so `pnpm` resolves to pnpm.cmd; the tokens are our own fixed script names.
     const scope = randomUUID();
-    // Keep the runner's existing inherited test configuration, including caller-supplied pins.
+    const suite = cmd.slice("pnpm ".length);
+    const delegated = !offline && isDelegatedShard({
+      suite,
+      shard,
+      count,
+      pinnedShard: SHARD_COSTS.suites.get(DELEGATED_SUITE)?.shard,
+      pinnedCount: SHARD_COSTS.count,
+      platform: process.platform,
+      githubActions: process.env.GITHUB_ACTIONS,
+    });
+    const invocation = suiteInvocation({
+      delegated,
+      bin: "pnpm",
+      args: [suite],
+      path: process.env.PATH ?? "",
+      runMarker: RUN_MARKER,
+      brokerScope: scope,
+    });
     process.env.SMOKE_BROKER_SCOPE = scope;
-    // Suppress pnpm's own progress rows, which the legacy sentinel reader could count as cells.
-    const r = await runSuite(bin, ["--silent", ...args]);
+    const r = await runSuite(invocation.bin, invocation.args);
     // Reap before deciding the exit status, but claim only this suite's brokers. Another run's owner
     // can exit while this suite is active, so arrival after the pre-sweep does not establish ownership.
     const after = reapSmokeBrokers({ scope });

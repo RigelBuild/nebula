@@ -75,7 +75,7 @@ func dispatch(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 			return err
 		}
 		commit, err := publish(ctx, publishOptions{
-			repo: *repo, remote: *remote, branch: *branch, attempts: *attempts, manifest: in,
+			repo: *repo, remote: *remote, branch: *branch, attempts: *attempts, manifest: in, stderr: stderr,
 		})
 		if err != nil {
 			return err

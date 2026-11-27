@@ -1,0 +1,2 @@
+# A failing or hung Secret write never stops auth; it retries with backoff, and stop leaves no timer or later write.
+smoke:reconciler-fault

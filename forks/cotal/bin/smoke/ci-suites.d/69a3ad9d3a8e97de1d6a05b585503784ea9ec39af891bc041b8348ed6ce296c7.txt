@@ -1,0 +1,2 @@
+# Auth issues the reconciler credential into the Secret when enabled, reuses it on restart, and writes nothing when off.
+smoke:reconciler-wire

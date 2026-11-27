@@ -1,0 +1,2 @@
+# The default Kube transport trusts only the configured CA and bounds every call.
+smoke:reconciler-kube-tls

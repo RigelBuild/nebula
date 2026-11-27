@@ -1,0 +1,2 @@
+# The auth service issues and renews the reconciler credential for one caller triple, writes it to one Secret, and never writes signer material.
+smoke:reconciler-credential

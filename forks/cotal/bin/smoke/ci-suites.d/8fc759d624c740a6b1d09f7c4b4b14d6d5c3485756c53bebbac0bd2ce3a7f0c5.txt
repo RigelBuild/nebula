@@ -1,0 +1,2 @@
+# The reconciler credential renews at exactly 75% of its lifetime; the shared renewal window is unchanged for other callers.
+smoke:reconciler-renewal

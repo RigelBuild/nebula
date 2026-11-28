@@ -6,7 +6,7 @@
   outputs =
     { nixpkgs, ... }:
     let
-      systems = [ "x86_64-linux" "aarch64-darwin" ];
+      systems = [ "x86_64-linux" "aarch64-linux" "aarch64-darwin" ];
       forAllSystems = nixpkgs.lib.genAttrs systems;
       # release.base in component.cue. Eval fails when nixpkgs drifts from it,
       # so a nix flake update cannot release a mislabeled asset.

@@ -242,7 +242,7 @@ func TestWindowsAssetForDeclaringTool(t *testing.T) {
 }
 
 // TestNonDeclaringToolGetsNoWindowsAsset: a tool with no systems list gets the
-// default systems only, and the Windows leg never includes it.
+// three default release systems, not windows-amd64.
 func TestNonDeclaringToolGetsNoWindowsAsset(t *testing.T) {
 	dir := windowsRepo(t, map[string]string{"delta": ""})
 	b := windowsPackage(t, dir, "delta")

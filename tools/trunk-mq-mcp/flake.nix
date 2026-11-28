@@ -6,11 +6,15 @@
   outputs =
     { nixpkgs, ... }:
     let
-      # Released on x86_64-linux only. Its bun dependency install is per host
-      # platform, so the fixed-output hash differs per system, and the
-      # aarch64-linux loader soname is not declared. component.cue names the
-      # same system in systems.
-      systems = [ "x86_64-linux" ];
+      # Per-system fixed-output hash of the bun dependency install. The aarch64
+      # entries come from a real build on each system, never a guessed value.
+      depsHash = {
+        x86_64-linux = "sha256-jhpg8JFpqB+MDuTGEvcPEcv33lcHNGkVeHY8AhBaM1g=";
+        aarch64-linux = "sha256-kBlFEdLTUifdKxj+Wf5U0YkU267E0XgAYWLrRdD2Z1E=";
+        aarch64-darwin = "sha256-P1sCvsyd94LUTX1of7Wyq9UC+4iYS81MgC58QBqOTRg=";
+      };
+      # Released on all three release systems.
+      systems = [ "x86_64-linux" "aarch64-linux" "aarch64-darwin" ];
       forAllSystems = nixpkgs.lib.genAttrs systems;
     in
     {
@@ -24,7 +28,7 @@
             pname = "trunk-mq-mcp-deps";
             version = "0.1.0";
             src = ./.;
-            outputHash = "sha256-jhpg8JFpqB+MDuTGEvcPEcv33lcHNGkVeHY8AhBaM1g=";
+            outputHash = depsHash.${system};
             outputHashMode = "recursive";
             outputHashAlgo = "sha256";
             nativeBuildInputs = [ pkgs.bun ];
@@ -38,24 +42,32 @@
             '';
           };
           # bun build --compile appends its payload to a copy of bun's runtime.
-          # The ELF links glibc and names a /nix/store interpreter, so postFixup
-          # points it at the standard loader and drops the RPATH. The payload is
-          # appended data that patchelf keeps, and dontStrip stops strip from
-          # rewriting the file. CD's check-asset gate declares the NEEDED sonames
-          # in component.cue.
+          # On Linux this is an ELF that links glibc and names a /nix/store
+          # interpreter. Point it at the standard loader for the target architecture
+          # and drop the RPATH. Darwin outputs are Mach-O and need no patchelf.
+          # patchelf preserves the appended payload; dontStrip prevents strip from
+          # rewriting it. CD's check-asset gate declares the NEEDED sonames in
+          # component.cue.
           trunk-mq-mcp = pkgs.stdenvNoCC.mkDerivation {
             pname = "trunk-mq-mcp";
             version = "0.1.0";
             src = ./.;
-            nativeBuildInputs = [ pkgs.bun pkgs.patchelf ];
+            nativeBuildInputs =
+              [ pkgs.bun ]
+              ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.patchelf ];
             dontStrip = true;
             buildPhase = ''
               export HOME="$TMPDIR"
               cp -R ${deps}/node_modules ./node_modules
               bun build --compile --outfile trunk-mq-mcp bin/server.ts
             '';
-            postFixup = ''
-              patchelf --set-interpreter /lib64/ld-linux-x86-64.so.2 --remove-rpath "$out/bin/trunk-mq-mcp"
+            postFixup = pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
+              patchelf --set-interpreter ${
+                if pkgs.stdenv.hostPlatform.isAarch64 then
+                  "/lib/ld-linux-aarch64.so.1"
+                else
+                  "/lib64/ld-linux-x86-64.so.2"
+              } --remove-rpath "$out/bin/trunk-mq-mcp"
             '';
             installPhase = ''
               install -Dm755 trunk-mq-mcp "$out/bin/trunk-mq-mcp"

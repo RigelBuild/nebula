@@ -369,9 +369,8 @@
             }
             touch $out
           '';
-          # A package released for one system only is absent on the others, not an
-          # eval error. Without the filter in packagesFor, aarch64-linux throws on
-          # trunk-mq-mcp, which has no aarch64-linux asset.
+          # packagesFor filters out packages without an asset for the current system;
+          # without this filter, evaluation throws on aarch64-linux.
           manifest-single-system =
             let
               singleFixture = {
@@ -392,6 +391,40 @@
             pkgs.runCommand "nebula-manifest-single-system" { } ''
               test '${builtins.toJSON onOther}' = '[]' || {
                 echo "aarch64-linux listed a package with no aarch64-linux asset" >&2
+                exit 1
+              }
+              touch $out
+            '';
+          # A fixture listing every release system verifies prebuilt fetches independently of the live manifest.
+          manifest-fetch-all-systems =
+            let
+              releaseSystems = [ "x86_64-linux" "aarch64-linux" "aarch64-darwin" ];
+              fixture = {
+                source = "abc";
+                tag = "nebula-20261117-45";
+                held = [ ];
+                demo = {
+                  version = "1.0.0";
+                  upstreamRev = null;
+                  "x86_64-linux" = {
+                    url = "https://example.invalid/demo-x86_64-linux.tar.zst";
+                    sha256 = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+                  };
+                  "aarch64-linux" = {
+                    url = "https://example.invalid/demo-aarch64-linux.tar.zst";
+                    sha256 = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+                  };
+                  "aarch64-darwin" = {
+                    url = "https://example.invalid/demo-aarch64-darwin.tar.zst";
+                    sha256 = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+                  };
+                };
+              };
+              fetchedPname = system: (packagesFor fixture system).demo.pname;
+            in
+            pkgs.runCommand "nebula-manifest-fetch-all-systems" { } ''
+              test '${builtins.toJSON (map fetchedPname releaseSystems)}' = '${builtins.toJSON (map (_: "demo-prebuilt") releaseSystems)}' || {
+                echo "a release system did not get the prebuilt fetch for demo" >&2
                 exit 1
               }
               touch $out

@@ -6,7 +6,6 @@ release: {
 			kind:     "nix"
 			attr:     "caddy-cloudflare"
 			binaries: ["caddy"]
-			systems: ["x86_64-linux", "aarch64-darwin"]
 		}
 	}
 }

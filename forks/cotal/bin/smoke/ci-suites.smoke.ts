@@ -27,7 +27,7 @@ import ts from "typescript";
 import { parseCiSuites, readCiSuites, readShardCosts, CI_SUITES_PATH } from "./ci-suites.mjs";
 import { duplicateObjectKeys } from "./json-duplicate-keys.js";
 import { QUARANTINED } from "./ci-quarantine.mjs";
-import { DELEGATED_SUITE, isDelegatedShard, preserveSeatCgroupDelegation, suiteInvocation } from "./shard-delegation.mjs";
+import { DELEGATED_SUITE, delegationFallback, isDelegatedShard, preserveSeatCgroupDelegation, reaperInvocation, suiteInvocation } from "./shard-delegation.mjs";
 
 let pass = 0;
 let fail = 0;
@@ -214,18 +214,26 @@ check("the manager suite is not delegated on another shard", !isDelegatedShard({
 check("the manager suite is not delegated outside its pinned shard count", !isDelegatedShard({ ...managerStopRoute, count: 1 }));
 check("other suites never receive delegated execution", !isDelegatedShard({ ...managerStopRoute, suite: "smoke:manager-stop-spare-guard" }));
 check("non-CI runs do not receive delegated execution", !isDelegatedShard({ ...managerStopRoute, githubActions: undefined }));
+check("GITHUB_ACTIONS=false does not receive delegated execution", !isDelegatedShard({ ...managerStopRoute, githubActions: "false" }));
+const fallback = delegationFallback({ suite: DELEGATED_SUITE, delegated: false });
+check("a local delegated-suite fallback is explicitly visible", fallback?.includes("without its pinned GitHub Actions Linux delegated route") === true);
+check("ordinary suites do not emit delegated fallback visibility", delegationFallback({ suite: "smoke:other", delegated: false }) === undefined);
 check("non-Linux runs do not receive delegated execution", !isDelegatedShard({ ...managerStopRoute, platform: "darwin" }));
 
 const managerInvocation = suiteInvocation({ delegated: true, bin: "pnpm", args: ["smoke:manager-stop-reap"], path: "/usr/bin", runMarker: "run-1", brokerScope: "scope-1" });
 check("delegated invocation uses systemd-run with Delegate=yes and the cgroup declaration", managerInvocation.bin === "sudo" && managerInvocation.args.includes("Delegate=yes") && managerInvocation.args.includes("COTAL_SEAT_CGROUP_DELEGATED=1"));
 check("delegated invocation retains the isolated broker scope and seat marker", managerInvocation.args.includes("SMOKE_BROKER_SCOPE=scope-1") && managerInvocation.args.includes("COTAL_RUN=run-1"));
+const privilegedReaper = reaperInvocation({ delegated: true, bin: "/usr/bin/node", args: ["reap-delegated-suite.mjs", "run-1", "scope-1"], path: "/usr/bin" });
+check("delegated cleanup runs its scoped reaper with the suite's privilege", privilegedReaper.bin === "sudo" && JSON.stringify(privilegedReaper.args) === JSON.stringify(["env", "PATH=/usr/bin", "/usr/bin/node", "reap-delegated-suite.mjs", "run-1", "scope-1"]));
+const ordinaryReaper = reaperInvocation({ delegated: false, bin: process.execPath, args: ["reap-delegated-suite.mjs", "run-1", "scope-1"], path: "/usr/bin" });
+check("ordinary cleanup keeps its existing identity", ordinaryReaper.bin === process.execPath && ordinaryReaper.args[0] === "reap-delegated-suite.mjs");
 const ordinaryInvocation = suiteInvocation({ delegated: false, bin: "pnpm", args: ["smoke:manager-stop-spare-guard"], path: "/usr/bin", runMarker: "run-1", brokerScope: "scope-2" });
 check("ordinary suite invocation remains unchanged", ordinaryInvocation.bin === "pnpm" && JSON.stringify(ordinaryInvocation.args) === JSON.stringify(["--silent", "smoke:manager-stop-spare-guard"]));
 check("suite scrub preserves only the delegation declaration", JSON.stringify(preserveSeatCgroupDelegation({ COTAL_SEAT_CGROUP_DELEGATED: "1", COTAL_HOME: "/home/live", COTAL_SERVERS: "nats://live" })) === JSON.stringify({ COTAL_SEAT_CGROUP_DELEGATED: "1" }));
 check("suite scrub does not create delegation outside the delegated run", Object.keys(preserveSeatCgroupDelegation({ COTAL_HOME: "/home/live" })).length === 0);
 check("the real manager-stop-reap suite is no longer quarantined", !QUARANTINED[DELEGATED_SUITE]);
 
-const EXPECTED = 43;
+const EXPECTED = 48;
 check(
   `every cell ran - ${EXPECTED} expected, so a cell that stops existing is not mistaken for one that passed`,
   pass + fail === EXPECTED,

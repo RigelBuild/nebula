@@ -27,8 +27,8 @@ test('the shipped shard skips mutation infrastructure and still executes ordinar
     const loader = join(root, 'fixture-loader.mjs');
     const preload = join(root, 'fixture-preload.mjs');
     const replacements = {
-      [new URL('../bin/smoke/reap-smoke-brokers.mjs', import.meta.url).href]: `console.log('fixture: broker reaper isolated'); export const reapSmokeBrokers = () => ({supported:false,reaped:[]}); export const reportReaped = () => {};`,
-      [new URL('../bin/smoke/reap-seat-custodians.mjs', import.meta.url).href]: `console.log('fixture: seat reaper isolated'); export const reapRunCustodians = () => ({supported:false,reaped:[]}); export const reportCustodians = () => {};`,
+      [new URL('../bin/smoke/reap-smoke-brokers.mjs', import.meta.url).href]: `console.log('fixture: broker reaper isolated'); export const reapSmokeBrokers = () => ({supported:false,reaped:[],failed:[]}); export const reportReaped = () => {};`,
+      [new URL('../bin/smoke/reap-seat-custodians.mjs', import.meta.url).href]: `console.log('fixture: seat reaper isolated'); export const reapRunCustodians = () => ({supported:false,reaped:[],failed:[]}); export const reportCustodians = () => {};`,
     };
     writeFileSync(loader, `const replacements = ${JSON.stringify(replacements)};\nexport async function load(url, context, nextLoad) {\n  if (Object.hasOwn(replacements, url)) return {format:'module',source:replacements[url],shortCircuit:true};\n  return nextLoad(url, context);\n}\n`);
     writeFileSync(preload, `import {register} from 'node:module';\nregister(new URL('./fixture-loader.mjs', import.meta.url));\n`);
@@ -47,6 +47,34 @@ test('the shipped shard skips mutation infrastructure and still executes ordinar
     assert.deepEqual(readFileSync(calls, 'utf8').trim().split('\n').map(line => JSON.parse(line)), [['--silent', 'smoke:ordinary-before'], ['--silent', 'smoke:ordinary-after']]);
     for (const suite of mutationSuites) assert.ok(output.includes(`skipped pnpm ${suite} (mutation execution disabled)`), output);
     assert.match(output, /passed \(2 smokes, 6 cells; 6 mutation suite\(s\) excluded by policy\)/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+test('the shard pool fails when either reaper cannot kill an attributed process', () => {
+  const root = mkdtempSync(join(tmpdir(), 'cotal-pool-reap-failure-'));
+  try {
+    const loader = join(root, 'fixture-loader.mjs');
+    const preload = join(root, 'fixture-preload.mjs');
+    const replacements = {
+      [new URL('../bin/smoke/reap-smoke-brokers.mjs', import.meta.url).href]: `export const reapSmokeBrokers = () => ({supported:true,inspected:0,reaped:[],failed:process.env.TEST_REAPER_FAILURE === 'broker' ? [{pid:123,error:'EPERM'}] : [],ownedLive:0,unparseable:0,unclaimable:0}); export const reportReaped = () => {};`,
+      [new URL('../bin/smoke/reap-seat-custodians.mjs', import.meta.url).href]: `export const reapRunCustodians = () => ({supported:true,inspected:0,reaped:[],failed:process.env.TEST_REAPER_FAILURE === 'custodian' ? [{pid:456,run:'fixture',error:'EPERM'}] : [],unattributed:0,otherRuns:0}); export const reportCustodians = () => {};`,
+    };
+    writeFileSync(loader, `const replacements = ${JSON.stringify(replacements)};\nexport async function load(url, context, nextLoad) {\n  if (Object.hasOwn(replacements, url)) return {format:'module',source:replacements[url],shortCircuit:true};\n  return nextLoad(url, context);\n}\n`);
+    writeFileSync(preload, `import {register} from 'node:module';\nregister(new URL('./fixture-loader.mjs', import.meta.url));\n`);
+    const pnpm = join(root, 'pnpm');
+    writeFileSync(pnpm, `#!/bin/sh\n[ "$1" = "--silent" ] && shift\nexec '${process.execPath.replaceAll("'", "'\\''")}' "$@"\n`, { mode: 0o700 });
+    writeFileSync(join(root, 'fixture.mjs'), `console.log('COTAL_SMOKE_SENTINEL cells=1 passed=1 failed=0');\n`);
+    const pool = fileURLToPath(new URL('../bin/smoke/shard-pool.mjs', import.meta.url));
+    const runner = join(root, 'run-pool.mjs');
+    writeFileSync(runner, `import {runPool} from ${JSON.stringify(pool)};\nconst command = 'pnpm fixture.mjs';\nconst failures = [];\nfor (const kind of ['broker', 'custodian']) { process.env.TEST_REAPER_FAILURE = kind; const result = await runPool([command], {jobs:1,runMarker:'fixture',indices:new Map([[command,0]]),onStart:()=>{}}); failures.push(result.failure); }\nconsole.log('POOL_REAP_FAILURES:' + JSON.stringify(failures));\n`);
+    const result = spawnSync(process.execPath, ['--import', preload, runner], {
+      cwd: root,
+      env: { ...process.env, PATH: root + delimiter + process.env.PATH },
+      encoding: 'utf8', timeout: 30000,
+    });
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    assert.match(result.stdout, /POOL_REAP_FAILURES:\[\{"cmd":"pnpm fixture\\.mjs","reason":"broker reaper could not kill pid 123","status":1\},\{"cmd":"pnpm fixture\\.mjs","reason":"custodian reaper could not kill pid 456","status":1\}\]/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

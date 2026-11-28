@@ -20,11 +20,14 @@
  */
 import { strict as assert } from "node:assert";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, delimiter, dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { SMOKE_BROKER_PREFIX as KIT_PREFIX, SMOKE_BROKER_TOKEN, freePort, killAndAwaitExit, teardownOnSignal } from "@cotal-ai/smoke-kit";
 import { SMOKE_BROKER_PREFIX, listNatsServers, reapSmokeBrokers } from "./reap-smoke-brokers.mjs";
+import { reapRunCustodians } from "./reap-seat-custodians.mjs";
 // A NAMESPACE import for the reporter, deliberately: a named import of every export makes this
 // suite die at LOAD when a mutation renames one, which turns a graded row into an unexplained
 // crash and cost exactly that here. Reached through the namespace, a renamed export is a missing
@@ -41,12 +44,55 @@ const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const alive = (pid: number): boolean => {
   try { process.kill(pid, 0); return true; } catch (e) { return (e as NodeJS.ErrnoException).code === "EPERM"; }
 };
+const suiteScope = `${process.env.SMOKE_BROKER_SCOPE?.trim() || "reaper-smoke"}-${process.pid}-${randomUUID()}`;
+const unrelatedScope = `${suiteScope}-unrelated-${randomUUID()}`;
+const scopeDigest = (scope: string): string => createHash("sha256").update(scope.trim()).digest().subarray(0, 16).toString("base64url");
 
 console.log("\n── smoke broker reaper ─────────────────────────\n");
 
 // The reaper duplicates the prefix as a literal because it runs from the CI runner before any
 // workspace build. That duplication is only safe if it cannot drift, which is what this asserts.
 check("the reaper's prefix literal is the one the kit mints", SMOKE_BROKER_PREFIX === KIT_PREFIX, `${SMOKE_BROKER_PREFIX} vs ${KIT_PREFIX}`);
+const expectedMarker = `reaper-smoke-${process.pid}-${randomUUID()}`;
+check("custodian fixture marker does not reuse inherited COTAL_RUN", expectedMarker !== process.env.COTAL_RUN, expectedMarker);
+const custodianFixture = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)", "--", "--cotal-run", expectedMarker, "/tmp/dist/custodian.js"], { stdio: "ignore" });
+const custodianPid = custodianFixture.pid;
+for (let attempt = 0; attempt < 50 && custodianPid !== undefined; attempt++) {
+  try {
+    if (readFileSync(`/proc/${custodianPid}/cmdline`, "utf8").includes("/tmp/dist/custodian.js")) break;
+  } catch { /* wait for the fixture to start */ }
+  await wait(10);
+}
+try {
+  const fakePythonDir = mkdtempSync(join(tmpdir(), "reaper-denied-custodian-"));
+  const fakePython = join(fakePythonDir, "python3");
+  const originalPath = process.env.PATH;
+  try {
+    writeFileSync(fakePython, [
+      "#!/bin/sh",
+      'if [ "$#" -eq 2 ]; then',
+      "  echo supported",
+      "  exit 0",
+      "fi",
+      "echo 'permission denied (simulated pidfd signal)' >&2",
+      "exit 1",
+      "",
+    ].join("\n"), { mode: 0o755 });
+    process.env.PATH = originalPath === undefined ? fakePythonDir : `${fakePythonDir}${delimiter}${originalPath}`;
+    const report = reapRunCustodians(expectedMarker);
+    const denied = custodianPid === undefined ? undefined : report.failed.find((row) => row.pid === custodianPid);
+    check("a denied custodian reap records its pid instead of throwing or claiming success", report.supported && denied !== undefined && !report.reaped.some((row) => row.pid === custodianPid));
+    check("custodian failure retains the pidfd permission error for reporting", denied?.error.includes("permission denied") === true, denied?.error);
+    check("the simulated pidfd denial does not signal the fixture", custodianPid !== undefined && alive(custodianPid));
+  } finally {
+    if (originalPath === undefined) delete process.env.PATH;
+    else process.env.PATH = originalPath;
+    rmSync(fakePythonDir, { recursive: true, force: true });
+  }
+} finally {
+  if (custodianPid !== undefined) { try { process.kill(custodianPid, "SIGKILL"); } catch { /* fixture exited */ } }
+  await killAndAwaitExit(custodianFixture, "SIGKILL");
+}
 // And the minted token must actually carry this process's pid, or the owner check has nothing to read.
 check("the kit's token stamps the owning pid into the dir name", new RegExp(`^${KIT_PREFIX}${process.pid}-(?:s[A-Za-z0-9_-]{22}-)?$`).test(SMOKE_BROKER_TOKEN), SMOKE_BROKER_TOKEN);
 
@@ -203,7 +249,7 @@ const armKey = (arm: DeclaredShape): string =>
 // These are values, not types.
 const NAMED_ARMS: Readonly<Record<string, string>> = {
   "reapSmokeBrokers#0#object{dryRun:union(boolean|undefined),scope:union(string|undefined)}": "{ dryRun: true }",
-  "reportReaped#1#object{inspected:number,ownedLive:number,reaped:array<object{args:string,owner:number,pid:number}>,supported:boolean,unclaimable:number,unparseable:number}": "report",
+  "reportReaped#1#object{failed:array<object{args:string,error:string,identity:union(object{command:string,startTime:string}|undefined),owner:number,pid:number}>,inspected:number,ownedLive:number,reaped:array<object{args:string,identity:union(object{command:string,startTime:string}|undefined),owner:number,pid:number}>,supported:boolean,unclaimable:number,unparseable:number,unsupportedReason:union(string|undefined)}": "report",
 };
 // And the arms that are COMPILED but not RUN, each named with the reason it cannot be run.
 // `reapSmokeBrokers` is the one export here that does something, and its parameter is optional, so
@@ -372,7 +418,7 @@ check(
 // The three type names are exercised too, by the consumer's `import type` and its annotations: a
 // type that stopped being exported would fail that compile rather than pass unnoticed.
 const EXERCISED = [
-  "NatsServerRow", "ReapReport", "ReapedBroker",
+  "FailedBroker", "NatsServerRow", "ReapReport", "ReapedBroker",
   "SMOKE_BROKER_PREFIX", "listNatsServers", "reapSmokeBrokers", "reportReaped",
 ];
 check(
@@ -422,7 +468,7 @@ const unverifiable = (shape: DeclaredShape, path: string): string[] => {
   }
 };
 
-const dryReport = reapSmokeBrokers({ dryRun: true });
+const dryReport = reapSmokeBrokers({ dryRun: true, scope: suiteScope });
 const dryMismatches = mismatches(surface.returns.reapSmokeBrokers!, dryReport, "reapSmokeBrokers()");
 check(
   "and every field the declaration promises of a report is the type the report actually carries",
@@ -508,38 +554,170 @@ const startBroker = async (prefix: string): Promise<ChildProcess> => {
 };
 
 let ownerPid: number | undefined, orphanPid: number | undefined, orphanDir: string | undefined;
-let owner: ChildProcess | undefined;
+let unrelatedOwnerPid: number | undefined, unrelatedOrphanPid: number | undefined, unrelatedOrphanDir: string | undefined;
+let owner: ChildProcess | undefined, unrelatedOwner: ChildProcess | undefined;
+const startOrphanOwner = async (scope: string): Promise<{ child: ChildProcess; ownerPid: number; brokerPid: number; dir: string }> => {
+  const tsx = join(import.meta.dirname, "..", "..", "node_modules", ".bin", "tsx");
+  const child = spawn(tsx, [join(import.meta.dirname, "fixtures", "reaper-owner-child.mjs")], {
+    stdio: ["ignore", "pipe", "pipe"],
+    env: { ...process.env, SMOKE_BROKER_SCOPE: scope },
+  });
+  if (child.pid !== undefined) kids.push(child);
+  let startupError: Error | undefined;
+  let closed = false;
+  child.on("error", (error) => { startupError = error; });
+  child.once("close", () => { closed = true; });
+  let output = "";
+  child.stdout!.on("data", (chunk: Buffer) => { output += chunk.toString(); });
+  child.stderr!.on("data", (chunk: Buffer) => { output += chunk.toString(); });
+  try {
+    for (let attempt = 0; attempt < 120 && !output.includes("brokerPid"); attempt++) await wait(250);
+    if (startupError) throw startupError;
+    if (closed) throw new Error(`owner fixture exited before reporting a live orphan: ${output.slice(-300)}`);
+    const parsed = /\{"ownerPid".*\}/.exec(output);
+    if (!parsed) throw new Error(`owner fixture never reported its pids: ${output.slice(-300)}`);
+    const fixture: unknown = JSON.parse(parsed[0]);
+    if (typeof fixture !== "object" || fixture === null
+      || !("ownerPid" in fixture) || typeof fixture.ownerPid !== "number" || !Number.isInteger(fixture.ownerPid)
+      || !("brokerPid" in fixture) || typeof fixture.brokerPid !== "number" || !Number.isInteger(fixture.brokerPid)
+      || !("dir" in fixture) || typeof fixture.dir !== "string") {
+      throw new Error(`owner fixture reported invalid pids or dir: ${parsed[0]}`);
+    }
+    return { child, ownerPid: fixture.ownerPid, brokerPid: fixture.brokerPid, dir: fixture.dir };
+  } catch (error) {
+    await killAndAwaitExit(child, "SIGTERM");
+    if (startupError) throw startupError;
+    throw error;
+  }
+};
 try {
   const mention = spawn(process.execPath, ["-e", "setInterval(() => {}, 1_000)", "COTAL_BROKER_LOG_NATS=/official/nats-server"], { stdio: "ignore" });
   kids.push(mention);
   // (1) A broker this process owns and is still using. Tokened, owner alive: must survive.
-  const ownedLive = await startBroker(SMOKE_BROKER_TOKEN);
+  const ownedLive = await startBroker(`${KIT_PREFIX}${process.pid}-s${scopeDigest(suiteScope)}-`);
   // (2) A broker nobody minted through the kit: must survive for a different reason.
   const untokened = await startBroker("cotal-reaper-control-");
-  // (3) A genuine orphan: a child mints under ITS pid, spawns a broker, then is SIGKILLed.
-  // `.bin/tsx` is a shell wrapper, not a JS file, so it is EXECUTED, never passed to node.
-  const tsx = join(import.meta.dirname, "..", "..", "node_modules", ".bin", "tsx");
-  owner = spawn(tsx, [join(import.meta.dirname, "fixtures", "reaper-owner-child.mjs")], { stdio: ["ignore", "pipe", "pipe"] });
-  let out = "";
-  owner.stdout!.on("data", (b: Buffer) => { out += b.toString(); });
-  owner.stderr!.on("data", (b: Buffer) => { out += b.toString(); });
-  for (let i = 0; i < 120 && !out.includes("brokerPid"); i++) await wait(250);
-  const parsed = /\{"ownerPid".*\}/.exec(out);
-  check("the owner fixture reported its pids", parsed !== null, out.slice(-300));
-  if (!parsed) throw new Error("owner fixture never reported");
-  ({ ownerPid, brokerPid: orphanPid, dir: orphanDir } = JSON.parse(parsed[0]) as { ownerPid: number; brokerPid: number; dir: string });
-  if (orphanDir) dirs.push(orphanDir);
+  // (3) A genuine orphan in this suite's unique scope; another scope's orphan must remain untouched.
+  const ownFixture = await startOrphanOwner(suiteScope);
+  owner = ownFixture.child;
+  ({ ownerPid, brokerPid: orphanPid, dir: orphanDir } = ownFixture);
+  dirs.push(orphanDir);
+  const unrelatedFixture = await startOrphanOwner(unrelatedScope);
+  unrelatedOwner = unrelatedFixture.child;
+  ({ ownerPid: unrelatedOwnerPid, brokerPid: unrelatedOrphanPid, dir: unrelatedOrphanDir } = unrelatedFixture);
+  dirs.push(unrelatedOrphanDir);
 
   await wait(800);
-  check("all three fixture brokers are running before the reaper", alive(ownedLive.pid!) && alive(untokened.pid!) && alive(orphanPid!));
-
+  check("all four fixture brokers are running before the reaper", alive(ownedLive.pid!) && alive(untokened.pid!) && alive(orphanPid!) && alive(unrelatedOrphanPid!));
+  process.kill(unrelatedOwnerPid!, "SIGKILL");
+  for (let attempt = 0; attempt < 40 && alive(unrelatedOwnerPid!); attempt++) await wait(100);
+  check("the out-of-scope orphan's owner is dead", !alive(unrelatedOwnerPid!), `owner ${unrelatedOwnerPid}`);
+  check("the out-of-scope broker survives its owner's death", alive(unrelatedOrphanPid!), `broker ${unrelatedOrphanPid}`);
   const listed = listNatsServers();
   check("the enumerator is supported on this platform", listed !== undefined);
   const pids = (listed ?? []).map((r) => r.pid);
-  check("the enumerator sees all three", pids.includes(ownedLive.pid!) && pids.includes(untokened.pid!) && pids.includes(orphanPid!));
+  check("the enumerator sees all four", pids.includes(ownedLive.pid!) && pids.includes(untokened.pid!) && pids.includes(orphanPid!) && pids.includes(unrelatedOrphanPid!));
   check("the non-broker argument control is running", mention.exitCode === null && alive(mention.pid!));
   check("an argument's broker path does not classify its process as a broker", !pids.includes(mention.pid!));
 
+  const delegatedRun = `delegated-reaper-${process.pid}-${randomUUID()}`;
+  const delegatedScope = `${suiteScope}-delegated-${randomUUID()}`;
+  const fixturePath = fileURLToPath(new URL("./fixtures/delegated-reaper-root-fixture.mjs", import.meta.url));
+  const sudo = (args: string[]) => spawnSync("sudo", ["-n", ...args], { encoding: "utf8", timeout: 15_000 });
+  const sudoProbe = sudo(["true"]);
+  const sudoAvailable = sudoProbe.status === 0;
+  const rootRequired = process.env.COTAL_SEAT_CGROUP_DELEGATED === "1";
+  const sudoDetail = `${sudoProbe.error instanceof Error ? sudoProbe.error.message : ""} ${(sudoProbe.stderr ?? "").trim()}`.trim();
+  if (!sudoAvailable) {
+    console.log(`  ↪ root-owned fixture skipped; sudo -n true failed${sudoDetail ? `: ${sudoDetail}` : ` (exit ${sudoProbe.status})`}; root verification was not performed`);
+  }
+  check("root verification is available or the delegated route is not required", sudoAvailable || !rootRequired, sudoDetail);
+  if (sudoAvailable) {
+    const expectedRootDir = mkdtempSync(join(tmpdir(), `cotal-smoke-broker-2147483647-s${scopeDigest(delegatedScope)}-`));
+    const fixture = spawn("sudo", ["-n", "env", `PATH=${process.env.PATH ?? ""}`, `TMPDIR=${tmpdir()}`, process.execPath, fixturePath, delegatedRun, delegatedScope, expectedRootDir], {
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    let fixtureOutput = "";
+    let fixtureErrorOutput = "";
+    let fixtureStartupError: Error | undefined;
+    fixture.stdout?.setEncoding("utf8").on("data", (chunk: string) => { fixtureOutput += chunk; });
+    fixture.stderr?.setEncoding("utf8").on("data", (chunk: string) => { fixtureErrorOutput += chunk; });
+    fixture.on("error", (error) => { fixtureStartupError = error; });
+    const fixtureDetail = () => `${fixtureStartupError?.message ?? ""} ${fixtureErrorOutput.trim()}`.trim();
+    let rootBrokerPid: number | undefined;
+    let rootCustodianPid: number | undefined;
+    let rootDifferentMarkerCustodianPid: number | undefined;
+    try {
+      let reportLine: string | undefined;
+      for (let attempt = 0; attempt < 150 && reportLine === undefined && fixtureStartupError === undefined && fixture.exitCode === null; attempt++) {
+        reportLine = fixtureOutput.split("\n").find((line) => line.startsWith("__ROOT_FIXTURE__"));
+        if (reportLine === undefined) await wait(100);
+      }
+      reportLine ??= fixtureOutput.split("\n").find((line) => line.startsWith("__ROOT_FIXTURE__"));
+      let parsedFixture: unknown;
+      if (reportLine) {
+        try { parsedFixture = JSON.parse(reportLine.slice("__ROOT_FIXTURE__".length)); }
+        catch (error) { throw new Error(`malformed root fixture report: ${error instanceof Error ? error.message : String(error)}`); }
+      }
+      if (typeof parsedFixture === "object" && parsedFixture !== null) {
+        if ("brokerPid" in parsedFixture && typeof parsedFixture.brokerPid === "number" && Number.isInteger(parsedFixture.brokerPid) && parsedFixture.brokerPid > 0) rootBrokerPid = parsedFixture.brokerPid;
+        if ("custodianPid" in parsedFixture && typeof parsedFixture.custodianPid === "number" && Number.isInteger(parsedFixture.custodianPid) && parsedFixture.custodianPid > 0) rootCustodianPid = parsedFixture.custodianPid;
+        if ("differentMarkerCustodianPid" in parsedFixture && typeof parsedFixture.differentMarkerCustodianPid === "number" && Number.isInteger(parsedFixture.differentMarkerCustodianPid) && parsedFixture.differentMarkerCustodianPid > 0) rootDifferentMarkerCustodianPid = parsedFixture.differentMarkerCustodianPid;
+      }
+      rootFixtureStarted = reportLine !== undefined && fixtureStartupError === undefined
+        && typeof parsedFixture === "object" && parsedFixture !== null
+        && "uid" in parsedFixture && parsedFixture.uid === 0;
+      check("root-owned fixture starts under its privileged uid when sudo is available", rootFixtureStarted, fixtureDetail() || "fixture did not report a root-owned startup");
+      if (fixtureStartupError) throw fixtureStartupError;
+      if (reportLine === undefined) throw new Error(fixtureDetail() || `root fixture did not report before exit ${fixture.exitCode ?? fixture.signalCode ?? "timeout"}`);
+      if (typeof parsedFixture !== "object" || parsedFixture === null
+        || !("brokerPid" in parsedFixture) || typeof parsedFixture.brokerPid !== "number" || !Number.isInteger(parsedFixture.brokerPid) || parsedFixture.brokerPid < 1
+        || !("custodianPid" in parsedFixture) || typeof parsedFixture.custodianPid !== "number" || !Number.isInteger(parsedFixture.custodianPid) || parsedFixture.custodianPid < 1
+        || !("differentMarkerCustodianPid" in parsedFixture) || typeof parsedFixture.differentMarkerCustodianPid !== "number" || !Number.isInteger(parsedFixture.differentMarkerCustodianPid) || parsedFixture.differentMarkerCustodianPid < 1
+        || !("differentMarker" in parsedFixture) || typeof parsedFixture.differentMarker !== "string" || parsedFixture.differentMarker === delegatedRun
+        || !("processes" in parsedFixture) || !Array.isArray(parsedFixture.processes) || parsedFixture.processes.length !== 3
+        || !parsedFixture.processes.every((record) => typeof record === "object" && record !== null && "pid" in record && typeof record.pid === "number" && "command" in record && typeof record.command === "string" && record.command.length > 0 && "startTime" in record && typeof record.startTime === "string" && /^\d+$/.test(record.startTime) && "marker" in record && typeof record.marker === "string" && record.marker.length > 0)
+        || !("dir" in parsedFixture) || parsedFixture.dir !== expectedRootDir
+        || !("uid" in parsedFixture) || parsedFixture.uid !== 0) {
+        throw new Error("root fixture returned incomplete or invalid process details");
+      }
+      check("fixture proves the test processes are root-owned", true);
+      const privilegedReaper = sudo(["env", `PATH=${process.env.PATH ?? ""}`, `TMPDIR=${tmpdir()}`, process.execPath,
+        fileURLToPath(new URL("./reap-delegated-suite.mjs", import.meta.url)), delegatedRun, delegatedScope]);
+      const marker = (privilegedReaper.stdout ?? "").split("\n").find((line) => line.startsWith("__DELEGATED_REAP__"));
+      const reapReport = marker ? JSON.parse(marker.slice("__DELEGATED_REAP__".length)) as {
+        brokers: { reaped: number[]; failed: Array<{ pid: number; error: string }> };
+        custodians: { reaped: number[]; failed: Array<{ pid: number; error: string }> };
+      } : undefined;
+      check("privileged reaper kills and reports root-owned custodian", reapReport?.custodians.reaped.includes(rootCustodianPid) === true && !alive(rootCustodianPid));
+      check("privileged reaper kills and counts root-owned broker", reapReport?.brokers.reaped.includes(rootBrokerPid) === true && !alive(rootBrokerPid));
+      check("different-marker custodian survives the privileged reaper", rootDifferentMarkerCustodianPid !== undefined && alive(rootDifferentMarkerCustodianPid) && !reapReport?.custodians.reaped.includes(rootDifferentMarkerCustodianPid), `pid ${rootDifferentMarkerCustodianPid}`);
+      check("privileged reaper has no permission-denied leftovers", reapReport?.brokers.failed.length === 0 && reapReport.custodians.failed.length === 0, privilegedReaper.stderr ?? "");
+      check("privileged reaping exits cleanly for successfully killed processes", privilegedReaper.status === 0, privilegedReaper.stderr ?? "");
+      check("privileged broker sweep respects scope and run marker attribution", reapReport?.brokers.reaped.length === 1 && reapReport.custodians.reaped.length === 1);
+    } catch (error) {
+      // The fixture writes each child PID to processes.json immediately after spawn, before the final report.
+      let partialProcesses: unknown;
+      try { partialProcesses = JSON.parse(readFileSync(join(expectedRootDir, "processes.json"), "utf8")); }
+      catch { /* No fixture children were recorded, or the fixture directory was already cleaned. */ }
+      const partialCount = Array.isArray(partialProcesses) ? partialProcesses.length : 0;
+      check("root-owned reaper fixture produced a complete report", false, `${error instanceof Error ? error.message : String(error)}; recorded ${partialCount} partial fixture children`);
+    } finally {
+      const cleanupErrors: string[] = [];
+      if (fixture.stdin !== null) fixture.stdin.end("cleanup\n");
+      let fixtureClosed = false;
+      fixture.once("close", () => { fixtureClosed = true; });
+      for (let attempt = 0; attempt < 100 && !fixtureClosed; attempt++) await wait(50);
+      if (!fixtureClosed) cleanupErrors.push("root fixture did not exit after cleanup");
+      if (fixture.exitCode !== 0 && fixture.exitCode !== null) cleanupErrors.push(`root fixture exited ${fixture.exitCode}: ${fixtureDetail()}`);
+      if (!fixtureOutput.includes("__ROOT_FIXTURE_CLEANED__")) cleanupErrors.push("root fixture did not confirm PID-identity cleanup");
+      if (cleanupErrors.length === 0 && existsSync(expectedRootDir)) {
+        try { rmSync(expectedRootDir, { recursive: true, force: true }); }
+        catch (error) { cleanupErrors.push(`could not remove cleaned fixture directory ${expectedRootDir}: ${error instanceof Error ? error.message : String(error)}`); }
+      }
+      check("root fixture cleanup completed using pinned PID identities", cleanupErrors.length === 0, cleanupErrors.join(" | "));
+    }
+  }
   // Kill the OWNER only. Its broker is a plain child, so it survives and is reparented: a real orphan.
   process.kill(ownerPid!, "SIGKILL");
   for (let i = 0; i < 40 && alive(ownerPid!); i++) await wait(100);
@@ -553,11 +731,16 @@ try {
   // unchanged and green. Reproduced first-party before this trio. The claim and the silence are
   // separate properties, so they are separate cells: a dryRun that claimed nothing would satisfy
   // "killed nothing" for the wrong reason.
-  const dry = reapSmokeBrokers({ dryRun: true });
+  const dry = reapSmokeBrokers({ dryRun: true, scope: suiteScope });
   check(
     "a dry run CLAIMS the orphan, so the two cells below are not vacuous",
     dry.reaped.some((r) => r.pid === orphanPid),
     JSON.stringify(dry.reaped.map((r) => r.pid)),
+  );
+  check(
+    "the dry-run claim excludes an orphan from another suite scope",
+    !dry.reaped.some((row) => row.pid === unrelatedOrphanPid),
+    JSON.stringify(dry.reaped.map((row) => row.pid)),
   );
   // The wait is load-bearing and was measured: a child SIGKILLed a moment ago still answers
   // `kill(pid, 0)` until its parent reaps it, so checking immediately reported a killed broker as
@@ -575,16 +758,45 @@ try {
     JSON.stringify(dry.reaped.map((r) => r.pid)),
   );
 
-  const result = reapSmokeBrokers();
+  const deniedPythonDir = mkdtempSync(join(tmpdir(), "reaper-denied-broker-"));
+  const deniedPython = join(deniedPythonDir, "python3");
+  const originalPath = process.env.PATH;
+  const deniedBrokerPid = orphanPid;
+  let deniedBrokerReport;
+  try {
+    writeFileSync(deniedPython, [
+      "#!/bin/sh",
+      'if [ "$#" -eq 2 ]; then',
+      "  echo supported",
+      "  exit 0",
+      "fi",
+      "echo 'permission denied (simulated pidfd signal)' >&2",
+      "exit 1",
+      "",
+    ].join("\n"), { mode: 0o755 });
+    process.env.PATH = originalPath === undefined ? deniedPythonDir : `${deniedPythonDir}${delimiter}${originalPath}`;
+    deniedBrokerReport = reapSmokeBrokers({ scope: suiteScope });
+  } finally {
+    if (originalPath === undefined) delete process.env.PATH;
+    else process.env.PATH = originalPath;
+    rmSync(deniedPythonDir, { recursive: true, force: true });
+  }
+  const deniedBroker = deniedBrokerReport?.failed.find((row) => row.pid === deniedBrokerPid);
+  check("a denied broker reap records its pid as a failed reap", deniedBroker !== undefined && deniedBrokerPid !== undefined && !deniedBrokerReport?.reaped.some((row) => row.pid === deniedBrokerPid), JSON.stringify(deniedBrokerReport?.failed));
+  check("a denied broker reap retains permission detail", deniedBroker?.error.includes("permission denied") === true, deniedBroker?.error);
+  check("the simulated pidfd denial does not signal the broker", deniedBrokerPid !== undefined && alive(deniedBrokerPid));
+  const result = reapSmokeBrokers({ scope: suiteScope });
   await wait(500);
 
   check("the reaper reports the platform as supported", result.supported);
-  check("POSITIVE CONTROL: the broker whose owner is DEAD is killed", !alive(orphanPid!), `pid ${orphanPid} survived`);
+  check("POSITIVE CONTROL: the broker whose owner is DEAD is killed", !alive(orphanPid!), `pid ${orphanPid} survived; failed=${JSON.stringify(result.failed)}`);
   check("NEGATIVE CONTROL: a tokened broker whose owner is ALIVE is untouched", alive(ownedLive.pid!), `pid ${ownedLive.pid} was killed`);
   check("NEGATIVE CONTROL: the untokened broker is untouched", alive(untokened.pid!), `pid ${untokened.pid} was killed`);
   check("the killed broker is named in the report, not just counted", result.reaped.some((r) => r.pid === orphanPid));
   check("the report names the dead owner it acted on", result.reaped.some((r) => r.owner === ownerPid), JSON.stringify(result.reaped.map((r) => r.owner)));
   check("neither survivor is named as reaped", !result.reaped.some((r) => r.pid === ownedLive.pid || r.pid === untokened.pid));
+  check("the out-of-scope orphan survives the suite-scoped reap", alive(unrelatedOrphanPid!), `pid ${unrelatedOrphanPid} was killed`);
+  check("the suite-scoped report does not name the foreign broker", !result.reaped.some((row) => row.pid === unrelatedOrphanPid));
   // The counts are what keep a quiet run honest: "0 reaped" reads the same on a clean box and on a
   // box where every candidate was declined, so the declines are reported rather than implied.
   check("the live-owner broker is counted as owned, not silently skipped", result.ownedLive >= 1, `ownedLive=${result.ownedLive}`);
@@ -605,16 +817,21 @@ try {
 
   // Running again with the orphan already gone must be a clean no-op: the reaper runs after every
   // suite in the chain, so the quiet path is the common one.
-  const second = reapSmokeBrokers();
+  const second = reapSmokeBrokers({ scope: suiteScope });
   check("a second run reaps nothing and does not throw", second.reaped.every((r) => r.pid !== orphanPid));
-  check("both survivors are still alive after the second run", alive(ownedLive.pid!) && alive(untokened.pid!));
+  check("the live-owner broker survives the second suite-scoped pass", alive(ownedLive.pid!) && !second.reaped.some((r) => r.pid === ownedLive.pid));
+  check("the untokened broker survives the second suite-scoped pass", alive(untokened.pid!) && !second.reaped.some((r) => r.pid === untokened.pid));
+  check("the out-of-scope orphan also survives the second suite-scoped pass", alive(unrelatedOrphanPid!), `pid ${unrelatedOrphanPid} was killed`);
 } catch (e) {
   fail++;
   console.log(`  ✗ FAIL: scenario threw: ${(e as Error).message}`);
 } finally {
   if (ownerPid !== undefined && alive(ownerPid)) { try { process.kill(ownerPid, "SIGKILL"); } catch { /* gone */ } }
+  if (unrelatedOwnerPid !== undefined && alive(unrelatedOwnerPid)) { try { process.kill(unrelatedOwnerPid, "SIGKILL"); } catch { /* gone */ } }
   if (orphanPid !== undefined && alive(orphanPid)) { try { process.kill(orphanPid, "SIGKILL"); } catch { /* gone */ } }
+  if (unrelatedOrphanPid !== undefined && alive(unrelatedOrphanPid)) { try { process.kill(unrelatedOrphanPid, "SIGKILL"); } catch { /* gone */ } }
   if (owner) await killAndAwaitExit(owner, "SIGKILL");
+  if (unrelatedOwner) await killAndAwaitExit(unrelatedOwner, "SIGKILL");
   for (const k of kids) await killAndAwaitExit(k, "SIGKILL");
   for (const d of dirs) rmSync(d, { recursive: true, force: true });
   for (const r of releases) r();

@@ -8,20 +8,27 @@
  * Run: pnpm smoke:shard-sentinel
  */
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
+import { tmpdir } from "node:os";
+import { delegationFallback, isDelegatedShard, suiteInvocation } from "./shard-delegation.mjs";
 import { createSuite, runFiles, formatSentinel as kitFormat, parseSentinel as kitParse } from "@cotal-ai/smoke-kit";
 import { liveShapedCommandReason } from "../../scripts/mutation-command-safety.mjs";
 import { formatSentinel, parseSentinel } from "./sentinel.mjs";
+const isFixtureProcesses = (value: unknown): value is { brokerPid: number; custodianPid: number; brokerDir: string } =>
+  typeof value === "object" && value !== null
+  && "brokerPid" in value && typeof value.brokerPid === "number" && Number.isInteger(value.brokerPid) && value.brokerPid > 0
+  && "custodianPid" in value && typeof value.custodianPid === "number" && Number.isInteger(value.custodianPid) && value.custodianPid > 0
+  && "brokerDir" in value && typeof value.brokerDir === "string";
 
+const SENTINEL = formatSentinel({ passed: 3, failed: 0 });
+
+const SHARD = fileURLToPath(new URL("./shard.mjs", import.meta.url));
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const { packageManager } = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
 if (typeof packageManager !== "string") throw new Error("repository package-manager pin is missing");
-
-const SHARD = fileURLToPath(new URL("./shard.mjs", import.meta.url));
-const SENTINEL = formatSentinel({ passed: 3, failed: 0 });
 
 // Suite bodies the classifier reads as FILES (never executed under --offline: that is the point).
 // The stack body is assembled from parts (verb via JSON.stringify) so this suite's OWN source has
@@ -35,23 +42,27 @@ const fixtureFiles: Record<string, string> = {
   "live.mjs": `throw new Error("OFFLINE CONTROL RAN THE LIVE FIXTURE");\n`,
   "green.mjs": `console.log(${JSON.stringify(SENTINEL)});\n`,
 };
+const processAlive = (pid: number | undefined): boolean => {
+  if (pid === undefined) return false;
+  try { process.kill(pid, 0); return true; } catch { return false; }
+};
 
-function runShippedShard(scripts: Record<string, string>, extraArgs: string[] = []) {
+function runShippedShard(scripts: Record<string, string>, extraArgs: string[] = [], extraEnv: NodeJS.ProcessEnv = {}, shardArgs = ["0", "1"]) {
   const dir = mkdtempSync(join(tmpdir(), "cotal-shard-sentinel-"));
   try {
     const names = Object.keys(scripts);
+    const pnpmShim = join(dir, "pnpm");
+    writeFileSync(pnpmShim, "#!/bin/sh\nif [ \"$1\" = \"--silent\" ]; then shift; fi\nSCRIPT=$(node -e 'process.stdout.write(JSON.parse(require(\"node:fs\").readFileSync(\"package.json\",\"utf8\")).scripts[process.argv[1]])' \"$1\")\nexec sh -c \"$SCRIPT\"\n", { mode: 0o755 });
     writeFileSync(join(dir, "package.json"), JSON.stringify({ private: true, packageManager, scripts }));
     for (const [name, body] of Object.entries(fixtureFiles)) writeFileSync(join(dir, name), body);
     const listPath = join(dir, "ci-suites.txt");
     writeFileSync(listPath, `${names.join("\n")}\n`);
     const env: NodeJS.ProcessEnv = { ...process.env };
     for (const key of Object.keys(env)) if (key.startsWith("COTAL_")) delete env[key];
-    const r = spawnSync(process.execPath, [SHARD, "0", "1", ...extraArgs], {
+    const r = spawnSync(process.execPath, [SHARD, ...shardArgs, ...extraArgs], {
       cwd: dir,
-      env: { ...env, COTAL_CI_SUITES: listPath },
-      encoding: "utf8",
-      timeout: 60_000,
-      maxBuffer: 2 * 1024 * 1024,
+      env: { ...env, PATH: `${dir}:${process.env.PATH ?? ""}`, ...extraEnv, COTAL_CI_SUITES: listPath },
+      encoding: "utf8", timeout: 60_000, maxBuffer: 2 * 1024 * 1024,
     });
     const out = `${r.stdout ?? ""}${r.stderr ?? ""}`;
     return {
@@ -64,7 +75,82 @@ function runShippedShard(scripts: Record<string, string>, extraArgs: string[] = 
   }
 }
 
+function runDelegatedFixture() {
+  const dir = mkdtempSync(join(tmpdir(), "cotal-delegated-shard-"));
+  const fixtureReportPath = join(dir, "fixture-processes.json");
+  let fixtureProcesses: { brokerPid?: number; custodianPid?: number; brokerDir?: string } = {};
+  const runMarker = `delegated-run-${process.pid}`;
+  const brokerScope = `delegated-scope-${process.pid}-${randomUUID()}`;
+  try {
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ private: true, packageManager, scripts: { "smoke:manager-stop-reap": "node delegated-leak.mjs" } }));
+    const listPath = join(dir, "ci-suites.txt");
+    const leakPath = fileURLToPath(new URL("./fixtures/delegated-reaper-leak.mjs", import.meta.url));
+    const body = readFileSync(leakPath, "utf8").replace("const fixtureReportPath = process.env.COTAL_FIXTURE_REPORT;", `const fixtureReportPath = ${JSON.stringify(fixtureReportPath)};`);
+    writeFileSync(join(dir, "delegated-leak.mjs"), body);
+    const sudoShim = join(dir, "sudo");
+    writeFileSync(sudoShim, "#!/bin/sh\nif [ \"$1\" = \"systemd-run\" ]; then\n  printf '%s\\n' '[test-sudo] systemd-run --scope -p Delegate=yes'\n  shift\n  [ \"$1\" = \"--scope\" ] && shift\n  [ \"$1\" = \"-p\" ] && shift 2\n  [ \"$1\" = \"--quiet\" ] && shift\n  [ \"$1\" = \"--\" ] && shift\n  exec \"$@\"\nfi\nif [ \"$1\" = \"env\" ]; then\n  printf '%s\\n' '[test-sudo] env'\n  shift\n  exec env \"$@\"\nfi\nexit 2\n", { mode: 0o755 });
+    const pnpmShim = join(dir, "pnpm");
+    writeFileSync(pnpmShim, "#!/bin/sh\nif [ \"$1\" = \"--silent\" ]; then shift; fi\nSCRIPT=$(node -e 'process.stdout.write(JSON.parse(require(\"node:fs\").readFileSync(\"package.json\",\"utf8\")).scripts[process.argv[1]])' \"$1\")\nexec sh -c \"$SCRIPT\"\n", { mode: 0o755 });
+    const env: NodeJS.ProcessEnv = { ...process.env };
+    for (const key of Object.keys(env)) if (key.startsWith("COTAL_")) delete env[key];
+    const testPath = `${dir}:${process.env.PATH ?? ""}`;
+    const result = spawnSync(process.execPath, [SHARD, "1", "4"], {
+      cwd: dir,
+      env: { ...env, GITHUB_ACTIONS: "true", PATH: testPath, SMOKE_CI_JOBS: "1", COTAL_CI_SUITES: listPath, COTAL_RUN: runMarker, SMOKE_BROKER_SCOPE: brokerScope, COTAL_FIXTURE_REPORT: fixtureReportPath },
+      encoding: "utf8", timeout: 60_000, maxBuffer: 2 * 1024 * 1024,
+    });
+    const out = `${result.stdout ?? ""}${result.stderr ?? ""}`;
+    const fixtureLine = out.split("\n").find((line) => line.startsWith("__DELEGATED_FIXTURE__"));
+    if (fixtureLine) {
+      const fixtureValue: unknown = JSON.parse(fixtureLine.slice("__DELEGATED_FIXTURE__".length));
+      if (isFixtureProcesses(fixtureValue)) fixtureProcesses = fixtureValue;
+    } else if (existsSync(fixtureReportPath)) {
+      const fixtureValue: unknown = JSON.parse(readFileSync(fixtureReportPath, "utf8"));
+      if (isFixtureProcesses(fixtureValue)) fixtureProcesses = fixtureValue;
+    }
+    return { status: result.status, timedOut: (result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT" || result.signal === "SIGTERM", out, fixture: fixtureLine ? fixtureProcesses : undefined };
+  } finally {
+    const cleanupErrors: string[] = [];
+    if (fixtureProcesses.brokerPid === undefined || fixtureProcesses.custodianPid === undefined || fixtureProcesses.brokerDir === undefined) {
+      try {
+        if (existsSync(fixtureReportPath)) {
+          const fixtureValue: unknown = JSON.parse(readFileSync(fixtureReportPath, "utf8"));
+          if (isFixtureProcesses(fixtureValue)) fixtureProcesses = fixtureValue;
+        }
+      } catch (error) {
+        cleanupErrors.push(`could not read fixture process manifest: ${(error as Error).message}`);
+      }
+    }
+    for (const pid of [fixtureProcesses.brokerPid, fixtureProcesses.custodianPid]) {
+      if (pid === undefined) continue;
+      let cmdline: string;
+      try { cmdline = readFileSync(`/proc/${pid}/cmdline`, "utf8"); }
+      catch (error) {
+        if (processAlive(pid)) cleanupErrors.push(`could not verify fixture pid ${pid}: ${(error as Error).message}`);
+        continue;
+      }
+      if (pid === fixtureProcesses.brokerPid && fixtureProcesses.brokerDir !== undefined && !cmdline.includes(fixtureProcesses.brokerDir)) continue;
+      if (pid === fixtureProcesses.custodianPid && !cmdline.includes(runMarker)) continue;
+      try { process.kill(pid, "SIGKILL"); }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") cleanupErrors.push(`could not kill fixture pid ${pid}: ${(error as Error).message}`); }
+    }
+    if (fixtureProcesses.brokerDir !== undefined) {
+      try { rmSync(fixtureProcesses.brokerDir, { recursive: true, force: true }); }
+      catch (error) { cleanupErrors.push(`could not remove fixture broker dir: ${(error as Error).message}`); }
+    }
+    try { rmSync(dir, { recursive: true, force: true }); }
+    catch (error) { cleanupErrors.push(`could not remove delegated fixture dir: ${(error as Error).message}`); }
+    if (cleanupErrors.length > 0) throw new Error(cleanupErrors.join(" | "));
+  }
+}
+
+
 const { check, finish, passed, failed } = createSuite();
+const route = { suite: "smoke:manager-stop-reap", shard: 1, count: 4, pinnedShard: 1, pinnedCount: 4, platform: "linux", githubActions: "true" };
+check("the intended Linux GitHub Actions shard is delegated", isDelegatedShard(route));
+check("GITHUB_ACTIONS=false selects the visible non-delegated fallback", !isDelegatedShard({ ...route, githubActions: "false" }) && delegationFallback({ suite: route.suite, delegated: false })?.includes("without its pinned GitHub Actions Linux delegated route") === true);
+const delegatedArgs = suiteInvocation({ delegated: true, bin: "pnpm", args: [route.suite], path: "/usr/bin", runMarker: "run-1", brokerScope: "scope-1" });
+check("delegated shard suite keeps its delegated systemd scope", delegatedArgs.bin === "sudo" && delegatedArgs.args.includes("Delegate=yes"));
 
 console.log("shard-sentinel: a suite that exits 0 with no cells is not a covered pass");
 
@@ -279,6 +365,9 @@ try {
 } finally {
   rmSync(filesDir, { recursive: true, force: true });
 }
+const fallbackRun = runShippedShard({ "smoke:manager-stop-reap": "node green.mjs" }, [], { GITHUB_ACTIONS: "false" }, ["1", "4"]);
+check("shipped shard logs its GITHUB_ACTIONS=false fallback", fallbackRun.status === 0 && fallbackRun.out.includes("without its pinned GitHub Actions Linux delegated route"), fallbackRun.out.slice(-400));
+
 
 for (const path of ["./sentinel.mjs", "../../packages/smoke-kit/src/sentinel.ts"]) {
   const module = new URL(path, import.meta.url).href;
@@ -288,7 +377,16 @@ for (const path of ["./sentinel.mjs", "../../packages/smoke-kit/src/sentinel.ts"
   check(`${path}: skipSuite still refuses a multiline reason`, result.status !== 0 && result.stderr.includes("skipSuite reason must read back"), result.stderr.slice(-500));
 }
 
-const EXPECTED = 68;
+const delegatedRun = runDelegatedFixture();
+const delegatedFixture = delegatedRun.fixture;
+const delegatedReapLine = delegatedRun.out.split("\n").find((line) => line.startsWith("__DELEGATED_REAP__"));
+const delegatedReap = delegatedReapLine ? JSON.parse(delegatedReapLine.slice("__DELEGATED_REAP__".length)) as { brokers: { reaped: number[] }; custodians: { reaped: number[] } } : undefined;
+check("shipped shard reaches the delegated runner with its run and scope markers", delegatedFixture?.delegated === "1" && delegatedFixture.runMarker === "delegated-run-" + process.pid && typeof delegatedFixture.brokerScope === "string" && delegatedFixture.brokerScope.length > 0, delegatedFixture);
+check("shipped shard invokes systemd delegation and preserves the delegated cgroup marker", delegatedRun.out.includes("[test-sudo] systemd-run --scope -p Delegate=yes") && delegatedFixture?.delegated === "1", delegatedRun.out.slice(-1000));
+check("shipped shard detects and fails on leaked broker and custodian processes", delegatedRun.status !== 0 && /leaked privileged process pid \d+/.test(delegatedRun.out) && delegatedRun.out.includes("killed broker pid(s)") && delegatedRun.out.includes("custodian pid(s)"), delegatedRun.out.slice(-1200));
+check("the privileged sweep reaps both fixture pids", delegatedReap?.brokers.reaped.includes(delegatedFixture?.brokerPid ?? -1) === true && delegatedReap?.custodians.reaped.includes(delegatedFixture?.custodianPid ?? -1) === true, delegatedReap);
+check("the delegated shard leaves neither fixture process alive", !processAlive(delegatedFixture?.brokerPid) && !processAlive(delegatedFixture?.custodianPid), delegatedFixture);
+const EXPECTED = 77;
   check(
     `every cell ran - ${EXPECTED} before this sentinel cell, so a cell that stops existing is not mistaken for one that passed`,
     passed() + failed() === EXPECTED,

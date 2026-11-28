@@ -35,7 +35,7 @@ import { createHash } from "node:crypto";
 import { checkPidfdSupport, readProcessIdentity, signalByPidfd } from "./reaper-pidfd.mjs";
 /**
  * One live `nats-server` process, as `{ pid, args, identity }` internally; public reports omit identity.
- * @typedef {{ pid: number, args: string, identity?: ReturnType<typeof readProcessIdentity> }} NatsServerRow
+ * @typedef {{ pid: number, args: string, identity?: { command: string, startTime: string } }} NatsServerRow
  */
 
 /** A broker killed after its owner was found dead. */

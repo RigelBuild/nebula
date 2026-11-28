@@ -59,8 +59,8 @@ export function reapSmokeBrokers({ dryRun, scope }?: {
  */
 export function reportReaped(label: string, result: ReapReport): void;
 /**
- * One live `nats-server` process, as `ps` reports it.
- * @typedef {{ pid: number, args: string }} NatsServerRow
+ * One live `nats-server` process, as `{ pid, args, identity }` internally; public reports omit identity.
+ * @typedef {{ pid: number, args: string, identity?: { command: string, startTime: string } }} NatsServerRow
  */
 /** A broker killed after its owner was found dead. */
 /** @typedef {NatsServerRow & { owner: number }} ReapedBroker */
@@ -70,18 +70,22 @@ export function reportReaped(label: string, result: ReapReport): void;
  * What one reap pass did, and what it deliberately made no claim on. `supported` is false on a
  * platform where the enumerator cannot look, so a caller can tell "nothing leaked" from "nothing was
  * looked at".
- * @typedef {{ inspected: number, reaped: ReapedBroker[], failed: FailedBroker[], ownedLive: number, unparseable: number, unclaimable: number, supported: boolean }} ReapReport
+ * @typedef {{ inspected: number, reaped: ReapedBroker[], failed: FailedBroker[], ownedLive: number, unparseable: number, unclaimable: number, supported: boolean, unsupportedReason?: string }} ReapReport
  */
 /** The stable half of the token minted by `@cotal-ai/smoke-kit`. Duplicated as a literal on purpose:
  *  this file runs from the CI runner before any workspace build, so it must not depend on a built
  *  package. The smoke suite asserts the two are equal, so the duplication cannot drift unnoticed. */
 export const SMOKE_BROKER_PREFIX: "cotal-smoke-broker-";
 /**
- * One live `nats-server` process, as `ps` reports it.
+ * One live `nats-server` process, as `{ pid, args, identity }` internally; public reports omit identity.
  */
 export type NatsServerRow = {
     pid: number;
     args: string;
+    identity?: {
+        command: string;
+        startTime: string;
+    };
 };
 export type ReapedBroker = NatsServerRow & {
     owner: number;
@@ -103,4 +107,5 @@ export type ReapReport = {
     unparseable: number;
     unclaimable: number;
     supported: boolean;
+    unsupportedReason?: string;
 };

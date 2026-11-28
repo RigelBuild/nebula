@@ -23,7 +23,7 @@ import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, dirname, join } from "node:path";
+import { basename, delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { SMOKE_BROKER_PREFIX as KIT_PREFIX, SMOKE_BROKER_TOKEN, freePort, killAndAwaitExit, teardownOnSignal } from "@cotal-ai/smoke-kit";
 import { SMOKE_BROKER_PREFIX, listNatsServers, reapSmokeBrokers } from "./reap-smoke-brokers.mjs";
@@ -64,18 +64,30 @@ for (let attempt = 0; attempt < 50 && custodianPid !== undefined; attempt++) {
   await wait(10);
 }
 try {
-  const originalKill = process.kill;
-  process.kill = ((pid, signal) => {
-    if (pid === custodianPid && signal === "SIGKILL") throw Object.assign(new Error("permission denied"), { code: "EPERM" });
-    return originalKill(pid, signal);
-  }) as typeof process.kill;
+  const fakePythonDir = mkdtempSync(join(tmpdir(), "reaper-denied-custodian-"));
+  const fakePython = join(fakePythonDir, "python3");
+  const originalPath = process.env.PATH;
   try {
+    writeFileSync(fakePython, [
+      "#!/bin/sh",
+      'if [ "$#" -eq 2 ]; then',
+      "  echo supported",
+      "  exit 0",
+      "fi",
+      "echo 'permission denied (simulated pidfd signal)' >&2",
+      "exit 1",
+      "",
+    ].join("\n"), { mode: 0o755 });
+    process.env.PATH = originalPath === undefined ? fakePythonDir : `${fakePythonDir}${delimiter}${originalPath}`;
     const report = reapRunCustodians(expectedMarker);
-    check("a denied custodian reap records its pid instead of throwing or claiming success", custodianPid !== undefined && report.failed.some((row) => row.pid === custodianPid) && !report.reaped.some((row) => row.pid === custodianPid));
-    const error = report.failed.find((row) => row.pid === custodianPid)?.error;
-    check("custodian failure retains the permission error for reporting", error?.includes("permission denied") === true, error);
+    const denied = custodianPid === undefined ? undefined : report.failed.find((row) => row.pid === custodianPid);
+    check("a denied custodian reap records its pid instead of throwing or claiming success", report.supported && denied !== undefined && !report.reaped.some((row) => row.pid === custodianPid));
+    check("custodian failure retains the pidfd permission error for reporting", denied?.error.includes("permission denied") === true, denied?.error);
+    check("the simulated pidfd denial does not signal the fixture", custodianPid !== undefined && alive(custodianPid));
   } finally {
-    process.kill = originalKill;
+    if (originalPath === undefined) delete process.env.PATH;
+    else process.env.PATH = originalPath;
+    rmSync(fakePythonDir, { recursive: true, force: true });
   }
 } finally {
   if (custodianPid !== undefined) { try { process.kill(custodianPid, "SIGKILL"); } catch { /* fixture exited */ } }
@@ -237,7 +249,7 @@ const armKey = (arm: DeclaredShape): string =>
 // These are values, not types.
 const NAMED_ARMS: Readonly<Record<string, string>> = {
   "reapSmokeBrokers#0#object{dryRun:union(boolean|undefined),scope:union(string|undefined)}": "{ dryRun: true }",
-  "reportReaped#1#object{failed:array<object{args:string,error:string,owner:number,pid:number}>,inspected:number,ownedLive:number,reaped:array<object{args:string,owner:number,pid:number}>,supported:boolean,unclaimable:number,unparseable:number}": "report",
+  "reportReaped#1#object{failed:array<object{args:string,error:string,identity:union(object{command:string,startTime:string}|undefined),owner:number,pid:number}>,inspected:number,ownedLive:number,reaped:array<object{args:string,identity:union(object{command:string,startTime:string}|undefined),owner:number,pid:number}>,supported:boolean,unclaimable:number,unparseable:number,unsupportedReason:union(string|undefined)}": "report",
 };
 // And the arms that are COMPILED but not RUN, each named with the reason it cannot be run.
 // `reapSmokeBrokers` is the one export here that does something, and its parameter is optional, so
@@ -746,23 +758,38 @@ try {
     JSON.stringify(dry.reaped.map((r) => r.pid)),
   );
 
-  const originalKill = process.kill;
+  const deniedPythonDir = mkdtempSync(join(tmpdir(), "reaper-denied-broker-"));
+  const deniedPython = join(deniedPythonDir, "python3");
+  const originalPath = process.env.PATH;
   const deniedBrokerPid = orphanPid;
   let deniedBrokerReport;
-  process.kill = ((pid, signal) => {
-    if (pid === deniedBrokerPid && signal === "SIGKILL") throw Object.assign(new Error("permission denied"), { code: "EPERM" });
-    return originalKill(pid, signal);
-  }) as typeof process.kill;
-  try { deniedBrokerReport = reapSmokeBrokers({ scope: suiteScope }); }
-  finally { process.kill = originalKill; }
+  try {
+    writeFileSync(deniedPython, [
+      "#!/bin/sh",
+      'if [ "$#" -eq 2 ]; then',
+      "  echo supported",
+      "  exit 0",
+      "fi",
+      "echo 'permission denied (simulated pidfd signal)' >&2",
+      "exit 1",
+      "",
+    ].join("\n"), { mode: 0o755 });
+    process.env.PATH = originalPath === undefined ? deniedPythonDir : `${deniedPythonDir}${delimiter}${originalPath}`;
+    deniedBrokerReport = reapSmokeBrokers({ scope: suiteScope });
+  } finally {
+    if (originalPath === undefined) delete process.env.PATH;
+    else process.env.PATH = originalPath;
+    rmSync(deniedPythonDir, { recursive: true, force: true });
+  }
   const deniedBroker = deniedBrokerReport?.failed.find((row) => row.pid === deniedBrokerPid);
-  check("a denied broker reap records its pid as a failed reap", deniedBroker !== undefined && deniedBrokerPid !== undefined && !deniedBrokerReport?.reaped.some((row) => row.pid === deniedBrokerPid));
-  check("a denied broker reap retains permission detail", deniedBroker?.error.includes("permission denied") === true);
+  check("a denied broker reap records its pid as a failed reap", deniedBroker !== undefined && deniedBrokerPid !== undefined && !deniedBrokerReport?.reaped.some((row) => row.pid === deniedBrokerPid), JSON.stringify(deniedBrokerReport?.failed));
+  check("a denied broker reap retains permission detail", deniedBroker?.error.includes("permission denied") === true, deniedBroker?.error);
+  check("the simulated pidfd denial does not signal the broker", deniedBrokerPid !== undefined && alive(deniedBrokerPid));
   const result = reapSmokeBrokers({ scope: suiteScope });
   await wait(500);
 
   check("the reaper reports the platform as supported", result.supported);
-  check("POSITIVE CONTROL: the broker whose owner is DEAD is killed", !alive(orphanPid!), `pid ${orphanPid} survived`);
+  check("POSITIVE CONTROL: the broker whose owner is DEAD is killed", !alive(orphanPid!), `pid ${orphanPid} survived; failed=${JSON.stringify(result.failed)}`);
   check("NEGATIVE CONTROL: a tokened broker whose owner is ALIVE is untouched", alive(ownedLive.pid!), `pid ${ownedLive.pid} was killed`);
   check("NEGATIVE CONTROL: the untokened broker is untouched", alive(untokened.pid!), `pid ${untokened.pid} was killed`);
   check("the killed broker is named in the report, not just counted", result.reaped.some((r) => r.pid === orphanPid));

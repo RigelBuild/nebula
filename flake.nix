@@ -369,9 +369,7 @@
             }
             touch $out
           '';
-          # A package released for one system only is absent on the others, not an
-          # eval error. Without the filter in packagesFor, aarch64-linux throws on
-          # trunk-mq-mcp, which has no aarch64-linux asset.
+          # An x86_64-linux-only fixture package is absent from aarch64-linux outputs without an evaluation error.
           manifest-single-system =
             let
               singleFixture = {
@@ -396,9 +394,7 @@
               }
               touch $out
             '';
-          # packagesFor must serve a prebuilt fetch on every release system, never a source
-          # build. Evaluated against a fixture that declares all three systems, not the live
-          # release-manifest.json: the live Release lags until CD ships the new legs.
+          # A fixture listing every release system verifies prebuilt fetches independently of the live manifest.
           manifest-fetch-all-systems =
             let
               releaseSystems = [ "x86_64-linux" "aarch64-linux" "aarch64-darwin" ];

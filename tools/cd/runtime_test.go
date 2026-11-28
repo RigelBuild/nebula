@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"testing"
 )
 
@@ -108,23 +109,67 @@ func TestCheckAssetAcceptsDeclaredRuntimeDeps(t *testing.T) {
 	}
 }
 
-// The aarch64 interpreter is also a DT_NEEDED soname, so runtimeDeps must list
-// both the loader path accepted by checkInterp and the loader soname imported.
+func productionBinaries(t *testing.T, packageNames ...string) map[string]Binary {
+	t.Helper()
+
+	binaries, err := listBinaries(repoRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wanted := make(map[string]struct{}, len(packageNames))
+	for _, name := range packageNames {
+		wanted[name] = struct{}{}
+	}
+	selected := make(map[string]Binary, len(packageNames))
+	for _, b := range binaries {
+		if _, ok := wanted[b.Package]; ok {
+			selected[b.Package] = b
+		}
+	}
+	for _, name := range packageNames {
+		if _, ok := selected[name]; !ok {
+			t.Fatalf("production binary package %q not found", name)
+		}
+	}
+	return selected
+}
+
+// The aarch64 interpreter is also a DT_NEEDED soname, so production
+// runtimeDeps must list the imported soname.
 func TestCheckAssetAcceptsAarch64LoaderSoname(t *testing.T) {
+	const loaderSoname = "ld-linux-aarch64.so.1"
+	packages := productionBinaries(t, "cotal-presence-probe", "trunk-mq-mcp")
 	path := dynELFWithMachine(
 		t,
 		elf.EM_AARCH64,
 		"/lib/ld-linux-aarch64.so.1",
 		"libc.so.6",
-		"ld-linux-aarch64.so.1",
+		loaderSoname,
 	)
-	runtime := []string{"libc.so.6", "ld-linux-aarch64.so.1"}
-	if err := checkAssetWithRuntime(path, "aarch64-linux", runtime); err != nil {
-		t.Fatalf("aarch64 loader soname refused: %v", err)
+
+	for _, packageName := range []string{"cotal-presence-probe", "trunk-mq-mcp"} {
+		t.Run(packageName, func(t *testing.T) {
+			runtime := packages[packageName].RuntimeDeps
+			if !slices.Contains(runtime, loaderSoname) {
+				t.Fatalf("%s runtimeDeps = %v, want %q", packageName, runtime, loaderSoname)
+			}
+			if err := checkAssetWithRuntime(path, "aarch64-linux", runtime); err != nil {
+				t.Fatalf("aarch64 loader soname refused with %s runtimeDeps: %v", packageName, err)
+			}
+		})
 	}
 }
 
-// A NEEDED entry missing from the declaration fails the gate.
+// An aarch64 binary must not use the x86_64 dynamic loader.
+func TestCheckAssetRefusesAarch64WrongInterpreter(t *testing.T) {
+	b := productionBinaries(t, "cotal-presence-probe")["cotal-presence-probe"]
+	path := dynELFWithMachine(t, elf.EM_AARCH64, glibcInterp, "libc.so.6", "ld-linux-aarch64.so.1")
+	err := checkAssetWithRuntime(path, "aarch64-linux", b.RuntimeDeps)
+	if !errors.Is(err, errAssetCheck) {
+		t.Fatalf("aarch64 binary with x86_64 interpreter: err = %v, want errAssetCheck", err)
+	}
+}
+
 func TestCheckAssetRefusesUndeclaredNeededEntry(t *testing.T) {
 	path := dynELF(t, glibcInterp, "libc.so.6", "libstdc++.so.6")
 	err := checkAssetWithRuntime(path, "x86_64-linux", []string{"libc.so.6"})

@@ -27,7 +27,7 @@ func missingSystems(b Binary) []string {
 
 // TestEveryBinaryPackageReleasesAllThreeSystems reads every tools/* and forks/*
 // component.cue through the planner and requires each binary package to target
-// all three default release systems.
+// all three default release systems, apart from the two exact exemptions below.
 func TestEveryBinaryPackageReleasesAllThreeSystems(t *testing.T) {
 	binaries, err := listBinaries(repoRoot)
 	if err != nil {
@@ -37,17 +37,58 @@ func TestEveryBinaryPackageReleasesAllThreeSystems(t *testing.T) {
 		t.Fatal("no binary packages found: the test would pass on an empty repository")
 	}
 	for _, b := range binaries {
-		if missing := missingSystems(b); len(missing) > 0 {
-			switch b.Package {
-			case "fleet-gc-roots":
-				// fleet-gc-roots is Linux-only (//go:build linux); its non-Linux stub exits.
-				continue
-			case "windows-agent-sync":
-				// windows-agent-sync targets only windows-amd64.
-				continue
+		switch b.Package {
+		case "fleet-gc-roots":
+			// The non-Linux stub exits, so this package targets both Linux architectures.
+			want := []string{"x86_64-linux", "aarch64-linux"}
+			if !slices.Equal(b.Systems, want) {
+				t.Errorf("%s exception systems = %v, want exactly %v", b.Package, b.Systems, want)
 			}
+			continue
+		case "windows-agent-sync":
+			want := []string{"windows-amd64"}
+			if !slices.Equal(b.Systems, want) {
+				t.Errorf("%s exception systems = %v, want exactly %v", b.Package, b.Systems, want)
+			}
+			continue
+		}
+		if missing := missingSystems(b); len(missing) > 0 {
 			t.Errorf("%s (%s) omits %v: systems = %v", b.Package, b.Project, missing, b.Systems)
 		}
+	}
+
+}
+
+// TestNarrowReleaseSystemDeclarationsAreExact pins the two intentional limits
+// in the production component.cue data.
+func TestNarrowReleaseSystemDeclarationsAreExact(t *testing.T) {
+	binaries, err := listBinaries(repoRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		packageName string
+		systems     []string
+	}{
+		{packageName: "fleet-gc-roots", systems: []string{"x86_64-linux", "aarch64-linux"}},
+		{packageName: "windows-agent-sync", systems: []string{"windows-amd64"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.packageName, func(t *testing.T) {
+			found := false
+			for _, b := range binaries {
+				if b.Package != tt.packageName {
+					continue
+				}
+				found = true
+				if !slices.Equal(b.Systems, tt.systems) {
+					t.Errorf("%s systems = %v, want exactly %v", b.Package, b.Systems, tt.systems)
+				}
+			}
+			if !found {
+				t.Fatalf("production binary package %q not found", tt.packageName)
+			}
+		})
 	}
 }
 

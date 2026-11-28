@@ -15,7 +15,9 @@
  * Run: pnpm smoke:ci-suites-freeze
  */
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join, relative, sep } from "node:path";
 import { addedLegacySuites, fragmentFileName, parseCiSuites, CI_SUITES_PATH } from "./ci-suites.mjs";
 
 let pass = 0;
@@ -99,6 +101,48 @@ check(
   fragmentFileName("smoke:other") !== expectedFragment,
 );
 
+const committedSuites = (listPath: string, baseSha: string, headSha: string): string[] => {
+  const cwd = dirname(listPath);
+  const root = execFileSync("git", ["rev-parse", "--show-toplevel"], { cwd, encoding: "utf8" }).trim();
+  const path = relative(root, listPath).split(sep).join("/");
+  const show = (sha: string): string =>
+    execFileSync("git", ["--no-replace-objects", "show", `${sha}:${path}`], {
+      cwd: root,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  return addedLegacySuites(show(baseSha), show(headSha), `ci-suites.txt@${baseSha}`, `ci-suites.txt@${headSha}`);
+};
+
+for (const layout of ["", "forks/cotal"]) {
+  const root = mkdtempSync(join(tmpdir(), "ci-suites-freeze-"));
+  try {
+    const listPath = join(root, layout, "bin/smoke/ci-suites.txt");
+    mkdirSync(dirname(listPath), { recursive: true });
+    const git = (...args: string[]) => execFileSync("git", args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+    git("init");
+    git("config", "user.name", "Freeze smoke");
+    git("config", "user.email", "freeze-smoke@example.invalid");
+    writeFileSync(listPath, "smoke:existing\n");
+    git("add", ".");
+    git("commit", "-m", "base");
+    const fixtureBase = git("rev-parse", "HEAD");
+    git("commit", "--allow-empty", "-m", "unchanged");
+    const unchanged = git("rev-parse", "HEAD");
+    writeFileSync(listPath, "smoke:existing\nsmoke:added\n");
+    git("add", ".");
+    git("commit", "-m", "added suite");
+    const added = git("rev-parse", "HEAD");
+    const label = layout || "standalone";
+    const unchangedSuites = committedSuites(listPath, fixtureBase, unchanged);
+    check(`${label}: unchanged committed list adds no suite names`, same(unchangedSuites, []), unchangedSuites);
+    const addedSuites = committedSuites(listPath, fixtureBase, added);
+    check(`${label}: added committed suite is named`, same(addedSuites, ["smoke:added"]), addedSuites);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
 const COMMITTED_LIST_CELL = "the committed frozen list added no suite names versus base";
 const zero = "0000000000000000000000000000000000000000";
 const base = process.env.BASE;
@@ -110,14 +154,9 @@ if (!base || !head || base === zero || head === zero) {
     "BASE and HEAD were unset, so the committed frozen list was not compared",
   );
 } else {
-  const show = (sha: string): string =>
-    execFileSync("git", ["--no-replace-objects", "show", `${sha}:bin/smoke/ci-suites.txt`], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    });
   let live: string[] | string;
   try {
-    live = addedLegacySuites(show(base), show(head), `ci-suites.txt@${base}`, `ci-suites.txt@${head}`);
+    live = committedSuites(CI_SUITES_PATH, base, head);
   } catch (error) {
     live = `THREW: ${(error as Error).message}`;
   }
@@ -131,7 +170,7 @@ if (!base || !head || base === zero || head === zero) {
   );
 }
 
-const EXPECTED = 9;
+const EXPECTED = 13;
 check(
   `every cell ran - ${EXPECTED} expected, so a cell that stops existing is not mistaken for one that passed`,
   pass + fail === EXPECTED,

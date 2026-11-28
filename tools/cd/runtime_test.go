@@ -19,9 +19,11 @@ func dynELF(t *testing.T, interp string, needed ...string) string {
 	return dynELFWithMachine(t, elf.EM_X86_64, interp, needed...)
 }
 
+// dynELFWithMachine builds a minimal ELF64 executable for the requested machine.
 func dynELFWithMachine(t *testing.T, machine elf.Machine, interp string, needed ...string) string {
 	t.Helper()
 	le := binary.LittleEndian
+	// Layout: ELF header | PT_INTERP phdr | interp | strtab | dynamic | shstrtab | section headers.
 
 	const ehsize, phsize, shsize = 64, 56, 64
 	interpStr := interp + "\x00"

@@ -37,26 +37,13 @@ func TestEveryBinaryPackageReleasesAllThreeSystems(t *testing.T) {
 		t.Fatal("no binary packages found: the test would pass on an empty repository")
 	}
 	for _, b := range binaries {
-		switch b.Package {
-		case "fleet-gc-roots":
-			// The non-Linux stub exits, so this package targets both Linux architectures.
-			want := []string{"x86_64-linux", "aarch64-linux"}
-			if !slices.Equal(b.Systems, want) {
-				t.Errorf("%s exception systems = %v, want exactly %v", b.Package, b.Systems, want)
-			}
-			continue
-		case "windows-agent-sync":
-			want := []string{"windows-amd64"}
-			if !slices.Equal(b.Systems, want) {
-				t.Errorf("%s exception systems = %v, want exactly %v", b.Package, b.Systems, want)
-			}
+		if b.Package == "fleet-gc-roots" || b.Package == "windows-agent-sync" {
 			continue
 		}
 		if missing := missingSystems(b); len(missing) > 0 {
 			t.Errorf("%s (%s) omits %v: systems = %v", b.Package, b.Project, missing, b.Systems)
 		}
 	}
-
 }
 
 // TestNarrowReleaseSystemDeclarationsAreExact pins the two intentional limits

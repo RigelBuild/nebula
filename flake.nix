@@ -369,7 +369,8 @@
             }
             touch $out
           '';
-          # An x86_64-linux-only fixture package is absent from aarch64-linux outputs without an evaluation error.
+          # packagesFor filters out packages without an asset for the current system;
+          # without this filter, evaluation throws on aarch64-linux.
           manifest-single-system =
             let
               singleFixture = {

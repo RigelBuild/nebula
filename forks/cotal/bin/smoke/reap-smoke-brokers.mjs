@@ -32,10 +32,10 @@
  */
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-
+import { checkPidfdSupport, readProcessIdentity, signalByPidfd } from "./reaper-pidfd.mjs";
 /**
- * One live `nats-server` process, as `ps` reports it.
- * @typedef {{ pid: number, args: string }} NatsServerRow
+ * One live `nats-server` process, as `{ pid, args, identity }` internally; public reports omit identity.
+ * @typedef {{ pid: number, args: string, identity?: ReturnType<typeof readProcessIdentity> }} NatsServerRow
  */
 
 /** A broker killed after its owner was found dead. */
@@ -47,7 +47,7 @@ import { createHash } from "node:crypto";
  * What one reap pass did, and what it deliberately made no claim on. `supported` is false on a
  * platform where the enumerator cannot look, so a caller can tell "nothing leaked" from "nothing was
  * looked at".
- * @typedef {{ inspected: number, reaped: ReapedBroker[], failed: FailedBroker[], ownedLive: number, unparseable: number, unclaimable: number, supported: boolean }} ReapReport
+ * @typedef {{ inspected: number, reaped: ReapedBroker[], failed: FailedBroker[], ownedLive: number, unparseable: number, unclaimable: number, supported: boolean, unsupportedReason?: string }} ReapReport
  */
 
 /** The stable half of the token minted by `@cotal-ai/smoke-kit`. Duplicated as a literal on purpose:
@@ -84,7 +84,7 @@ export function listNatsServers() {
     // Arguments can mention a broker path without running it. Use the kernel command name and
     // exclude dead processes; executable paths containing spaces remain intact in args.
     if (command !== "nats-server" || /^[ZX]/.test(state)) continue;
-    rows.push({ pid: Number(pid), args });
+    rows.push({ pid: Number(pid), args, identity: readProcessIdentity(Number(pid)) });
   }
   return rows;
 }
@@ -141,9 +141,14 @@ export function reapSmokeBrokers({ dryRun = false, scope } = {}) {
     : createHash("sha256").update(scope.trim()).digest().subarray(0, 16).toString("base64url");
   const ownerPattern = digest === undefined ? OWNER_RE
     : new RegExp(`${SMOKE_BROKER_PREFIX}(\\d+)-s${digest}-`);
+  const pidfd = checkPidfdSupport();
+  if (!pidfd.supported) {
+    console.error(`[reaper] ${pidfd.error ?? `pidfd unsupported on ${process.platform}`}; smoke brokers NOT checked`);
+    return { inspected: 0, reaped: [], failed: [], ownedLive: 0, unparseable: 0, unclaimable: 0, supported: false, unsupportedReason: pidfd.error ?? "pidfd unsupported" };
+  }
   const rows = listNatsServers();
   if (rows === undefined) {
-    return { inspected: 0, reaped: [], failed: [], ownedLive: 0, unparseable: 0, unclaimable: 0, supported: false };
+    return { inspected: 0, reaped: [], failed: [], ownedLive: 0, unparseable: 0, unclaimable: 0, supported: false, unsupportedReason: "process census unavailable" };
   }
 
   const tokened = rows.filter((r) => r.args.includes(SMOKE_BROKER_PREFIX));
@@ -152,24 +157,22 @@ export function reapSmokeBrokers({ dryRun = false, scope } = {}) {
   /** @type {FailedBroker[]} */
   const failed = [];
   let ownedLive = 0, unparseable = 0;
-  for (const { pid, args } of tokened) {
+  for (const row of tokened) {
+    const { pid, args, identity } = row;
     const owner = ownerPattern.exec(args);
     if (!owner) {
       if (scope === undefined) unparseable++;
       continue; // Unknown owners and brokers outside this scope are not this suite's leaks.
     }
     if (alive(Number(owner[1]))) { ownedLive++; continue; } // someone is still using it
-    if (!alive(pid)) continue;
-    if (dryRun) { reaped.push({ pid, args, owner: Number(owner[1]) }); continue; }
-    try {
-      // SIGKILL, not SIGTERM. There is no tree to remove here, so nothing is racing a graceful
-      // flush, and a broker that already ignored its owner's teardown has earned the uncatchable one.
-      process.kill(pid, "SIGKILL");
-      reaped.push({ pid, args, owner: Number(owner[1]) });
-    } catch (e) {
-      const error = /** @type {NodeJS.ErrnoException} */ (e);
-      if (error.code !== "ESRCH") failed.push({ pid, args, owner: Number(owner[1]), error: error.message });
+    if (!alive(pid) || !identity || readProcessIdentity(pid)?.startTime !== identity.startTime) {
+      failed.push({ pid, args, owner: Number(owner[1]), error: "broker identity unavailable or changed; refusing to signal" });
+      continue;
     }
+    if (dryRun) { reaped.push({ pid, args, owner: Number(owner[1]) }); continue; }
+    const signal = signalByPidfd(pid, identity, [SMOKE_BROKER_PREFIX, owner[0]]);
+    if (signal.status === "signaled") reaped.push({ pid, args, owner: Number(owner[1]) });
+    else if (signal.status === "failed") failed.push({ pid, args, owner: Number(owner[1]), error: signal.error ?? "pidfd signal failed" });
   }
   return {
     inspected: rows.length,
@@ -191,7 +194,7 @@ export function reapSmokeBrokers({ dryRun = false, scope } = {}) {
  */
 export function reportReaped(label, result) {
   if (!result.supported) {
-    console.log(`  [reaper] not run on ${process.platform}: leaked smoke brokers are NOT checked here`);
+    console.log(`  [reaper] ${result.unsupportedReason ?? `pidfd unsupported on ${process.platform}`}: leaked smoke brokers are NOT checked here`);
     return;
   }
   if (result.reaped.length === 0) {

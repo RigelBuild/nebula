@@ -21,9 +21,9 @@
 import { strict as assert } from "node:assert";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { SMOKE_BROKER_PREFIX as KIT_PREFIX, SMOKE_BROKER_TOKEN, freePort, killAndAwaitExit, teardownOnSignal } from "@cotal-ai/smoke-kit";
 import { SMOKE_BROKER_PREFIX, listNatsServers, reapSmokeBrokers } from "./reap-smoke-brokers.mjs";
@@ -53,7 +53,8 @@ console.log("\n── smoke broker reaper ────────────�
 // The reaper duplicates the prefix as a literal because it runs from the CI runner before any
 // workspace build. That duplication is only safe if it cannot drift, which is what this asserts.
 check("the reaper's prefix literal is the one the kit mints", SMOKE_BROKER_PREFIX === KIT_PREFIX, `${SMOKE_BROKER_PREFIX} vs ${KIT_PREFIX}`);
-const expectedMarker = process.env.COTAL_RUN ?? `reaper-smoke-${process.pid}`;
+const expectedMarker = `reaper-smoke-${process.pid}-${randomUUID()}`;
+check("custodian fixture marker does not reuse inherited COTAL_RUN", expectedMarker !== process.env.COTAL_RUN, expectedMarker);
 const custodianFixture = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)", "--", "--cotal-run", expectedMarker, "/tmp/dist/custodian.js"], { stdio: "ignore" });
 const custodianPid = custodianFixture.pid;
 for (let attempt = 0; attempt < 50 && custodianPid !== undefined; attempt++) {
@@ -607,41 +608,102 @@ try {
   check("the non-broker argument control is running", mention.exitCode === null && alive(mention.pid!));
   check("an argument's broker path does not classify its process as a broker", !pids.includes(mention.pid!));
 
-  const delegatedRun = `delegated-reaper-${process.pid}`;
-  const delegatedScope = `${suiteScope}-delegated`;
+  const delegatedRun = `delegated-reaper-${process.pid}-${randomUUID()}`;
+  const delegatedScope = `${suiteScope}-delegated-${randomUUID()}`;
   const fixturePath = fileURLToPath(new URL("./fixtures/delegated-reaper-root-fixture.mjs", import.meta.url));
-  const fixture = spawnSync("sudo", ["-n", "env", `PATH=${process.env.PATH ?? ""}`, process.execPath, fixturePath, delegatedRun, delegatedScope], { encoding: "utf8", timeout: 15_000 });
-  const rootFixturesUnavailable = fixture.status !== 0 && fixture.stderr.includes("a password is required");
-  if (rootFixturesUnavailable) console.log(`  ↪ root-owned fixture unavailable: ${fixture.stderr.trim()}`);
-  check("root-owned fixture starts under its privileged uid when sudo is available", rootFixturesUnavailable || fixture.status === 0, fixture.stderr);
-  let rootBrokerPid: number | undefined;
-  let rootCustodianPid: number | undefined;
-  let rootFixtureDir: string | undefined;
-  if (!rootFixturesUnavailable) {
+  const sudo = (args: string[]) => spawnSync("sudo", ["-n", ...args], { encoding: "utf8", timeout: 15_000 });
+  const sudoProbe = sudo(["true"]);
+  const sudoAvailable = sudoProbe.status === 0;
+  const rootRequired = process.env.COTAL_SEAT_CGROUP_DELEGATED === "1";
+  const sudoDetail = `${sudoProbe.error instanceof Error ? sudoProbe.error.message : ""} ${(sudoProbe.stderr ?? "").trim()}`.trim();
+  if (!sudoAvailable) {
+    console.log(`  ↪ root-owned fixture skipped; sudo -n true failed${sudoDetail ? `: ${sudoDetail}` : ` (exit ${sudoProbe.status})`}; root verification was not performed`);
+  }
+  check("root verification is available or the delegated route is not required", sudoAvailable || !rootRequired, sudoDetail);
+  if (sudoAvailable) {
+    const expectedRootDir = mkdtempSync(join(tmpdir(), `cotal-smoke-broker-2147483647-s${scopeDigest(delegatedScope)}-`));
+    const fixture = spawn("sudo", ["-n", "env", `PATH=${process.env.PATH ?? ""}`, `TMPDIR=${tmpdir()}`, process.execPath, fixturePath, delegatedRun, delegatedScope, expectedRootDir], {
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    let fixtureOutput = "";
+    let fixtureErrorOutput = "";
+    let fixtureStartupError: Error | undefined;
+    fixture.stdout?.setEncoding("utf8").on("data", (chunk: string) => { fixtureOutput += chunk; });
+    fixture.stderr?.setEncoding("utf8").on("data", (chunk: string) => { fixtureErrorOutput += chunk; });
+    fixture.on("error", (error) => { fixtureStartupError = error; });
+    const fixtureDetail = () => `${fixtureStartupError?.message ?? ""} ${fixtureErrorOutput.trim()}`.trim();
+    let rootBrokerPid: number | undefined;
+    let rootCustodianPid: number | undefined;
+    let rootDifferentMarkerCustodianPid: number | undefined;
     try {
-      const parsedFixture = JSON.parse(fixture.stdout.trim()) as { brokerPid: number; custodianPid: number; dir: string; uid: number };
-      rootBrokerPid = parsedFixture.brokerPid;
-      rootCustodianPid = parsedFixture.custodianPid;
-      rootFixtureDir = parsedFixture.dir;
-      check("fixture proves the test processes are root-owned", parsedFixture.uid === 0);
-      const privilegedReaper = spawnSync("sudo", ["-n", "env", `PATH=${process.env.PATH ?? ""}`, process.execPath,
-        fileURLToPath(new URL("./reap-delegated-suite.mjs", import.meta.url)), delegatedRun, delegatedScope], { encoding: "utf8", timeout: 15_000 });
-      const marker = privilegedReaper.stdout.split("\n").find((line) => line.startsWith("__DELEGATED_REAP__"));
+      let reportLine: string | undefined;
+      for (let attempt = 0; attempt < 150 && reportLine === undefined && fixtureStartupError === undefined && fixture.exitCode === null; attempt++) {
+        reportLine = fixtureOutput.split("\n").find((line) => line.startsWith("__ROOT_FIXTURE__"));
+        if (reportLine === undefined) await wait(100);
+      }
+      reportLine ??= fixtureOutput.split("\n").find((line) => line.startsWith("__ROOT_FIXTURE__"));
+      let parsedFixture: unknown;
+      if (reportLine) {
+        try { parsedFixture = JSON.parse(reportLine.slice("__ROOT_FIXTURE__".length)); }
+        catch (error) { throw new Error(`malformed root fixture report: ${error instanceof Error ? error.message : String(error)}`); }
+      }
+      if (typeof parsedFixture === "object" && parsedFixture !== null) {
+        if ("brokerPid" in parsedFixture && typeof parsedFixture.brokerPid === "number" && Number.isInteger(parsedFixture.brokerPid) && parsedFixture.brokerPid > 0) rootBrokerPid = parsedFixture.brokerPid;
+        if ("custodianPid" in parsedFixture && typeof parsedFixture.custodianPid === "number" && Number.isInteger(parsedFixture.custodianPid) && parsedFixture.custodianPid > 0) rootCustodianPid = parsedFixture.custodianPid;
+        if ("differentMarkerCustodianPid" in parsedFixture && typeof parsedFixture.differentMarkerCustodianPid === "number" && Number.isInteger(parsedFixture.differentMarkerCustodianPid) && parsedFixture.differentMarkerCustodianPid > 0) rootDifferentMarkerCustodianPid = parsedFixture.differentMarkerCustodianPid;
+      }
+      rootFixtureStarted = reportLine !== undefined && fixtureStartupError === undefined
+        && typeof parsedFixture === "object" && parsedFixture !== null
+        && "uid" in parsedFixture && parsedFixture.uid === 0;
+      check("root-owned fixture starts under its privileged uid when sudo is available", rootFixtureStarted, fixtureDetail() || "fixture did not report a root-owned startup");
+      if (fixtureStartupError) throw fixtureStartupError;
+      if (reportLine === undefined) throw new Error(fixtureDetail() || `root fixture did not report before exit ${fixture.exitCode ?? fixture.signalCode ?? "timeout"}`);
+      if (typeof parsedFixture !== "object" || parsedFixture === null
+        || !("brokerPid" in parsedFixture) || typeof parsedFixture.brokerPid !== "number" || !Number.isInteger(parsedFixture.brokerPid) || parsedFixture.brokerPid < 1
+        || !("custodianPid" in parsedFixture) || typeof parsedFixture.custodianPid !== "number" || !Number.isInteger(parsedFixture.custodianPid) || parsedFixture.custodianPid < 1
+        || !("differentMarkerCustodianPid" in parsedFixture) || typeof parsedFixture.differentMarkerCustodianPid !== "number" || !Number.isInteger(parsedFixture.differentMarkerCustodianPid) || parsedFixture.differentMarkerCustodianPid < 1
+        || !("differentMarker" in parsedFixture) || typeof parsedFixture.differentMarker !== "string" || parsedFixture.differentMarker === delegatedRun
+        || !("processes" in parsedFixture) || !Array.isArray(parsedFixture.processes) || parsedFixture.processes.length !== 3
+        || !parsedFixture.processes.every((record) => typeof record === "object" && record !== null && "pid" in record && typeof record.pid === "number" && "command" in record && typeof record.command === "string" && record.command.length > 0 && "startTime" in record && typeof record.startTime === "string" && /^\d+$/.test(record.startTime) && "marker" in record && typeof record.marker === "string" && record.marker.length > 0)
+        || !("dir" in parsedFixture) || parsedFixture.dir !== expectedRootDir
+        || !("uid" in parsedFixture) || parsedFixture.uid !== 0) {
+        throw new Error("root fixture returned incomplete or invalid process details");
+      }
+      check("fixture proves the test processes are root-owned", true);
+      const privilegedReaper = sudo(["env", `PATH=${process.env.PATH ?? ""}`, `TMPDIR=${tmpdir()}`, process.execPath,
+        fileURLToPath(new URL("./reap-delegated-suite.mjs", import.meta.url)), delegatedRun, delegatedScope]);
+      const marker = (privilegedReaper.stdout ?? "").split("\n").find((line) => line.startsWith("__DELEGATED_REAP__"));
       const reapReport = marker ? JSON.parse(marker.slice("__DELEGATED_REAP__".length)) as {
         brokers: { reaped: number[]; failed: Array<{ pid: number; error: string }> };
         custodians: { reaped: number[]; failed: Array<{ pid: number; error: string }> };
       } : undefined;
-      check("privileged reaper kills and reports root-owned custodian", reapReport?.custodians.reaped.includes(rootCustodianPid!) === true && !alive(rootCustodianPid!));
-      check("privileged reaper kills and counts root-owned broker", reapReport?.brokers.reaped.includes(rootBrokerPid!) === true && !alive(rootBrokerPid!));
-      check("privileged reaper has no permission-denied leftovers", reapReport?.brokers.failed.length === 0 && reapReport.custodians.failed.length === 0, privilegedReaper.stderr);
-      check("privileged reaping exits cleanly for successfully killed processes", privilegedReaper.status === 0);
+      check("privileged reaper kills and reports root-owned custodian", reapReport?.custodians.reaped.includes(rootCustodianPid) === true && !alive(rootCustodianPid));
+      check("privileged reaper kills and counts root-owned broker", reapReport?.brokers.reaped.includes(rootBrokerPid) === true && !alive(rootBrokerPid));
+      check("different-marker custodian survives the privileged reaper", rootDifferentMarkerCustodianPid !== undefined && alive(rootDifferentMarkerCustodianPid) && !reapReport?.custodians.reaped.includes(rootDifferentMarkerCustodianPid), `pid ${rootDifferentMarkerCustodianPid}`);
+      check("privileged reaper has no permission-denied leftovers", reapReport?.brokers.failed.length === 0 && reapReport.custodians.failed.length === 0, privilegedReaper.stderr ?? "");
+      check("privileged reaping exits cleanly for successfully killed processes", privilegedReaper.status === 0, privilegedReaper.stderr ?? "");
       check("privileged broker sweep respects scope and run marker attribution", reapReport?.brokers.reaped.length === 1 && reapReport.custodians.reaped.length === 1);
     } catch (error) {
-      check("root-owned reaper fixture produced a complete report", false, error instanceof Error ? error.message : String(error));
+      // The fixture writes each child PID to processes.json immediately after spawn, before the final report.
+      let partialProcesses: unknown;
+      try { partialProcesses = JSON.parse(readFileSync(join(expectedRootDir, "processes.json"), "utf8")); }
+      catch { /* No fixture children were recorded, or the fixture directory was already cleaned. */ }
+      const partialCount = Array.isArray(partialProcesses) ? partialProcesses.length : 0;
+      check("root-owned reaper fixture produced a complete report", false, `${error instanceof Error ? error.message : String(error)}; recorded ${partialCount} partial fixture children`);
     } finally {
-      if (rootBrokerPid !== undefined) { try { process.kill(rootBrokerPid, "SIGKILL"); } catch { /* already gone */ } }
-      if (rootCustodianPid !== undefined) { try { process.kill(rootCustodianPid, "SIGKILL"); } catch { /* already gone */ } }
-      if (rootFixtureDir !== undefined) spawnSync("sudo", ["-n", "rm", "-rf", rootFixtureDir]);
+      const cleanupErrors: string[] = [];
+      if (fixture.stdin !== null) fixture.stdin.end("cleanup\n");
+      let fixtureClosed = false;
+      fixture.once("close", () => { fixtureClosed = true; });
+      for (let attempt = 0; attempt < 100 && !fixtureClosed; attempt++) await wait(50);
+      if (!fixtureClosed) cleanupErrors.push("root fixture did not exit after cleanup");
+      if (fixture.exitCode !== 0 && fixture.exitCode !== null) cleanupErrors.push(`root fixture exited ${fixture.exitCode}: ${fixtureDetail()}`);
+      if (!fixtureOutput.includes("__ROOT_FIXTURE_CLEANED__")) cleanupErrors.push("root fixture did not confirm PID-identity cleanup");
+      if (cleanupErrors.length === 0 && existsSync(expectedRootDir)) {
+        try { rmSync(expectedRootDir, { recursive: true, force: true }); }
+        catch (error) { cleanupErrors.push(`could not remove cleaned fixture directory ${expectedRootDir}: ${error instanceof Error ? error.message : String(error)}`); }
+      }
+      check("root fixture cleanup completed using pinned PID identities", cleanupErrors.length === 0, cleanupErrors.join(" | "));
     }
   }
   // Kill the OWNER only. Its broker is a plain child, so it survives and is reparented: a real orphan.
@@ -730,6 +792,8 @@ try {
   // suite in the chain, so the quiet path is the common one.
   const second = reapSmokeBrokers({ scope: suiteScope });
   check("a second run reaps nothing and does not throw", second.reaped.every((r) => r.pid !== orphanPid));
+  check("the live-owner broker survives the second suite-scoped pass", alive(ownedLive.pid!) && !second.reaped.some((r) => r.pid === ownedLive.pid));
+  check("the untokened broker survives the second suite-scoped pass", alive(untokened.pid!) && !second.reaped.some((r) => r.pid === untokened.pid));
   check("the out-of-scope orphan also survives the second suite-scoped pass", alive(unrelatedOrphanPid!), `pid ${unrelatedOrphanPid} was killed`);
 } catch (e) {
   fail++;

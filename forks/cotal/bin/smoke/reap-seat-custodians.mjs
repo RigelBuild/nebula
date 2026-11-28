@@ -30,6 +30,7 @@
  * reaper is the prompt one.
  */
 import { readFileSync, readdirSync } from "node:fs";
+import { readProcessIdentity, checkPidfdSupport, signalByPidfd } from "./reaper-pidfd.mjs";
 
 /** The flag `@cotal-ai/seat` puts on every custodian's argv. Duplicated as a literal on purpose:
  *  this file runs from the CI runner before any workspace build, so it must not import a built
@@ -37,8 +38,8 @@ import { readFileSync, readdirSync } from "node:fs";
 export const RUN_MARKER_FLAG = "--cotal-run";
 
 /**
- * One live custodian.
- * @typedef {{ pid: number, run: string | undefined }} CustodianRow
+ * One live custodian. The scanner attaches a start identity internally; public reports omit it.
+ * @typedef {{ pid: number, run: string | undefined, identity?: ReturnType<typeof readProcessIdentity> }} CustodianRow
  */
 
 /**
@@ -47,9 +48,9 @@ export const RUN_MARKER_FLAG = "--cotal-run";
  */
 
 /**
- * What one pass did. `supported` is false where `/proc` cannot be read, so a caller can tell
+ * What one pass did. `supported` is false where `/proc` or pidfd cannot be used, so a caller can tell
  * "nothing leaked" from "nothing was looked at".
- * @typedef {{ inspected: number, reaped: CustodianRow[], failed: CustodianFailure[], unattributed: number, otherRuns: number, supported: boolean }} CustodianReapReport
+ * @typedef {{ inspected: number, reaped: CustodianRow[], failed: CustodianFailure[], unattributed: number, otherRuns: number, supported: boolean, unsupportedReason?: string }} CustodianReapReport
  */
  
 
@@ -78,7 +79,7 @@ export function listCustodians() {
     const argv = cmdline.split("\0").filter((s) => s.length > 0);
     if (!argv.some((a) => a.endsWith("/dist/custodian.js"))) continue;
     const at = argv.indexOf(RUN_MARKER_FLAG);
-    rows.push({ pid, run: at < 0 ? undefined : argv[at + 1] });
+    rows.push({ pid, run: at < 0 ? undefined : argv[at + 1], identity: readProcessIdentity(pid) });
   }
   return rows;
 }
@@ -89,8 +90,10 @@ export function listCustodians() {
  * @returns {CustodianReapReport}
  */
 export function reapRunCustodians(run) {
+  const support = checkPidfdSupport();
+  if (!support.supported) return { inspected: 0, reaped: [], failed: [], unattributed: 0, otherRuns: 0, supported: false, unsupportedReason: support.error ?? "pidfd unsupported" };
   const rows = listCustodians();
-  if (rows === undefined) return { inspected: 0, reaped: [], failed: [], unattributed: 0, otherRuns: 0, supported: false };
+  if (rows === undefined) return { inspected: 0, reaped: [], failed: [], unattributed: 0, otherRuns: 0, supported: false, unsupportedReason: "could not read /proc" };
   const reaped = [];
   const failed = [];
   let unattributed = 0;
@@ -104,16 +107,9 @@ export function reapRunCustodians(run) {
       otherRuns++;
       continue;
     }
-    try {
-      // The custodian is a session leader, so its child and that child's descendants share the
-      // child's group; killing the custodian alone would leave those behind. SIGKILL the custodian
-      // and let its child's group go with the process group the custodian spawned it into.
-      process.kill(row.pid, "SIGKILL");
-      reaped.push(row);
-    } catch (e) {
-      const error = /** @type {NodeJS.ErrnoException} */ (e);
-      if (error.code !== "ESRCH") failed.push({ ...row, error: error.message });
-    }
+    const signal = signalByPidfd(row.pid, row.identity, [RUN_MARKER_FLAG, run]);
+    if (signal.status === "signaled") reaped.push(row);
+    else if (signal.status === "failed") failed.push({ pid: row.pid, run: row.run, error: signal.error ?? "pidfd signal failed" });
   }
   return { inspected: rows.length, reaped, failed, unattributed, otherRuns, supported: true };
 }
@@ -125,7 +121,7 @@ export function reapRunCustodians(run) {
  */
 export function reportCustodians(cmd, report) {
   if (!report.supported) {
-    console.log(`[seat-reaper] ${cmd}: /proc unavailable on ${process.platform}; no custodian census taken`);
+    console.log(`[seat-reaper] ${cmd}: ${report.unsupportedReason ?? `pidfd unsupported on ${process.platform}`}; no custodian census taken`);
     return;
   }
   if (report.reaped.length > 0) {

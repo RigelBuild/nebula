@@ -140,6 +140,14 @@ export async function runPool(commands, { jobs, runMarker, indices, onStart }) {
         const sentinel = parseSentinel(out);
         r.cells = sentinel?.cells ?? 0;
         r.skipped = sentinel?.kind === "skipped" ? sentinel.reason : undefined;
+        const brokerFailure = r.brokers.failed[0];
+        const custodianFailure = r.seats.failed[0];
+        if (brokerFailure || custodianFailure) {
+          const failedReap = brokerFailure
+            ? `broker reaper could not kill pid ${brokerFailure.pid}`
+            : `custodian reaper could not kill pid ${custodianFailure.pid}`;
+          failure ??= { cmd, reason: failedReap, status: 1 };
+        }
         const reason = r.status !== 0 ? `exit ${r.status}` : !sentinel ? "no sentinel" : sentinel.kind !== "skipped" && sentinel.cells === 0 ? "zero cells" : undefined;
         if (!r.stopped && reason) failure ??= { cmd, reason, status: r.status || 1 };
         if (r.stopped) r.status = r.status || 1;

@@ -13,10 +13,14 @@ console.log("__DELEGATED_REAP__" + JSON.stringify({
   brokers: {
     reaped: brokerReport.reaped.map(({ pid }) => pid),
     failed: brokerReport.failed.map(({ pid, error }) => ({ pid, error })),
+    supported: brokerReport.supported,
+    unsupportedReason: brokerReport.unsupportedReason,
   },
   custodians: {
     reaped: custodianReport.reaped.map(({ pid }) => pid),
     failed: custodianReport.failed.map(({ pid, error }) => ({ pid, error })),
+    supported: custodianReport.supported,
+    unsupportedReason: custodianReport.unsupportedReason,
   },
 }));
-if (brokerReport.failed.length > 0 || custodianReport.failed.length > 0) process.exitCode = 1;
+if (brokerReport.failed.length > 0 || custodianReport.failed.length > 0 || !brokerReport.supported || !custodianReport.supported) process.exitCode = 1;
